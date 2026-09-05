@@ -1,0 +1,282 @@
+"""Prepared SWE-bench images, and the disk they compete for.
+
+Twenty-six instances is roughly eighty gigabytes of images and the Docker VM holds
+fifty-eight, so a run over the whole set cannot keep them all. Everything here exists to
+make that survivable: pulls are serialised behind a lock, the biggest idle image is
+evicted to make room, and containers left by a killed run are reaped -- carefully, since
+under `--parallel` the workers are separate processes sharing one daemon.
+
+Nothing in this module knows about `Sandbox`. It is the layer below it.
+"""
+from __future__ import annotations
+
+import contextlib
+import fcntl
+import os
+import re
+import subprocess
+from pathlib import Path
+
+
+PLATFORM = "linux/amd64"          # SWE-bench publishes amd64 only; emulated on arm64
+IMAGE = "swebench/sweb.eval.x86_64.{tag}:latest"
+
+
+def image_for(instance_id: str) -> str:
+    """swebench uses `_1776_` where the instance id has `__`."""
+    return IMAGE.format(tag=instance_id.replace("__", "_1776_"))
+
+
+def _run(cmd: list[str], stdin: str | None = None, timeout: int = 1800):
+    """Run a command, turning a timeout into a failed result rather than an exception.
+
+    `subprocess.run` raises TimeoutExpired, which walks straight past any caller that
+    only inspects `returncode`. That is exactly what defeated the pull retry: it checked
+    the return code, the timeout raised instead, and two instances died with a traceback
+    after ninety minutes without a single retry. A stalled command is a failure like any
+    other and belongs in the same channel as one.
+    """
+    try:
+        return subprocess.run(cmd, input=stdin, capture_output=True, text=True,
+                              timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        def text(v):
+            return v.decode(errors="replace") if isinstance(v, bytes) else (v or "")
+        return subprocess.CompletedProcess(
+            cmd, 124, text(exc.stdout),
+            text(exc.stderr) + f"\ntimed out after {timeout}s")
+
+
+def have_image(image: str) -> bool:
+    return _run(["docker", "image", "inspect", image], timeout=60).returncode == 0
+
+
+_OWNER = re.compile(r"-p(\d+)-[0-9a-f]{6}$")
+
+
+def _owner_alive(name: str) -> bool:
+    """True if the process that created this container is still running.
+
+    Signal 0 asks the kernel whether we could signal the process without sending
+    anything. A pid can in principle be recycled by an unrelated process, in which case
+    we decline to reap a container that really was orphaned -- the safe direction to be
+    wrong in. Containers from before this naming scheme carry no pid and are reaped.
+    """
+    m = _OWNER.search(name.strip())
+    if not m:
+        return False
+    try:
+        os.kill(int(m.group(1)), 0)
+    except (ProcessLookupError, ValueError):
+        return False
+    except PermissionError:
+        return True     # exists, owned by someone else
+    return True
+
+
+def reap_orphans(quiet: bool = True) -> int:
+    """Remove containers left behind by a killed run.
+
+    `Sandbox` cleans up in `__exit__`, which never runs if the process is killed --
+    Ctrl-C, a stopped background job, an OOM. Three containers were found still running twenty-four minutes after their runs were
+    stopped, holding memory and, more to the point, disk: the Docker VM has its own
+    58 GB volume and a full one presents as `no space left on device` in the middle of
+    an unrelated pull.
+
+    Only containers whose owning process is gone are removed. This used to reap by name
+    alone, which was correct for one run at a time and catastrophic under `--parallel`:
+    every worker calls this before pulling, so the fifth worker's pull deleted the four
+    live containers its siblings were writing tests in. Those runs did not crash -- the
+    agent kept issuing tool calls into a container that no longer existed, collected
+    forty `No such container` errors, and finished having written nothing.
+    """
+    listed = _run(["docker", "ps", "-a", "--filter", "name=f2p-",
+                   "--format", "{{.ID}}\t{{.Names}}"], timeout=120)
+    ids = []
+    for line in listed.stdout.splitlines():
+        cid, _, name = line.partition("\t")
+        if not cid.strip():
+            continue
+        if _owner_alive(name):
+            continue
+        ids.append(cid.strip())
+    if ids:
+        _run(["docker", "rm", "-f", *ids], timeout=300)
+        if not quiet:
+            print(f"  removed {len(ids)} orphaned container(s) from an earlier run")
+    return len(ids)
+
+
+def vm_free_gb() -> float | None:
+    """Free space inside the Docker VM, which is not the host's free space.
+
+    Worth its own function because the two are unrelated and the failure is misleading.
+    The host had 53 GB free while the VM's own 58 GB volume was 100% full, and the pull
+    that hit it reported `no space left on device` -- which reads like a host problem and
+    is not one. Three images failed to download for this reason before anyone looked.
+    """
+    r = _run(["docker", "run", "--rm", "--platform", PLATFORM, "alpine",
+              "df", "-Pk", "/"], timeout=180)
+    for line in r.stdout.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) >= 4:
+            try:
+                return int(parts[3]) / (1024 * 1024)
+            except ValueError:
+                return None
+    return None
+
+
+# Workers under `--parallel` are separate processes, so an image one of them is about
+# to use is invisible to the others between the moment its pull finishes and the moment
+# its container starts. A claim file bridges that window; it is named after the owning
+# process so a claim left by a killed run expires on its own.
+CLAIMS = Path("/tmp/f2p-image-claims")
+
+
+def claim_image(image: str) -> None:
+    try:
+        CLAIMS.mkdir(exist_ok=True)
+        (CLAIMS / f"p{os.getpid()}").write_text(image)
+    except OSError:
+        pass            # a claim is an optimisation, never a precondition
+
+
+def release_image() -> None:
+    with contextlib.suppress(OSError):
+        (CLAIMS / f"p{os.getpid()}").unlink(missing_ok=True)
+
+
+def claimed_images() -> set[str]:
+    """Images live sibling processes have claimed. Dead owners' claims are cleaned up."""
+    out: set[str] = set()
+    for f in CLAIMS.glob("p*") if CLAIMS.is_dir() else ():
+        if _owner_alive(f"-{f.name}-000000"):
+            out.add(f.read_text().strip())
+        else:
+            f.unlink(missing_ok=True)
+    return out
+
+
+def evict_one_image(keep: str) -> bool:
+    """Delete the largest prepared image not currently in use, to make room for another.
+
+    Twenty-six instances is roughly eighty gigabytes of images and the Docker VM holds
+    fifty-eight, so a run over the whole set cannot keep them all. Evicting the biggest
+    idle one costs a re-download later and lets the run finish; keeping them all does
+    not. Images with a live container are skipped, which is what makes this safe to call
+    while other instances are running in parallel.
+    """
+    listed = _run(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}",
+                   "swebench/*"], timeout=180)
+    in_use = set()
+    ps = _run(["docker", "ps", "-a", "--format", "{{.Image}}"], timeout=180)
+    in_use.update(x for x in ps.stdout.split() if x)
+    in_use.update(claimed_images())
+
+    def gb(text: str) -> float:
+        try:
+            n = float(text[:-2])
+        except ValueError:
+            return 0.0
+        return n if text.endswith("GB") else n / 1024 if text.endswith("MB") else 0.0
+
+    best, best_size = None, 0.0
+    for line in listed.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        name, size = line.split("\t", 1)
+        if name == keep or name in in_use:
+            continue
+        if gb(size.strip()) > best_size:
+            best, best_size = name, gb(size.strip())
+    if not best:
+        return False
+    _run(["docker", "image", "rm", "-f", best], timeout=600)
+    print(f"  evicted {best.split('.')[-1]} ({best_size:.1f} GB) to make room")
+    return True
+
+
+# Headroom for one image. Deliberately about double the largest compressed size: docker
+# writes the download and then extracts it, so a 4.6 GB image transiently needs well
+# over nine. At the old 6 GB threshold the guard let two pulls start with 6.2 GB free;
+# they filled the disk, stalled, and burned three twenty-minute attempts each without
+# ever reporting a disk problem.
+DEFAULT_IMAGE_HEADROOM_GB = 14.0
+
+
+PULL_LOCK = Path("/tmp/f2p-pull.lock")
+
+
+def pull_image(image: str, quiet: bool = False,
+               need_gb: float = DEFAULT_IMAGE_HEADROOM_GB) -> None:
+    """Fetch one prepared image, one worker at a time.
+
+    The lock is the point. These images are around 3 GB and the link they come down is
+    not always fast; two workers pulling at once each get half of it and *both* miss the
+    timeout, where run sequentially the first would have finished and the second started
+    from a clean twenty minutes. Two concurrent pulls of matplotlib-26208 and
+    scikit-learn-25747 shared 0.8 MB/s for forty-six minutes and neither landed a layer.
+
+    Waiting here costs a worker nothing: it has no container yet and nothing to do until
+    the image exists. `have_image` is re-checked after the wait because the worker ahead
+    may have been fetching the very same image.
+    """
+    if have_image(image):
+        return
+    with PULL_LOCK.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            _pull_locked(image, quiet, need_gb)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _pull_locked(image: str, quiet: bool, need_gb: float) -> None:
+    if have_image(image):
+        return                  # the worker ahead of us in the queue wanted it too
+    free = vm_free_gb()
+    if free is not None and free < need_gb:
+        # Reclaim what is definitely safe before giving up: build cache is cache by
+        # definition, and stopped containers of ours are finished work.
+        reap_orphans()
+        _run(["docker", "builder", "prune", "-af"], timeout=900)
+        free = vm_free_gb()
+    while free is not None and free < need_gb and evict_one_image(image):
+        free = vm_free_gb()
+    if free is not None and free < need_gb:
+        raise SystemExit(
+            f"the Docker VM has only {free:.1f} GB free and this image needs about "
+            f"{need_gb:.0f}, with nothing left to evict. The host's free space is "
+            f"irrelevant here -- the VM has its own volume. Raise the disk limit in "
+            f"Docker Desktop > Settings > Resources. Note that `docker image prune -a` "
+            f"would delete every prepared SWE-bench image, not just the spare ones.")
+    if not quiet:
+        print(f"  pulling {image} ({free:.0f} GB free in the VM)"
+              if free else f"  pulling {image}")
+    # Retried, because a multi-gigabyte pull is the longest-lived network operation in
+    # the whole run and the cheapest thing to lose. Closing a laptop lid mid-pull kills
+    # the connection, and without a retry that instance reports BROKEN for a reason that
+    # has nothing to do with it. Docker resumes from the layers already on disk, so a
+    # second attempt is not a second download.
+    last = None
+    for attempt in (1, 2, 3):
+        # Forty minutes per attempt. That is far more than a healthy pull of a 3 GB
+        # image needs, and deliberately so: the timeout exists to catch a *stalled*
+        # pull, not a slow link, and cutting a slow-but-moving download off at twenty
+        # minutes threw away everything it had fetched. Now that pulls are serialised,
+        # one attempt has the whole link to itself.
+        r = _run(["docker", "pull", "--platform", PLATFORM, image], timeout=2400)
+        if r.returncode == 0:
+            return
+        last = r
+        if "no space left" in (r.stderr or ""):
+            break                          # retrying will not create disk
+        if not quiet and attempt < 3:
+            print(f"  pull attempt {attempt} failed, retrying "
+                  f"({(r.stderr or '').strip().splitlines()[-1][:60] if r.stderr else ''})")
+    hint = ("\n\nThe Docker VM is out of disk. Its volume is separate from the host's."
+            if "no space left" in ((last.stderr if last else "") or "") else "")
+    raise SystemExit(
+        f"could not pull {image} after 3 attempts:\n"
+        f"{(last.stderr if last else '')[-1200:]}{hint}")

@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from openhands_f2p import swebench_env as E
+from openhands_f2p.layout import OUT
 
 
 def _ts(base: datetime, offset: float) -> str:
@@ -283,9 +284,10 @@ def write(out_dir: Path) -> Path | None:
 
 def main() -> int:
     import sys
+
     from openhands_f2p.prs import pick
 
-    root = Path(__file__).resolve().parents[3] / "out"
+    root = OUT
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     for pr in pick(which):
         p = write(root / pr["id"])

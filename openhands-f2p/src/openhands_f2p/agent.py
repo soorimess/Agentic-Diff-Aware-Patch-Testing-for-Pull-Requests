@@ -27,9 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
-import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -37,26 +35,14 @@ from pathlib import Path
 
 import time
 
-from dotenv import load_dotenv
-
-from openhands_f2p import (compare, docs, flow, llm_config, prompt, runs,
-                           sandbox_tools,
-                           swebench_env as E, trajectory, verify as V)
+from openhands_f2p import (arms, compare, docs, flow, llm_config, prompt, runs,
+                           sandbox_tools, swebench_env as E, trajectory, verify as V)
+from openhands_f2p.checks import audit, budget_exhausted, token_usage
 from openhands_f2p.dataset import load
+from openhands_f2p.layout import CACHE, OUT, PROJECT_ROOT
+from openhands_f2p.parallel import (CHILD_ENV_FLAG, _child_argv, _needs_retry,
+                                    _run_children)
 from openhands_f2p.prs import pick
-
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-OUT = PROJECT_ROOT / "out"
-
-env_file = PROJECT_ROOT / ".env"
-if env_file.exists():
-    load_dotenv(env_file, override=False)
-
-# The SDK's loggers propagate to a root RichHandler set to INFO, which prints tmux pool
-# setup, conversation ids and tool loading on every run. None of it says anything about
-# whether the run worked. Real warnings still come through.
-logging.getLogger("openhands").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def field(label: str, text: str) -> None:
@@ -126,8 +112,8 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     # trajectory.json covers the same events in the format the visualizer wants -- but
     # dropping persistence_dir entirely makes the SDK warn about an in-memory store on
     # every run, so it is redirected rather than disabled.
-    conversation = Conversation(agent=agent, workspace=str(PROJECT_ROOT / ".cache" / "ws"),
-                                persistence_dir=str(PROJECT_ROOT / ".cache" / "openhands"
+    conversation = Conversation(agent=agent, workspace=str(CACHE / "ws"),
+                                persistence_dir=str(CACHE / "openhands"
                                                     / instance["instance_id"]),
                                 callbacks=[on_event],
                                 max_iteration_per_run=max_iterations, visualizer=None)
@@ -167,95 +153,6 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             "tool_log": tool_log, "model": model, "task": task,
             "actions": sum(1 for r in transcript if "action" in r)}
 
-
-# Commands that could actually fetch something, and nothing else. The trailing
-# `|https?://` this used to carry matched any URL anywhere in a command -- so an agent
-# pasting the issue's own reproduction (`requests.get('http://.example.com')`) into a
-# heredoc was flagged as attempting network access. Three separate runs were reported
-# as suspicious for quoting the bug they were asked to reproduce. An audit that fires on
-# the subject matter trains you to ignore it.
-# Only in *command position* -- start of the command, or straight after a shell
-# separator. The previous version allowed a match after any whitespace, and `host` and
-# `dig` are ordinary English words: an agent printing `getattr(p, 'host', None)` inside a
-# heredoc was flagged as attempting DNS. That is the fourth false positive this check has
-# produced, each one on the repository's own subject matter, and a check that cries wolf
-# four times is a check nobody reads.
-NETWORK = re.compile(
-    r"(?:^|[;&|`(]\s*|\n\s*|&&\s*|\|\|\s*)"
-    r"(curl|wget|nc|ncat|telnet|ssh|scp|rsync|ping|host|dig|"
-    r"pip\s+download|pip\s+install|"
-    r"git\s+(?:clone|fetch|pull|remote|ls-remote))\b", re.I)
-
-
-def audit(box: E.Sandbox, tool_log: list, test_file: str) -> dict:
-    """What the agent actually did, checked rather than assumed.
-
-    Network attempts are read off the tool log rather than the whole transcript: an
-    earlier version scanned every event and flagged the test file the agent wrote,
-    because in a repo about HTTP the string `requests.get("http` appears innocently.
-    """
-    tried_network = [e["command"] for e in tool_log
-                     if e["tool"] == "run" and NETWORK.search(e.get("command", ""))]
-    wrote_elsewhere = [e["path"] for e in tool_log
-                       if e["tool"] == "write_file" and e.get("path") != test_file]
-    dirty = box.exec("git status --porcelain 2>/dev/null || echo NO_GIT").output.strip()
-    return {"network_attempts": tried_network,
-            "files_written_outside_test": wrote_elsewhere,
-            "isolation": box.audit_isolation(),
-            "vcs": "absent" if "NO_GIT" in dirty else dirty[:300]}
-
-
-def budget_exhausted(out_dir: Path) -> dict | None:
-    """Did the last call end because the output budget ran out, not because the model
-    had nothing to say?
-
-    Worth separating. A reasoning model can spend its entire output allowance thinking
-    and emit no tool call at all, which looks exactly like a model that cannot call
-    tools -- and that misdiagnosis cost time once already, on a model that genuinely
-    could not. The distinction is in the response: `finish_reason: length` with
-    reasoning_tokens equal to the whole budget means raise the cap, not change the model.
-    """
-    files = sorted((out_dir / "completions").glob("*.json"))
-    if not files:
-        return None
-    try:
-        last = json.loads(files[-1].read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-    choice = ((last.get("response") or {}).get("choices") or [{}])[0]
-    if choice.get("finish_reason") != "length":
-        return None
-    u = last.get("usage_summary") or {}
-    return {"completion_tokens": u.get("completion_tokens"),
-            "reasoning_tokens": u.get("reasoning_tokens")}
-
-
-def token_usage(out_dir: Path) -> dict:
-    """Totals across every LLM call of this run, from the completion logs.
-
-    Only meaningful because `completions/` is cleared before the run: litellm appends a
-    file per call and never prunes it, so a second run on the same PR would otherwise be
-    summed together with the first.
-    """
-    files = sorted((out_dir / "completions").glob("*.json"))
-    total = {"llm_calls": len(files), "prompt_tokens": 0, "cache_read_tokens": 0,
-             "completion_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0,
-             "llm_latency_sec": 0.0}
-    for f in files:
-        try:
-            j = json.loads(f.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
-        u = j.get("usage_summary") or {}
-        for key in ("prompt_tokens", "cache_read_tokens", "completion_tokens",
-                    "reasoning_tokens"):
-            total[key] += u.get(key, 0) or 0
-        total["cost_usd"] += j.get("cost") or 0.0
-        total["llm_latency_sec"] += j.get("latency_sec") or 0.0
-    total["cost_usd"] = round(total["cost_usd"], 6)
-    total["llm_latency_sec"] = round(total["llm_latency_sec"], 1)
-    total["total_tokens"] = total["prompt_tokens"] + total["completion_tokens"]
-    return total
 
 
 def recheck(pr: dict) -> dict:
@@ -448,243 +345,6 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
             "usage": usage}
 
 
-# --------------------------------------------------------------------- parallel
-#
-# Separate processes, not threads. Two pieces of module-level state make threads unsafe
-# here, and both fail silently rather than loudly:
-#
-#   * The SDK's tool registry is a module-level dict, and `Agent._initialize` resolves
-#     from it lazily -- at first run, not at construction. Two threads registering `run`
-#     would leave the second one's executor in place for both, so one run would issue its
-#     commands inside the other's container. Nothing would raise; the results would just
-#     be wrong.
-#   * `flow._current` is a module global, so two runs would interleave into one flow.log.
-#
-# A process per PR removes both by construction, and the work is subprocess- and
-# network-bound anyway, so there is nothing to gain from sharing an interpreter.
-CHILD_ENV_FLAG = "F2P_CHILD_OF"
-
-
-def _child_argv(pr_id: str, args, coverage_tool: bool, out_root: Path,
-                label: str) -> list[str]:
-    argv = [sys.executable, "-m", "openhands_f2p.agent", pr_id,
-            "--max-iterations", str(args.max_iterations),
-            "--out-root", str(out_root)]
-    # `--dry-run` has to reach the child, because the child is where the work happens.
-    # Without it `--compare-coverage --dry-run` was not a dry run at all: the parent
-    # printed nothing and forked two real runs per PR, each starting a container and
-    # spending real tokens. A flag whose whole purpose is to not do the thing must not
-    # be the one flag that gets dropped on the way.
-    if args.dry_run:
-        argv.append("--dry-run")
-    if args.blind:
-        argv.append("--blind")
-    if args.no_compare:
-        argv.append("--no-compare")
-    if not coverage_tool:
-        argv.append("--no-coverage-tool")
-    if label:
-        argv += ["--label", label]
-    return argv
-
-
-def _needs_retry(out_dir: Path) -> bool:
-    """True when this instance has no result, or one that is not a real verdict.
-
-    YES and NO are findings about a generated test and are never silently rerun --
-    that would quietly turn a run into a best-of-N. BROKEN is different: it records that
-    the harness or the connection failed, which says nothing about the instance. One of
-    the twenty-six failed this way when the laptop lost its network mid-run.
-    """
-    f = out_dir / "result.json"
-    if not f.exists():
-        return True
-    try:
-        return json.loads(f.read_text()).get("f2p") not in ("YES", "NO")
-    except (json.JSONDecodeError, OSError):
-        return True
-
-
-def _progress_line(out_dir: Path, pr_id: str, width: int = 20) -> str:
-    """One line of live status for a child, read off the files it is already writing.
-
-    No IPC needed: `flow.jsonl` is flushed per step and `result.json` appears at the end,
-    so the parent can just read them. Children capture their own stdout into child.log,
-    which is why a parallel run otherwise showed nothing at all for twenty minutes.
-    """
-    rj = out_dir / "result.json"
-    if rj.exists():
-        try:
-            r = json.loads(rj.read_text())
-        except (json.JSONDecodeError, OSError):
-            return f"  {pr_id[:34]:34s} done"
-        c = r.get("changed_line_coverage") or {}
-        cov = f"cov {c['percent']:.0f}%" if c.get("measured") else "cov --"
-        return (f"  {pr_id[:34]:34s} {'done':7s} {r.get('f2p','?'):4s} {cov:8s} "
-                f"{r.get('actions', 0):3d} actions")
-
-    fj = out_dir / "flow.jsonl"
-    if not fj.exists():
-        return f"  {pr_id[:34]:34s} {'starting':7s}"
-    try:
-        rows = [json.loads(l) for l in fj.read_text().splitlines() if l.strip()]
-    except (json.JSONDecodeError, OSError):
-        rows = []
-    if not rows:
-        return f"  {pr_id[:34]:34s} {'starting':7s}"
-    last = rows[-1]
-    acts = sum(1 for r in rows if r.get("phase") == "agent"
-               and str(r.get("event", "")).endswith("Action"))
-    detail = str(last.get("event") or "")[:width]
-    return (f"  {pr_id[:34]:34s} {last.get('phase','')!s:7s} "
-            f"{acts:3d} actions  {detail:{width}s} {last.get('t', 0):5.0f}s")
-
-
-def _run_children(jobs: list[tuple], parallel: int) -> list[dict]:
-    """Each job is (pr_id, argv, out_dir, label). Returns whatever the children wrote."""
-    import subprocess
-    import threading
-    from concurrent.futures import ThreadPoolExecutor      # threads only wait on procs
-
-    env = dict(os.environ, **{CHILD_ENV_FLAG: "1"})
-    labels = [f"{pid}{f' [{lab}]' if lab else ''}" for pid, _, _, lab in jobs]
-    print(f"  {len(jobs)} job(s), {parallel} at a time. "
-          f"Full output per job in its child.log.\n")
-
-    live = sys.stdout.isatty()
-    stop = threading.Event()
-
-    def paint(first: bool = False) -> None:
-        lines = [_progress_line(out, lab)
-                 for (_, _, out, _), lab in zip(jobs, labels, strict=True)]
-        if not first:
-            sys.stdout.write(f"\033[{len(lines)}A")
-        sys.stdout.write("".join(f"{l:<98}\n" for l in lines))
-        sys.stdout.flush()
-
-    def redraw() -> None:
-        paint(first=True)
-        while not stop.is_set():
-            stop.wait(2.0)
-            paint()
-
-    def one(idx_job):
-        idx, (pr_id, argv, out_dir, label) = idx_job
-        # A ceiling, not a schedule. Nothing here should take two hours -- the longest
-        # real run was twenty minutes plus a pull -- but a child that wedges on a socket
-        # used to hold the parent open indefinitely, and three of them once sat silent
-        # for fifty-one minutes after a laptop sleep before being killed by hand.
-        limit = float(os.getenv("F2P_CHILD_TIMEOUT") or 7200)
-        try:
-            proc = subprocess.run(argv, capture_output=True, text=True, env=env,
-                                  timeout=limit)
-        except subprocess.TimeoutExpired as exc:
-            def text_of(v):
-                return v.decode(errors="replace") if isinstance(v, bytes) else (v or "")
-            proc = subprocess.CompletedProcess(
-                argv, 124, text_of(exc.stdout),
-                text_of(exc.stderr) + f"\nkilled after {limit:.0f}s")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "child.log").write_text(
-            proc.stdout + ("\n--- stderr ---\n" + proc.stderr
-                           if proc.stderr.strip() else ""))
-        rj = out_dir / "result.json"
-        row = json.loads(rj.read_text()) if rj.exists() else {
-            "instance_id": pr_id, "f2p": "BROKEN",
-            "why": f"child exited {proc.returncode} without writing a result"}
-        row["label"] = label
-        if not live:                       # piped output: one line per finish
-            print(f"  {row.get('f2p', '?'):6s} {labels[idx]}", flush=True)
-        return row
-
-    painter = threading.Thread(target=redraw, daemon=True) if live else None
-    if painter:
-        painter.start()
-    try:
-        with ThreadPoolExecutor(max_workers=max(1, parallel)) as ex:
-            rows = list(ex.map(one, enumerate(jobs)))
-    finally:
-        stop.set()
-        if painter:
-            painter.join(timeout=3)
-            paint()                        # end on the finished state
-    return rows
-
-
-def compare_coverage(prs: list[dict], args) -> int:
-    """Run every PR twice -- with the coverage tool and without -- and contrast them.
-
-    The harness measures changed-line coverage in *both* arms. That is the whole point:
-    without a number for the arm that had no coverage tool there is nothing to compare
-    against, and any claim that the tool helps would rest on a single run of the arm that
-    had it.
-    """
-    root = PROJECT_ROOT / "out_compare_coverage"
-    jobs = []
-    for pr in prs:
-        for on, label in ((True, "with_coverage_tool"), (False, "without_coverage_tool")):
-            out = root / pr["id"] / label
-            jobs.append((pr["id"], _child_argv(pr["id"], args, on, out, label),
-                         out, label))
-    # Two runs per PR, so the cap is doubled -- the configured number is PRs in flight.
-    rows = _run_children(jobs, args.parallel * 2)
-
-    print("\n" + "=" * 78)
-    print(f"{'instance':32s} {'tool':4s} {'F2P':5s} {'changed-line cov':>17s} {'act':>4s}")
-    by_id: dict[str, dict] = {}
-    for r in rows:
-        by_id.setdefault(r["instance_id"], {})[r["label"]] = r
-    for iid, pair in sorted(by_id.items()):
-        for label, mark in (("with_coverage_tool", "on "),
-                            ("without_coverage_tool", "off")):
-            r = pair.get(label)
-            if not r:
-                print(f"{iid[:32]:32s} {mark:4s} {'--':5s} {'no result':>17s}")
-                continue
-            c = r.get("changed_line_coverage") or {}
-            cov = (f"{c['percent']:.1f}% ({c['covered']}/"
-                   f"{c['executable_changed_lines']})" if c.get("measured")
-                   else "not measured")
-            print(f"{iid[:32]:32s} {mark:4s} {r.get('f2p','?'):5s} {cov:>17s} "
-                  f"{r.get('actions', 0):4d}")
-        print()
-    # The per-instance table is evidence; this is the answer. Both arms are summarised
-    # over the instances where *both* produced a number, because an arm that failed on a
-    # different subset would otherwise be compared on easier work.
-    paired = [(a, b) for a, b in
-              ((pair.get("with_coverage_tool"), pair.get("without_coverage_tool"))
-               for pair in by_id.values()) if a and b]
-    aggregate = {"instances": len(by_id), "paired": len(paired), "arms": {}}
-    print("=" * 78)
-    print(f"{'':22s} {'F2P':>10s} {'mean cov':>10s} {'median cov':>11s} {'actions':>9s}")
-    for label, key in (("with coverage tool", "with_coverage_tool"),
-                       ("without", "without_coverage_tool")):
-        arm = [r for r in (pair.get(key) for pair in by_id.values()) if r]
-        yes = sum(1 for r in arm if r.get("f2p") == "YES")
-        covs = sorted(c["percent"] for r in arm
-                      if (c := r.get("changed_line_coverage") or {}).get("measured"))
-        mean = sum(covs) / len(covs) if covs else None
-        med = covs[len(covs) // 2] if covs else None
-        acts = [r.get("actions", 0) for r in arm]
-        aggregate["arms"][key] = {
-            "runs": len(arm), "f2p_yes": yes, "measured": len(covs),
-            "mean_coverage": round(mean, 1) if mean is not None else None,
-            "median_coverage": med,
-            "mean_actions": round(sum(acts) / len(acts), 1) if acts else None}
-        print(f"{label:22s} {f'{yes}/{len(arm)}':>10s} "
-              f"{(f'{mean:.1f}%' if mean is not None else '-'):>10s} "
-              f"{(f'{med:.1f}%' if med is not None else '-'):>11s} "
-              f"{(sum(acts) / len(acts) if acts else 0):>9.1f}")
-    if len(paired) < len(by_id):
-        print(f"\n  {len(by_id) - len(paired)} instance(s) produced a result in only one "
-              f"arm; the means above are over each arm's own runs, so read them "
-              f"alongside the per-instance table rather than as a paired difference.")
-
-    (root / "summary.json").write_text(
-        json.dumps({"aggregate": aggregate, "runs": rows}, indent=2))
-    print("\nwrote out_compare_coverage/summary.json")
-    return 0
-
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
@@ -762,7 +422,7 @@ def main() -> int:
     child = bool(os.getenv(CHILD_ENV_FLAG))
 
     if args.compare_coverage and not child:
-        return compare_coverage(prs, args)
+        return arms.compare_coverage(prs, args)
 
     # One PR, or a child doing exactly one: run it here so its output streams.
     if child or len(prs) == 1 or args.dry_run or args.parallel <= 1:

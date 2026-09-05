@@ -18,9 +18,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from openhands_f2p.layout import OUT
 from openhands_f2p.prs import PRS
 
-OUT = Path(__file__).resolve().parents[3] / "out"
+
 
 VERDICT_NOTE = {
     "YES": "fails at base, passes after the fix",
@@ -44,6 +45,12 @@ def _row(pr: dict) -> dict:
             "covered": c.get("covered"), "total": c.get("executable_changed_lines"),
             "actions": r.get("actions"), "why": (r.get("why") or "").strip(),
             "judge": (r.get("concept") or {}).get("verdict", "—"),
+            "issue": ((r.get("concept") or {}).get("issue_coverage")
+                      or {}).get("verdict", "—"),
+            "readable": ((r.get("concept") or {}).get("readability")
+                         or {}).get("verdict", "—"),
+            "uncovered": ((r.get("concept") or {}).get("issue_coverage")
+                          or {}).get("uncovered") or [],
             "rechecked": bool(r.get("rechecked")),
             "tokens": (r.get("usage") or {}).get("total_tokens") or 0,
             "cost": (r.get("usage") or {}).get("cost_usd") or 0.0}
@@ -73,20 +80,38 @@ def build() -> str:
     out += ["Coverage is measured only for tests that are fail-to-pass; for anything "
             "else the question does not apply. A `—` in that column means not "
             "measured, not zero.", "",
-            "| instance | version | verdict | coverage | actions | concept | last run |",
-            "|---|---|---|---|---|---|---|"]
+            "`concept`, `issue` and `readable` are three separate answers from one "
+            "judgement call by a stronger model that wrote none of these tests: whether "
+            "the test is about the same behaviour as the maintainer's, whether it "
+            "reaches every behaviour the pull request settles, and whether it would pass "
+            "review. None of them feeds the F2P verdict.", "",
+            "| instance | version | verdict | coverage | actions | concept | issue | "
+            "readable | last run |",
+            "|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         cov = (f"{r['cov']:.0f}% ({r['covered']}/{r['total']})"
                if r["cov"] is not None else "—")
         out.append(f"| [`{r['id']}`](./{r['id']}/) | {r['version']} | "
                    f"{r['f2p']}{' ¹' if r['rechecked'] else ''} | {cov} | "
                    f"{r['actions'] if r['actions'] is not None else '—'} | "
-                   f"{r['judge']} | {r['when'] or '—'} |")
+                   f"{r['judge']} | {r['issue']} | {r['readable']} | "
+                   f"{r['when'] or '—'} |")
     if any(r["rechecked"] for r in rows):
         out += ["", "¹ re-judged by `--recheck`: the same saved test run again under a "
                     "later harness, with no new model call. The trajectory and token "
                     "counts belong to the original run; the verdict and coverage are "
                     "from the re-judgement."]
+
+    gaps = [r for r in rows if r["uncovered"]]
+    if gaps:
+        out += ["", "## Behaviours the judge says are not covered", "",
+                "Read alongside the coverage column: these come from reading the issue "
+                "and the fix, not from line execution, so the two disagree in useful "
+                "ways.", ""]
+        for r in gaps:
+            out.append(f"- **{r['id']}** ({r['issue']})")
+            for u in r["uncovered"][:3]:
+                out.append(f"  - {u}")
 
     unresolved = [r for r in rows if r["f2p"] not in ("YES", "NO")]
     if unresolved:

@@ -13,14 +13,14 @@ from __future__ import annotations
 import json
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
+from openhands_f2p.layout import OUT
 from openhands_f2p import swebench_env as E
 from openhands_f2p import verify as V
 from openhands_f2p.dataset import load
 from openhands_f2p.prs import f2p_is_consistent, pick
 
-OUT = Path(__file__).resolve().parents[3] / "out"
+
 
 
 def check(pr: dict, save: bool = True) -> dict:

@@ -22,9 +22,10 @@ import json
 import sys
 from pathlib import Path
 
+from openhands_f2p.layout import OUT
 from openhands_f2p.prs import pick
 
-OUT = Path(__file__).resolve().parents[3] / "out"
+
 
 
 def _load(d: Path, name: str):

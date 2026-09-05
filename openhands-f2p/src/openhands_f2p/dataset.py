@@ -17,7 +17,9 @@ import json
 import os
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+from openhands_f2p.layout import PROJECT_ROOT
+
+
 
 # In order of preference. `F2P_DATASET` overrides both.
 CANDIDATES = (

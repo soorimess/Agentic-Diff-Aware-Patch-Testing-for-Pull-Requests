@@ -122,6 +122,48 @@ error:
 Measured **only for a `YES`**. Asking how much of a change a test exercised presumes the
 test exercises the change; for a `NO` or a `BROKEN` it presumes something false.
 
+### Where the definition runs out
+
+Two instances show the metric's edges, and both readings are correct rather than broken.
+
+`scikit-learn-25747` reports **not measured — the changed lines are all comments or
+blanks**. Its fix is a *deletion*: it removes two executable lines and its only added line
+is a docstring sentence. There is nothing at any line number for a test to execute, so
+changed-line coverage has no denominator. The test is genuinely fail-to-pass; the question
+simply does not apply. Counting deleted lines would make full coverage unreachable, and
+crediting the lines that surround the hole would measure the wrong thing — so the honest
+answer is to decline. A patch whose whole behavioural change is a removal is invisible to
+this metric, and that is a limitation of the definition, not a fault in the run.
+
+`matplotlib-26208` reports **50% (1/2)**. Its fix applies the same one-line change in two
+symmetric places, `twinx` and `twiny`, and the test exercises `twinx` only. That is the
+metric doing exactly what it exists for: the test pins half of a symmetric bug, and the
+number says so.
+
+## The judge
+
+One call per instance to a stronger model that wrote none of these tests, after the F2P
+verdict is settled. It answers three questions and they are kept apart, because a test can
+be about the right behaviour and still be unreadable, or read well and miss half the bug.
+
+| field | question |
+|---|---|
+| `verdict` | same / narrower / broader / different — is it about the same behaviour as the maintainer's test |
+| `issue_coverage` | does it reach every behaviour the pull request settles, with the ones it misses named |
+| `readability` | would it pass review — names, whether assertions state an expectation, whether a reader can tell what is pinned |
+
+`issue_coverage` is judged against the **issue and the fix**, not against the maintainer's
+test: that test is evidence of what mattered, not the definition of it, so a test covering
+one branch of a two-branch fix is incomplete even where the maintainer tested only that
+branch too.
+
+It reads independently of changed-line coverage and the two agree in a useful way. On
+`matplotlib-26208` the judge returned `issue partial` and named the missing behaviour as
+"the twiny/shared-y symmetric case" — the same gap the 50% figure found by executing
+lines. Two instruments, two routes, one answer.
+
+None of the three feeds the F2P verdict.
+
 ## Three test-runner conventions
 
 Twelve repositories, three ways of naming and running a test. `run_tests` hides all of it
@@ -155,21 +197,29 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 807 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
-| `compare.py` | 136 | Does the generated test check the same thing the developer's test checks? |
-| `dataset.py` | 68 | Where the SWE-bench Verified rows come from, and how they are found. |
-| `docs.py` | 122 | Refresh the generated blocks in `docs/system-design.md`. |
+| `agent.py` | 467 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `arms.py` | 89 | The coverage A/B: every pull request twice, with the tool and without. |
+| `checks.py` | 107 | What the agent actually did, checked rather than assumed. |
+| `compare.py` | 176 | Does the generated test check the same thing the developer's test checks? |
+| `coverage_metric.py` | 398 | Of the lines this pull request changed, how many did the test execute? |
+| `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
+| `docs.py` | 123 | Refresh the generated blocks in `docs/system-design.md`. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
+| `images.py` | 282 | Prepared SWE-bench images, and the disk they compete for. |
+| `layout.py` | 24 | Where the project is on disk, and the environment it runs with. |
 | `llm_config.py` | 143 | One place the model connection is configured, shared by every caller. |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
+| `parallel.py` | 180 | Running several pull requests at once, as separate processes. |
 | `prompt.py` | 122 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 298 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `repo_info.py` | 139 | repo_info as a sub-agent: a second model reads the repository and answers. |
-| `runs.py` | 126 | `out/RUNS.md` -- the state of every instance, for someone who has just cloned this. |
+| `runners.py` | 149 | Three test-runner conventions, and how to read what they print. |
+| `runs.py` | 151 | `out/RUNS.md` -- the state of every instance, for someone who has just cloned this. |
+| `sandbox.py` | 238 | One container per instance, and the only door into it. |
 | `sandbox_tools.py` | 476 | OpenHands tools whose executors run inside the SWE-bench container. |
-| `swebench_env.py` | 1091 | Per-instance SWE-bench containers: the environment, and the isolation. |
-| `trace.py` | 127 | Read back everything a run left behind, in the order it happened. |
-| `trajectory.py` | 302 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
+| `swebench_env.py` | 122 | The SWE-bench environment, as one import. |
+| `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
+| `trajectory.py` | 304 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
 | `verify.py` | 278 | The F2P decision. One implementation, used by every arm. |
 <!-- /generated:modules -->
 
@@ -255,32 +305,37 @@ headers — and that is checked rather than assumed.
 
 ## Layout
 
-Sixteen modules, flat, one package. No subpackages, and that is deliberate at this size:
-directories earn their keep when there are several independent consumers, and there is
-one here — the CLI. The measurable properties are in better shape than a directory tree
-would make them. The import graph has **no cycles** and layers cleanly:
+Twenty-four modules, flat, one package. No subpackages, and that is deliberate at this
+size: directories earn their keep when there are several independent consumers, and there
+is one here — the CLI. The import graph has **no cycles** and layers cleanly:
 
 ```
-flow, prs, prompt, llm_config, dataset      leaves, no internal imports
-  └── swebench_env                          containers, runners, coverage
-        └── verify, sandbox_tools, repo_info, trajectory
-              └── agent, oracle, trace      entry points, imported by nothing
+layout  dataset  flow  llm_config  prompt  prs      leaves
+images  runners                                     no internal deps either
+   └── sandbox ── coverage_metric
+         └── swebench_env  (facade: re-exports all four)
+               └── verify, sandbox_tools, repo_info, trajectory
+                     └── agent ── arms, checks, parallel, compare, docs, runs
+                         oracle, trace                      entry points
 ```
 
-Two files are too large, which is a real scaffolding problem and a different one from
-nesting. `swebench_env.py` is 1091 lines holding four subjects that barely touch each
-other — image and disk management (~230), the test-runner conventions (~110), the
-`Sandbox` lifecycle (~210), and coverage measurement (~270). Anyone who wants
-`parse_output` imports all of it. `agent.py` is 807 lines of CLI, orchestration, child
-processes, the coverage A/B and `recheck`.
+`swebench_env.py` was 1091 lines holding four subjects that barely touched each other, and
+`agent.py` was 807 holding six. Both are split:
 
-The split is deferred rather than declined: it is a pure move of ~1300 lines with no
-change in behaviour, and the results currently in `out/` were produced by this code.
-`--recheck` would cover the verdict and coverage paths for free but not the agent's own
-path, so the refactor is scheduled to land with the next full run, where both it and the
-current prompt changes get measured together. Keeping `swebench_env` as a re-export layer
-would leave its six dependents untouched, which makes the change revertible in one
-commit.
+| was | is now |
+|---|---|
+| `swebench_env` 1091 | `images` 283 &middot; `runners` 149 &middot; `sandbox` 226 &middot; `coverage_metric` 393 &middot; facade 123 |
+| `agent` 807 | `agent` 468 &middot; `parallel` 181 &middot; `checks` 107 &middot; `arms` 89 |
+
+Three things made it safe. `swebench_env` stays as a re-export facade, so every existing
+`from openhands_f2p import swebench_env as E` keeps working and none of its six dependents
+changed. The move was done by slicing exact line ranges rather than retyping. And
+`--recheck` re-ran the saved tests through the whole verdict and coverage path afterwards,
+with no model call, to show nothing moved.
+
+`coverage_metric` rather than `coverage`, so it cannot be confused with the `coverage`
+package it drives inside the container. `layout.py` holds `PROJECT_ROOT` and `OUT`, which
+five modules had each been deriving for themselves.
 
 ## Known limits
 

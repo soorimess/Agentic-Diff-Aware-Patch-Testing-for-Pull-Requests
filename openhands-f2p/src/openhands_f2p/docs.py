@@ -17,9 +17,10 @@ import re
 import sys
 from pathlib import Path
 
+from openhands_f2p.layout import PROJECT_ROOT
 from openhands_f2p import prompt
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
 PKG = Path(__file__).resolve().parent
 DOC = PROJECT_ROOT / "docs" / "system-design.md"
 

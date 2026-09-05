@@ -36,12 +36,30 @@ from openhands_f2p import llm_config
 SYSTEM = """You compare two Python tests that were written for the same bug report.
 
 One was written by the library's own maintainer as part of the fix. The other was
-generated. Judge whether they test the same thing.
+generated. Judge it on three separate questions and keep them separate -- a test can be
+about the right behaviour and still be unreadable, or read beautifully and miss half the
+bug.
 
-"The same thing" means the same observable behaviour of the same code path -- not the
-same style, the same names, or the same mechanism. Two tests that reach the same
-behaviour by different routes are the same concept. A test that checks a neighbouring
-behaviour that happens to change in the same commit is not.
+**1. Is it about the same thing?** "The same thing" means the same observable behaviour of
+the same code path -- not the same style, the same names, or the same mechanism. Two tests
+that reach the same behaviour by different routes are the same concept. A test that checks
+a neighbouring behaviour which happens to change in the same commit is not.
+
+**2. Does it cover everything the issue is about?** Read the bug report and the fix, and
+work out how many distinct behaviours the pull request actually settles: separate cases,
+separate branches, the same fix applied in two symmetric places, an error path as well as
+a success path. Then say which of those the generated test reaches. Judge against the
+*issue and the fix*, not against the maintainer's test -- the maintainer's test is
+evidence of what mattered, not the definition of it. A test that covers one branch of a
+two-branch fix is incomplete even if the maintainer only tested that branch too.
+
+**3. Would you accept it in review?** Judge it as a reviewer of this project would:
+whether names say what the values are (`result`, `data`, `x` for a parsed timestamp are
+not names), whether the assertions state an expectation rather than merely exercising
+code, whether a reader can tell from the test alone what behaviour is being pinned,
+whether setup is minimal and relevant, and whether it follows the conventions visible in
+the maintainer's test. Ignore formatting and line length. An assertion with no message
+where the failure is self-explanatory is fine; a bare `assert result` is not.
 
 Answer with JSON only, no prose around it, in exactly this shape:
 
@@ -51,6 +69,17 @@ Answer with JSON only, no prose around it, in exactly this shape:
   "developer_asserts": "one sentence: what the developer's test actually checks",
   "shared": "the behaviour both reach, or 'none'",
   "missed": "what the developer's test covers that the generated one does not, or 'nothing'",
+  "issue_coverage": {
+    "verdict": "complete" | "partial" | "misses_the_point",
+    "behaviours_in_pr": ["one line per distinct behaviour the pull request settles"],
+    "covered": ["those the generated test reaches"],
+    "uncovered": ["those it does not, or empty"]
+  },
+  "readability": {
+    "verdict": "good" | "acceptable" | "poor",
+    "strengths": "one sentence, or 'none'",
+    "problems": ["specific, quotable: a bad name, a vacuous assertion, unexplained setup"]
+  },
   "confidence": "high" | "medium" | "low",
   "reasoning": "two sentences at most"
 }
@@ -58,7 +87,13 @@ Answer with JSON only, no prose around it, in exactly this shape:
 Use "narrower" when the generated test checks a real subset of the developer's -- the
 right behaviour, fewer cases. Use "broader" when it checks that and more. Use
 "different" when it is about another behaviour, even if it would pass and fail at the
-same commits."""
+same commits.
+
+Be a strict reviewer on questions 2 and 3 and a fair one on question 1. Do not soften
+"partial" to "complete" because the test passes, and do not call a test "good" because it
+works -- these three answers are read separately and a uniformly generous one is worth
+nothing."""
+
 
 USER = """Bug report
 ==========
@@ -131,6 +166,11 @@ def compare(instance: dict[str, Any], generated: str,
 
 
 def line(result: dict[str, Any]) -> str:
-    v = result.get("verdict", "?")
-    conf = result.get("confidence", "?")
-    return f"{v} ({conf} confidence) -- {result.get('reasoning', '')[:90]}"
+    """One terminal line. All three answers, because reading only the first is how a
+    test that is 'same' and unreadable and half-complete looks like a success."""
+    cov = (result.get("issue_coverage") or {}).get("verdict", "?")
+    read = (result.get("readability") or {}).get("verdict", "?")
+    uncovered = (result.get("issue_coverage") or {}).get("uncovered") or []
+    tail = f"  misses: {uncovered[0][:52]}" if uncovered else ""
+    return (f"{result.get('verdict', '?')} | issue {cov} | readable {read} "
+            f"({result.get('confidence', '?')} conf){tail}")
