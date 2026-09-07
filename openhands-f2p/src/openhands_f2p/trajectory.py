@@ -90,7 +90,7 @@ def _as_markdown(task: str) -> str:
 
 def _describe(tool: str, entry: dict) -> str:
     """Readable body for the tools whose result is structured rather than shell output."""
-    if tool == "repo_info":
+    if tool == "repo_info":      # historical: runs before the sub-agent was removed
         info = entry.get("info") or {}
         if entry.get("withheld"):
             return "withheld: the output would have echoed the developer's test."
@@ -213,7 +213,7 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
 
         why = thoughts[i] if i < len(thoughts) else ""
 
-        # repo_info, verify and coverage carry no `command` key, so before this they all
+        # verify and coverage carry no `command` key, so before this they all
         # fell through to the shell branch and rendered as empty terminal boxes -- an
         # action with no command and no output. Each gets the shape that says what it is.
         if tool in ("repo_info", "verify", "coverage"):

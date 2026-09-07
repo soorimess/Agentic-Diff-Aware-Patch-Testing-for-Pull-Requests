@@ -25,5 +25,8 @@ differs before and after: a different return value, an exception that is or is n
 raised, a side effect that now happens. Then write the test around that observable
 difference.
 
-If you cannot state the behavioural difference in one sentence, you do not understand the
-change yet -- keep reading the surrounding code until you can.
+A change is not always one behaviour. Read every hunk, and every branch it adds or
+removes, and work out what each one does for a caller: a condition that now holds, a path
+that is now taken, a case that is now handled differently. Understanding the change means
+being able to say what it does everywhere it acts, not only where you first recognised
+it.

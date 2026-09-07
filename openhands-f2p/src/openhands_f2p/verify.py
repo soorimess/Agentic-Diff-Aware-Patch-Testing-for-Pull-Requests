@@ -30,7 +30,7 @@ from typing import Any
 
 from openhands_f2p import flow
 from openhands_f2p import swebench_env as E
-from openhands_f2p.swebench_env import TEST_RUNNER, Sandbox
+from openhands_f2p.swebench_env import Sandbox
 
 # Base-side failures that mean the test reached the behaviour it claims to check.
 # A FAILED is an assertion or a wrong exception; an ERROR from the test body counts too
@@ -65,48 +65,36 @@ class Verdict:
         return d
 
 
-def gen_test_path(repo: str, instance_id: str, box: Sandbox | None = None) -> str:
-    """Where a generated test has to live for this repo's runner to find it.
+def gen_test_path(instance_id: str, box: Sandbox | None = None) -> str:
+    """Where a generated test has to live for this project's runner to collect it.
 
-    Two repositories need a fixed answer: django's runner takes dotted labels relative to
-    tests/, so a file anywhere else is unreachable, and sympy's bin/test wants a path
-    inside the package. Everything else is pytest, and pytest will collect from anywhere
-    -- but "anywhere" is not the same as "somewhere sensible", and the directory has to
-    exist.
+    `test_directory` reads it off the checkout: the shallowest directory named `tests`,
+    `testing` or `test`, and among equals the one with the most test files in it. That
+    covers all twelve repositories here without naming any of them -- `tests/` for flask,
+    pylint, sphinx, seaborn and requests; `testing/` for pytest, which spells it
+    differently; `<package>/tests/` for xarray, astropy, matplotlib and scikit-learn,
+    whose tests sit beside the code; and the root for requests in 2013, which had no test
+    directory at all.
 
-    So the rest is probed rather than tabulated. The alternative was an entry per
-    repository, and with twelve repositories that table is mostly a list of places called
-    "tests" -- it would grow with every instance added and be wrong for the next one.
-    The probe order below covers all twelve: tests/ for flask, pylint, sphinx, seaborn
-    and requests; testing/ for pytest, which is the one project that spells it
-    differently; <package>/tests/ for xarray, astropy, matplotlib and scikit-learn, whose
-    tests sit beside the code with no top-level directory at all.
+    Shallowest matters: django's runner takes a label relative to `tests/`, and its
+    deepest test directories hold ten times as many files as `tests/` itself, so picking
+    the biggest would put the file where the runner cannot resolve a label for it.
     """
     name = f"test_f2p_{instance_id.replace('-', '_')}"
-    fixed = TEST_RUNNER.get(repo)
-    if fixed:
-        return fixed["gen_path"].format(name=name)
     if box is None:
-        return f"tests/{name}.py"
-
-    package = repo.split("/")[-1].replace("-", "_")
-    aliases = {"scikit_learn": "sklearn", "pytest": "src/_pytest"}
-    candidates = ["tests", "testing", f"{aliases.get(package, package)}/tests"]
-    for directory in candidates:
-        if box.exists(directory):
-            return f"{directory}/{name}.py"
-    return f"{name}.py"                     # the root always collects
+        return f"tests/{name}.py"           # provisional, before a container exists
+    directory = E.test_directory(box)
+    return f"{directory}/{name}.py" if directory else f"{name}.py"
 
 
-def targets_for_gold(instance: dict[str, Any]) -> list[str]:
+def targets_for_gold(box: Sandbox, instance: dict[str, Any]) -> list[str]:
     """What to run when the candidate is the developer's own test.
 
     pytest repos can be handed exact node ids. django and sympy cannot -- django's ids
     are sometimes a test's docstring and sympy's carry no path -- so those run the whole
     module the test patch touches and the outcome is read out of the output.
     """
-    repo = instance["repo"]
-    if E.runner_for(repo)["kind"] == "pytest":
+    if E.runner_for(box)["args"] == "nodes":
         return json.loads(instance["FAIL_TO_PASS"])
     return E.patched_test_files(instance["test_patch"])
 
@@ -120,7 +108,7 @@ def _decide(iid: str, repo: str, base: dict, head: dict, targets: list[str],
     """
     if expected is not None:
         # Gold test: we know exactly which ids must flip, so check those and nothing else.
-        pairs = [(n, E.outcome_of(repo, base, n), E.outcome_of(repo, head, n))
+        pairs = [(n, E.outcome_of(base, n), E.outcome_of(head, n))
                  for n in expected]
         flipped = [n for n, b, h in pairs if b in BEHAVIOURAL and h == "PASSED"]
         missing = [n for n, b, _ in pairs if b is None]
@@ -144,7 +132,7 @@ def _decide(iid: str, repo: str, base: dict, head: dict, targets: list[str],
     # broken test.
     if expected is not None:
         still_failing = [n for n in expected
-                         if E.outcome_of(repo, head, n) in BEHAVIOURAL]
+                         if E.outcome_of(head, n) in BEHAVIOURAL]
     else:
         still_failing = [n for n, s in head.items() if s in BEHAVIOURAL]
 
@@ -188,15 +176,15 @@ def verify(
 
     if use_gold_test:
         box.apply_patch(instance["test_patch"])
-        targets = targets_for_gold(instance)
+        targets = targets_for_gold(box, instance)
         expected = json.loads(instance["FAIL_TO_PASS"])
     elif generated_test is not None:
         # With the box, so the probe can look. Without it the fallback is `tests/`,
         # and pytest's own repository has no such directory -- the agent wrote its test
-        # to `testing/` (where `repo_info` correctly sent it) while the verdict was
+        # to `testing/` (where the briefing correctly pointed it) while the verdict was
         # computed on an empty file at `tests/`, giving "nothing collected on either
         # side" for a test that was fine.
-        rel = gen_test_path(repo, iid, box)
+        rel = gen_test_path(iid, box)
         box.write(rel, generated_test)
         flow.record(flow.VERIFY, "install test", f"{rel} "
                     f"({generated_test.count(chr(10)) + 1} lines)")
@@ -207,8 +195,8 @@ def verify(
 
     def side(label: str) -> tuple[dict[str, str], str]:
         flow.record(flow.VERIFY, f"run {label.strip()}", f"targets={targets}")
-        r = box.exec(E.test_command(repo, targets), timeout=3600)
-        outcomes = E.parse_output(repo, r.output)
+        r = box.exec(E.test_command(box, targets), timeout=3600)
+        outcomes = E.parse_output(r.output)
         tally = {}
         for st in outcomes.values():
             tally[st] = tally.get(st, 0) + 1
@@ -255,7 +243,7 @@ def verify(
         # one -- but still here, inside the window where the patch is applied, because
         # the lines it adds do not exist at any other moment.
         if coverage and v.f2p == "YES":
-            cov = E.changed_line_coverage(box, repo, targets, instance["patch"],
+            cov = E.changed_line_coverage(box, targets, instance["patch"],
                                           base_files=base_files)
             v.changed_line_coverage = cov
     finally:

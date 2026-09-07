@@ -93,7 +93,7 @@ disable_warnings = no-data-collected, module-not-imported
 """
 
 
-def coverage_command(box: "Sandbox", repo: str, targets: list[str]) -> str:
+def coverage_command(box: "Sandbox", targets: list[str]) -> str:
     """The repo's own runner, wrapped in `coverage run`.
 
     Wrapping rather than pytest-cov, because two of the three runners are not pytest.
@@ -104,20 +104,20 @@ def coverage_command(box: "Sandbox", repo: str, targets: list[str]) -> str:
     image at all.
     """
     box.write(COV_RC, COV_RC_SRC)
-    kind = runner_for(repo)["kind"]
-    if kind == "sympy":
+    runner = runner_for(box)
+    if runner["args"] == "paths":
         box.write(SYMPY_COV_DRIVER, SYMPY_DRIVER_SRC)
         args = " ".join(shlex.quote(t) for t in targets)
         inner = f"{SYMPY_COV_DRIVER} {args}"
     else:
-        inner = test_command(repo, targets)
+        inner = test_command(box, targets)
         if inner.startswith("python -m "):
             inner = inner[len("python "):]      # -> `-m pytest ...`
-    prefix = f"{DJANGO_COV_PATH} " if kind == "django" else ""
+    prefix = f"{DJANGO_COV_PATH} " if runner["args"] == "labels" else ""
     return f"{prefix}python -m coverage run --rcfile={COV_RC} {inner}"
 
 
-def measure_coverage(box: "Sandbox", repo: str, targets: list[str],
+def measure_coverage(box: "Sandbox", targets: list[str],
                      limit_files: int = 12) -> dict:
     """Which lines the given tests executed, per file.
 
@@ -129,7 +129,7 @@ def measure_coverage(box: "Sandbox", repo: str, targets: list[str],
     """
     box.exec(f"rm -f {COV_DATA} {COV_DATA}.* .coverage .coverage.* f2p_cov.json",
              timeout=120)
-    run = box.exec(coverage_command(box, repo, targets), timeout=3600)
+    run = box.exec(coverage_command(box, targets), timeout=3600)
     # `combine` is a belt-and-braces step: our rcfile turns parallel mode off, but a
     # test suite that forks (pytest-xdist, django's --parallel) still leaves one data
     # file per process. With nothing to combine it is a no-op.
@@ -258,7 +258,7 @@ def is_test_file(path: str) -> bool:
             or "tests" in parts[:-1] or "testing" in parts[:-1])
 
 
-def changed_line_coverage(box: "Sandbox", repo: str, targets: list[str],
+def changed_line_coverage(box: "Sandbox", targets: list[str],
                           patch: str, base_files: dict[str, str] | None = None) -> dict:
     """Of the lines this pull request changed, how many does the test execute?
 
@@ -297,7 +297,7 @@ def changed_line_coverage(box: "Sandbox", repo: str, targets: list[str],
     if not wanted:
         return {"measured": False, "reason": "the fix touches no source .py lines"}
 
-    traced = measure_coverage(box, repo, targets, limit_files=0)
+    traced = measure_coverage(box, targets, limit_files=0)
     if not traced.get("ok"):
         return {"measured": False, "reason": traced.get("detail", "coverage failed")}
 

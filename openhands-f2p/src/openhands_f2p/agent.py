@@ -51,7 +51,7 @@ def field(label: str, text: str) -> None:
 
 
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
-              runner_kind: str, out_dir: Path, blind: bool = False,
+              out_dir: Path, blind: bool = False,
               coverage_tool: bool = True) -> dict:
     from openhands.sdk import Agent, Conversation, Tool
     from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
@@ -63,8 +63,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     # and `verify` tools only exist because the agent is shown the change.
     patch = "" if blind else instance["patch"]
     names = sandbox_tools.register(box, instance["repo"], tool_log, patch=patch,
-                                   coverage_tool=coverage_tool, gen_path=test_file,
-                                   version=instance.get("version", ""))
+                                   coverage_tool=coverage_tool, gen_path=test_file)
     agent = Agent(llm=llm, tools=[Tool(name=n) for n in names])
 
     transcript: list[dict] = []
@@ -99,8 +98,8 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
 
     # Assembled from prompts/, one file per instruction. See prompts/README.md.
     task = prompt.build(repo=instance["repo"], test_file=test_file,
-                        problem=instance["problem_statement"], runner=runner_kind,
-                        patch=patch, coverage_tool=coverage_tool,
+                        repo_facts=E.repo_facts(box, test_file),
+                        problem=instance["problem_statement"], patch=patch, coverage_tool=coverage_tool,
                         skip=set(filter(None, (os.getenv("F2P_PROMPT_SKIP") or "")
                                         .split(","))))
     field("model", f"{model}   {llm.api_mode} api"
@@ -195,7 +194,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
           out_root: Path | None = None, label: str = "") -> dict:
     inst = load(pr["id"])
     repo = inst["repo"]
-    test_file = V.gen_test_path(repo, pr["id"])      # provisional; re-resolved in the box
+    test_file = V.gen_test_path(pr["id"])      # provisional; re-resolved in the box
     print(f"\n{'─' * 74}")
     print(f"  [{pr['tier']}] {pr['id']}".ljust(52) + repo.rjust(20))
     print(f"  {pr['note'][:70]}")
@@ -215,7 +214,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
 
     if dry_run:
         field("target", test_file)
-        field("runner", E.test_command(repo, [test_file]))
+        # No container in a dry run, and the runner is a property of the checkout.
+        field("runner", "detected from the checkout when the container starts")
         return {"id": pr["id"], "tier": pr["tier"], "f2p": "SKIPPED"}
 
     image = E.image_for(pr["id"])
@@ -229,13 +229,12 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
                       extra_packages=("coverage",)) as box:
         flow.record(flow.SETUP, "instance", f"{pr['note']}")
         box.strip_git()
-        test_file = V.gen_test_path(repo, pr["id"], box)
+        test_file = V.gen_test_path(pr["id"], box)
         flow.record(flow.SETUP, "test path", test_file)
         field("sandbox", f"{image.split('.')[-1]}   network=none, git stripped")
         field("target", test_file)
 
-        run = run_agent(inst, box, test_file, max_iterations,
-                        E.runner_for(repo)["kind"], d, blind=blind,
+        run = run_agent(inst, box, test_file, max_iterations, d, blind=blind,
                         coverage_tool=coverage_tool)
         code = box.read(test_file)
         flow.record(flow.AGENT, "test written" if code else "no test",
@@ -302,6 +301,10 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
     (d / "after_fix.log").write_text(verdict.head_log)
     usage = token_usage(d)
     result = {**verdict.as_dict(), "tier": pr["tier"],
+              # When the agent actually ran. The file's mtime used to stand in for this
+              # and was wrong the moment anything touched the file afterwards -- a
+              # re-judge moved two instances a day forward in the run table.
+              "ran_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "arm": label or ("agent-blind" if blind else "agent"),
               "coverage_tool": coverage_tool,
               "usage": usage,

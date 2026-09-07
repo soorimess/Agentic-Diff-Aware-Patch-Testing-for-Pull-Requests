@@ -197,30 +197,29 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 467 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 470 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `arms.py` | 89 | The coverage A/B: every pull request twice, with the tool and without. |
 | `checks.py` | 107 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 176 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 398 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
-| `docs.py` | 123 | Refresh the generated blocks in `docs/system-design.md`. |
+| `docs.py` | 122 | Refresh the generated blocks in `docs/system-design.md`. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
 | `images.py` | 282 | Prepared SWE-bench images, and the disk they compete for. |
 | `layout.py` | 24 | Where the project is on disk, and the environment it runs with. |
 | `llm_config.py` | 143 | One place the model connection is configured, shared by every caller. |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
-| `parallel.py` | 180 | Running several pull requests at once, as separate processes. |
-| `prompt.py` | 122 | Assemble the agent's prompt from the pieces in prompts/. |
+| `parallel.py` | 211 | Running several pull requests at once, as separate processes. |
+| `prompt.py` | 121 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 298 | The instances we develop against: twenty-six, spanning every repository and a decade. |
-| `repo_info.py` | 139 | repo_info as a sub-agent: a second model reads the repository and answers. |
-| `runners.py` | 149 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 151 | `out/RUNS.md` -- the state of every instance, for someone who has just cloned this. |
+| `runners.py` | 315 | Three test-runner conventions, and how to read what they print. |
+| `runs.py` | 173 | `out/RUNS.md` -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 238 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 476 | OpenHands tools whose executors run inside the SWE-bench container. |
-| `swebench_env.py` | 122 | The SWE-bench environment, as one import. |
+| `sandbox_tools.py` | 444 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `swebench_env.py` | 89 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 304 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 278 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 266 | The F2P decision. One implementation, used by every arm. |
 <!-- /generated:modules -->
 
 ## The agent's tools
@@ -231,12 +230,23 @@ That makes every shared resource a hazard, and two were real:
 - `run_tests`
 - `coverage`
 - `verify`
-- `repo_info`
 <!-- /generated:tools -->
 
-`repo_info` is a sub-agent, not a lookup: a second, tool-less model call that reads the
-repository's layout and configuration and reports only how tests are written here. It is
-given the structure, never the diff and never the maintainer's test.
+There is no sub-agent for repository knowledge any more. There used to be: `repo_info`,
+a second model call per instance that read the tree and reported how tests are written
+here. It was removed because the same question was being answered in three places at
+once -- its own `find` over the test directories, `run_tests` building the command, and
+the runner detection in `runners` -- and the three could disagree. Once it was asked to
+report the runner without being handed the answer it called `pytest` "the canonical
+runner" for sympy, which does not use it.
+
+All of it now comes from one place. `repo_facts(box, test_file)` in `runners` reads the
+checkout directly -- runner, target directory, the project's own pytest configuration
+verbatim, and the names of neighbouring tests -- and that text becomes the `15-repo.md`
+prompt piece. It is measurement, not inference: no model call, nothing to disagree with,
+and the same code path that `run_tests` uses to build the command. Style is the one thing
+it does not try to answer, because it cannot be answered generally; the agent is told to
+read one to three neighbouring tests and see for itself.
 
 `verify` and `coverage` exist for the agent too, not only for the harness. The agent may
 call them as often as it likes; what is *recorded* is the harness's own run, after the
@@ -252,18 +262,18 @@ one arm and kept for another.
 | file | job |
 |---|---|
 | `10-situation.md` | Establishes where the model is and, critically, that the bug is still present. Without this the model tends to assume the code is already correct and writes a t |
+| `15-repo.md` | How testing works in this checkout -- runner, target path, neighbouring tests, and the project's own pytest configuration verbatim. Read off the tree by `repo_f |
 | `20-goal.md` | The deliverable, stated as an engineering task rather than as our scoring function. This was rewritten after review. The earlier version read "write a test that |
 | `30-issue.md` | The bug report, verbatim from the dataset's problem_statement field. This is the only instance data the model ever sees. The developer's fix and the developer's |
 | `35-change.md` | The pull request's diff, framed as evidence to interpret rather than a target to satisfy. The closing instruction used to be "the test has to run the lines abov |
-| `40-tools.md` | Describes the four always-present tools in terms of when to reach for each, since the schemas already say what they are. The boundary between `repo_info` and `r |
+| `40-tools.md` | Describes the tools in terms of when to reach for each, since the schemas already say what they are. Two things are stated outright because leaving them implici |
 | `45-tools-verify.md` | Introduces `verify` as the property the test must have rather than a score. Separable because it only exists once the diff is an input: with the patch withheld  |
 | `46-tools-coverage.md` | Says what `coverage` is *for* -- a better test -- which the previous version left implicit while describing only what it reports. Sixteen of twenty-two agents n |
 | `50-rules.md` | The constraints. The first one is load-bearing for the measurement rather than for the model -- an agent that edits the library can make any test pass, and then |
 | `55-check-runs.md` | Step one of the finishing sequence, and the only step that exists in every arm -- `run_tests` is registered whether or not the diff was given. Split from the ot |
 | `56-check-flips.md` | Step two. Dropped with the diff, since `verify` needs the patch to have a second state to run against. |
 | `57-check-reaches.md` | Step three, plus how to read a low figure. Dropped with the diff, and dropped again by --compare-coverage, which is exactly what that flag measures. Rewritten t |
-| `58-finish.md` | The stop condition, on its own so that changing when the agent stops does not mean editing what it checks. The previous wording ended the sequence at its first  |
-| `60-runner-pytest.md` | Per-repo advice for the pytest projects. The `pytest` warning is here because it is where the guessing actually happened: agents typed `pytest -q <file>` in eig |
+| `58-finish.md` | The stop condition, on its own so that changing when the agent stops does not mean editing what it checks. Rewritten twice. The first version ended the sequence |
 <!-- /generated:prompts -->
 
 Some of it is load-bearing for the *measurement*: `50-rules.md` forbids editing anything
@@ -314,7 +324,7 @@ layout  dataset  flow  llm_config  prompt  prs      leaves
 images  runners                                     no internal deps either
    └── sandbox ── coverage_metric
          └── swebench_env  (facade: re-exports all four)
-               └── verify, sandbox_tools, repo_info, trajectory
+               └── verify, sandbox_tools, trajectory
                      └── agent ── arms, checks, parallel, compare, docs, runs
                          oracle, trace                      entry points
 ```
@@ -324,8 +334,12 @@ images  runners                                     no internal deps either
 
 | was | is now |
 |---|---|
-| `swebench_env` 1091 | `images` 283 &middot; `runners` 149 &middot; `sandbox` 226 &middot; `coverage_metric` 393 &middot; facade 123 |
-| `agent` 807 | `agent` 468 &middot; `parallel` 181 &middot; `checks` 107 &middot; `arms` 89 |
+| `swebench_env` 1091 | `images` 282 &middot; `runners` 315 &middot; `sandbox` 238 &middot; `coverage_metric` 398 &middot; facade 89 |
+| `agent` 807 | `agent` 470 &middot; `parallel` 211 &middot; `checks` 107 &middot; `arms` 89 |
+
+`runners` grew past its extracted size on purpose: it absorbed `repo_facts`, `test_config`
+and `example_tests` when the `repo_info` sub-agent was deleted, so everything the system
+knows about how a repository is tested is now in one file.
 
 Three things made it safe. `swebench_env` stays as a re-export facade, so every existing
 `from openhands_f2p import swebench_env as E` keeps working and none of its six dependents
@@ -344,7 +358,7 @@ five modules had each been deriving for themselves.
 - **The judge is one model call.** A judgement, not coverage overlap or assertion-strength
   analysis. It is recorded beside the F2P verdict, never folded into it.
 - **Isolation rests on discipline, not a process boundary.** The host has a network. The
-  guarantee is that every executor takes `box` and has no other exit; a fourth tool
+  guarantee is that every executor takes `box` and has no other exit; a sixth tool
   written carelessly would undo it.
 - **Memorisation is not addressed.** `psf/requests` is among the most-copied Python
   repositories on the internet. That can be disclosed, not closed.

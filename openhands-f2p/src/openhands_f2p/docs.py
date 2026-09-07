@@ -66,8 +66,7 @@ def cli() -> str:
 
 def tools() -> str:
     src = (PKG / "sandbox_tools.py").read_text()
-    names = re.findall(r'name\s*=\s*"(run|write_file|run_tests|repo_info|verify|'
-                       r'coverage)"', src)
+    names = re.findall(r'name\s*=\s*"(run|write_file|run_tests|verify|coverage)"', src)
     seen: list[str] = []
     for n in names:
         if n not in seen:
@@ -77,7 +76,7 @@ def tools() -> str:
 
 def prompt_pieces() -> str:
     rows = ["| file | job |", "|---|---|"]
-    for p in prompt.pieces("pytest"):
+    for p in prompt.pieces():
         job = " ".join((p.job or "").split())
         rows.append(f"| `{p.path.name}` | {job[:160]} |")
     return "\n".join(rows)

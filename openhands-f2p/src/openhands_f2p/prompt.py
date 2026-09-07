@@ -8,7 +8,7 @@ Each file carries a `---` header naming it and stating its job. The header is st
 before anything is sent -- it is for us, not the model.
 
     from openhands_f2p import prompt
-    text = prompt.build(repo=..., test_file=..., problem=..., runner="django")
+    text = prompt.build(repo=..., test_file=..., problem=...)
     prompt.explain()        # what each piece is for, without building anything
 """
 from __future__ import annotations
@@ -50,24 +50,26 @@ def _parse(path: Path) -> Piece:
     return Piece(path, fields.get("name", path.stem), fields.get("job", ""), body)
 
 
-def pieces(runner: str = "pytest") -> list[Piece]:
+def pieces() -> list[Piece]:
     """Every piece that applies to this repository, in order.
 
-    Runner files are named 60-runner-<kind>.md and exactly one is selected, so adding
-    support for a new test runner is adding a file rather than editing a dictionary.
+    Every piece applies to every repository. There used to be `60-runner-<kind>.md`
+    files carrying per-project advice -- where django puts its tests, that sympy has no
+    pytest -- and they were removed on purpose: they were right for the twelve
+    repositories someone had looked at and silently absent for the thirteenth, which
+    capped the system at our own knowledge rather than at what it could work out. That
+    knowledge now comes from `15-repo.md`, which is read off the checkout at run
+    time by `repo_facts` with no model involved.
     """
     out = []
     for path in sorted(PROMPTS.glob("*.md")):
         if path.name == "README.md":
             continue
-        if (path.name.startswith("60-runner-")
-                and path.name != f"60-runner-{runner}.md"):
-            continue
         out.append(_parse(path))
     return out
 
 
-def build(*, repo: str, test_file: str, problem: str, runner: str = "pytest",
+def build(*, repo: str, test_file: str, problem: str, repo_facts: str = "",
           patch: str = "", coverage_tool: bool = True,
           skip: set[str] | None = None) -> str:
     """The finished prompt. `skip` drops pieces by name, for arm comparisons.
@@ -86,10 +88,10 @@ def build(*, repo: str, test_file: str, problem: str, runner: str = "pytest",
         # The coverage arm of --compare-coverage. The tool is not registered, so
         # describing it would send the agent after something that never answers.
         skip |= {"tools-coverage", "check-reaches"}
-    used = [p for p in pieces(runner) if p.name not in skip]
+    used = [p for p in pieces() if p.name not in skip]
     text = "\n\n".join(p.body for p in used)
     build.last_pieces = [p.name for p in used]
-    return text.format(repo=repo, test_file=test_file,
+    return text.format(repo=repo, test_file=test_file, repo_facts=repo_facts,
                        problem=problem.strip()[:6000], patch=patch.strip()[:8000])
 
 
@@ -102,12 +104,9 @@ build.last_pieces: list[str] = []
 
 def explain() -> str:
     lines = ["The prompt is built from these pieces, in this order:\n"]
-    for p in pieces("pytest"):
+    for p in pieces():
         lines.append(f"  {p.path.name:22s} {p.name}")
         lines.append(f"  {'':22s} {p.job}\n")
-    others = sorted(PROMPTS.glob("60-runner-*.md"))
-    lines.append(f"  one runner file is chosen from: "
-                 f"{', '.join(p.stem.replace('60-runner-', '') for p in others)}")
     return "\n".join(lines)
 
 
@@ -119,4 +118,4 @@ if __name__ == "__main__":
         print(build(repo="psf/requests", test_file="tests/test_f2p.py",
                     problem="<the issue text goes here>",
                     patch="<the pull request diff goes here>",
-                    runner=sys.argv[1] if len(sys.argv) > 1 else "pytest"))
+                    ))

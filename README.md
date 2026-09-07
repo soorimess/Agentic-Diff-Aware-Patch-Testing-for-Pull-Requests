@@ -87,7 +87,7 @@ root, `openhands-f2p/.venv/bin/python main.py 3` also works.
 | `--blind` | withhold the diff. Harder task; drops the `verify` and `coverage` tools with it |
 | `--compare-coverage` | each PR twice, with and without the coverage tool, into `out_compare_coverage/` |
 | `--no-compare` | skip the final judgement against the maintainer's test |
-| `--max-iterations N` | cap on agent steps, default 100. Highest observed use: 62 |
+| `--max-iterations N` | cap on agent steps, default 100. One instance has reached it: `sphinx-7454` spent 91 of its 100 steps in `run`, searching rather than looping |
 
 The instances are in `src/openhands_f2p/prs.py`: 26 across 12 repositories, five django
 versions from 3.0 to 5.0, and for every other repository one old and one recent — the
@@ -142,13 +142,15 @@ uv run python -m openhands_f2p.docs --check    # is the design doc current
 
 - **One run per instance.** Same-instance variance is visible at n=1 — sympy took 3
   actions on one run and 4 on another. Action counts are a range, not a measurement.
-- **Four instances have no verdict.** The gateway key reached its budget mid-run;
-  a pre-flight check now says so in 0.3 s instead of letting each instance wait twenty
-  minutes and fail having written nothing.
+- **Two instances have no verdict.** Both are infrastructure, not results:
+  `matplotlib-26208` lost the Docker socket 76 minutes into its image pull when Docker
+  Desktop restarted, and `scikit-learn-25747` was still downloading at 0.3 MB/s when the
+  run was stopped. Neither started an agent. `out/<id>/result.json` says so, and
+  `--retry-broken` picks up exactly these.
 - **The coverage A/B has not been run.** `--compare-coverage` works, but 26 PRs twice
   needs the budget for it.
 - **Isolation rests on discipline, not a process boundary.** The host has a network. The
-  guarantee is that every executor takes `box` and has no other exit; a fourth tool
+  guarantee is that every executor takes `box` and has no other exit; a sixth tool
   written carelessly would undo it.
 - **Memorisation is not addressed.** `psf/requests` is among the most-copied Python
   repositories on the internet. That can be disclosed, not closed.

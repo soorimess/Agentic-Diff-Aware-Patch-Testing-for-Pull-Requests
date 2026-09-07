@@ -30,6 +30,28 @@ VERDICT_NOTE = {
 }
 
 
+def _ran_at(d: Path, f: Path, r: dict) -> datetime:
+    """When the agent ran -- not when the result file was last touched.
+
+    `result.json`'s mtime is the obvious answer and the wrong one: re-judging two
+    instances rewrote their files and moved them a day forward in this table. Results
+    written since carry `ran_at`. For older ones, fall back to a file only a real run
+    writes -- the child's own flow log -- and to the mtime only if neither exists.
+    """
+    stamped = r.get("ran_at")
+    if stamped:
+        try:
+            return datetime.strptime(stamped, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    for name in ("flow.jsonl", "child.log"):
+        q = d / name
+        if q.exists() and q.stat().st_size:
+            return datetime.fromtimestamp(q.stat().st_mtime, tz=timezone.utc)
+    return datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
+
+
 def _row(pr: dict) -> dict:
     d = OUT / pr["id"]
     f = d / "result.json"
@@ -38,7 +60,7 @@ def _row(pr: dict) -> dict:
                 "why": "never run", "judge": "—", "rechecked": False}
     r = json.loads(f.read_text())
     c = r.get("changed_line_coverage") or {}
-    when = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
+    when = _ran_at(d, f, r)
     return {**pr, "f2p": r.get("f2p", "?"),
             "when": when.strftime("%Y-%m-%d %H:%M UTC"),
             "cov": c.get("percent") if c.get("measured") else None,

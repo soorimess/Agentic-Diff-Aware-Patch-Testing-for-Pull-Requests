@@ -41,7 +41,6 @@ from openhands.sdk.tool import (
     register_tool,
 )
 
-from openhands_f2p import repo_info
 from openhands_f2p import swebench_env as E
 from openhands_f2p.swebench_env import REPO_DIR, Sandbox
 
@@ -167,9 +166,9 @@ class TestExecutor(ToolExecutor[TestAction, TestObservation]):
         self.log = log if log is not None else []
 
     def __call__(self, action: TestAction, conversation=None) -> TestObservation:
-        command = E.test_command(self.repo, [action.target])
+        command = E.test_command(self.box, [action.target])
         r = self.box.exec(command, timeout=TEST_TIMEOUT)
-        outcomes = E.parse_output(self.repo, r.output)
+        outcomes = E.parse_output(r.output)
         self.log.append({"tool": "run_tests", "target": action.target,
                          "command": command, "returncode": r.returncode,
                          "outcomes": outcomes, "output": r.output[:4000]})
@@ -185,7 +184,7 @@ class SandboxTestTool(ToolDefinition[TestAction, TestObservation]):
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                log: list | None = None, **params):
         assert box is not None and repo, "SandboxTestTool needs a Sandbox and a repo"
-        runner = E.runner_for(repo)["cmd"]
+        runner = E.runner_for(box)["cmd"]
         return [cls(
             name="run_tests",
             description=(f"Run tests in this repository. Invokes `{runner}` for you, "
@@ -232,8 +231,7 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
                 f"({state}) -- some file was modified outside the test", is_error=True)
         self.box.apply_patch(self.patch)
         try:
-            cov = E.changed_line_coverage(self.box, self.repo, [action.target],
-                                          self.patch)
+            cov = E.changed_line_coverage(self.box, [action.target], self.patch)
         finally:
             self.box.apply_patch(self.patch, revert=True)
 
@@ -323,13 +321,21 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             return VerifyObservation.from_text(
                 f"cannot verify: the working tree is in an unexpected state ({state})",
                 is_error=True)
-        cmd = E.test_command(self.repo, [action.target])
+        cmd = E.test_command(self.box, [action.target])
         before = self.box.exec(cmd, timeout=3600)
-        base_out = E.parse_output(self.repo, before.output)
+        base_out = E.parse_output(before.output)
         self.box.apply_patch(self.patch)
+        missed = ""
         try:
             after = self.box.exec(cmd, timeout=3600)
-            head_out = E.parse_output(self.repo, after.output)
+            head_out = E.parse_output(after.output)
+            # Inside the patched window, which is the only moment the lines the change
+            # adds exist at all. Computed here rather than after the revert -- doing it
+            # afterwards measures coverage of a tree where those line numbers hold
+            # different code, and the run fails outright.
+            if {n for n, v in base_out.items() if v in ("FAILED", "ERROR")} & {
+                    n for n, v in head_out.items() if v == "PASSED"}:
+                missed = self._reach(action.target)
         finally:
             self.box.apply_patch(self.patch, revert=True)
 
@@ -350,10 +356,51 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     "does not exercise this pull request.")
         else:
             head = f"Fail-to-pass: {len(flipped)} test(s) fail before and pass after."
+
+        # Reported here rather than left for the agent to ask about. The `coverage` tool
+        # already offered this, and across twenty-six runs it was called twelve times --
+        # every one of them last, with nothing after it, and every one already reaching
+        # the whole change. It was a formality, never feedback, because asking was a
+        # decision the agent only made once it was confident. This removes the decision.
+        #
+        # Lines, not a percentage. A percentage is a score, and a score in front of the
+        # agent is a score to raise; a list of lines it did not reach is a fact about the
+        # code, and the conditions above each one say what the input has to look like.
         body = (f"\n\nbefore the change:\n{_clip(before.output, 1800)}"
                 f"\n\nafter the change:\n{_clip(after.output, 1200)}"
                 if base_out or head_out else "")
-        return VerifyObservation.from_text(head + body, is_error=not flipped)
+        return VerifyObservation.from_text(head + missed + body, is_error=not flipped)
+
+    def _reach(self, target: str) -> str:
+        """How much of the change this test runs, and what to do if it is not all of it.
+
+        A pointer, not the answer. Earlier this printed the missed lines here in full,
+        which made `coverage` redundant -- the agent had everything already and never
+        called it. Naming the shortfall and naming the tool that explains it keeps both:
+        the agent cannot miss that something is unfinished, and the explaining is still
+        the other tool's job.
+
+        No percentage is shown when the test reaches everything either; "all of them" is
+        a fact, and a figure invites raising a figure.
+        """
+        try:
+            cov = E.changed_line_coverage(self.box, [target], self.patch)
+        except Exception:
+            return ""
+        if not cov.get("measured"):
+            return ""
+        missed = len(cov.get("missed") or [])
+        if not missed:
+            return "\n\nIt runs every line this pull request changed."
+        total = cov["executable_changed_lines"]
+        return (f"\n\nIt runs {cov['covered']} of the {total} lines this pull request "
+                f"changed; {missed} never execute. Call `coverage` on this file to see "
+                f"which they are, the code on each one and the conditions above it. "
+                f"Then decide: part of the behaviour you set out to pin down and worth "
+                f"another assertion, a separate case that deserves its own test "
+                f"function, or genuinely outside what this test is for. If you change "
+                f"the test, run `verify` again -- a new test is a new answer and the "
+                f"old one no longer describes it.")
 
 
 class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
@@ -373,83 +420,6 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
         )]
 
 
-# ------------------------------------------------------------- repo_info_finder
-class RepoInfoAction(Action):
-    pass
-
-
-class RepoInfoObservation(Observation):
-    pass
-
-
-class RepoInfoExecutor(ToolExecutor[RepoInfoAction, RepoInfoObservation]):
-    """How testing works in this project, answered by a sub-agent.
-
-    Three properties, and each is about leakage.
-
-    **No arguments.** A tool with a free-form path or query is a general file reader, and
-    a general file reader is a channel: every guard then becomes a guess about what the
-    forbidden answer looks like. With no input there is one fixed question.
-
-    **A sub-agent, not a string check.** The earlier version scanned a template we wrote
-    for lines of the developer's test -- which catches an exact substring and nothing
-    else, and was checking our own output against a leak it could not have contained. The
-    sub-agent is instead never *shown* the issue, the diff or the test patch, so it cannot
-    leak them in paraphrase either, and its reply is filtered to six named fields so
-    anything it volunteers has nowhere to land.
-
-    **No web search.** Raised as an option; refused deliberately. The container has no
-    network, but even with one, searching "psf/requests proxy 407" is the shortest path
-    to the merged pull request and the developer's test -- the single thing the
-    assignment says must stay hidden.
-    """
-
-    def __init__(self, box: Sandbox, repo: str, gen_path: str, version: str,
-                 log: list | None = None):
-        self.box = box
-        self.repo = repo
-        self.gen_path = gen_path
-        self.version = version
-        self.log = log if log is not None else []
-        self._cached: str | None = None
-
-    def __call__(self, action, conversation=None) -> RepoInfoObservation:
-        # Cached: the answer cannot change during a run, and a second call would spend
-        # another sub-agent request to say the same thing.
-        if self._cached is None:
-            try:
-                info = repo_info.describe(self.box, self.repo, self.gen_path,
-                                         self.version)
-                self._cached = repo_info.render(info)
-                self.log.append({"tool": "repo_info", "info": info})
-            except Exception as exc:
-                self._cached = (f"the conventions sub-agent failed ({exc!s:.120}). "
-                                f"Read an existing test with `run` instead; this "
-                                f"project's runner is "
-                                f"{E.runner_for(self.repo)['cmd']}.")
-                self.log.append({"tool": "repo_info", "error": str(exc)[:300]})
-        return RepoInfoObservation.from_text(self._cached)
-
-
-class SandboxRepoInfoTool(ToolDefinition[RepoInfoAction, RepoInfoObservation]):
-    @classmethod
-    def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
-               gen_path: str = "", version: str = "", log: list | None = None,
-               **params):
-        assert box is not None and repo, "SandboxRepoInfoTool needs a Sandbox and a repo"
-        return [cls(
-            name="repo_info",
-            description=("How this project organises and runs its tests, at this "
-                         "version: where tests live, how they are named and structured, "
-                         "conventional fixtures, and the command that runs them. Takes "
-                         "no arguments. Call it first."),
-            action_type=RepoInfoAction,
-            observation_type=RepoInfoObservation,
-            annotations=ToolAnnotations(readOnlyHint=True),
-            executor=RepoInfoExecutor(box, repo, gen_path, version, log),
-        )]
-
-
 def register(box: Sandbox, repo: str, log: list, patch: str = "",
              coverage_tool: bool = True, gen_path: str = "",
              version: str = "") -> list[str]:
@@ -462,9 +432,7 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     register_tool("run", SandboxRunTool.create(box=box, log=log)[0])
     register_tool("write_file", SandboxWriteTool.create(box=box, log=log)[0])
     register_tool("run_tests", SandboxTestTool.create(box=box, repo=repo, log=log)[0])
-    register_tool("repo_info", SandboxRepoInfoTool.create(
-        box=box, repo=repo, gen_path=gen_path, version=version, log=log)[0])
-    names = ["run", "write_file", "run_tests", "repo_info"]
+    names = ["run", "write_file", "run_tests"]
     if patch:
         register_tool("verify", SandboxVerifyTool.create(
             box=box, repo=repo, patch=patch, log=log)[0])
