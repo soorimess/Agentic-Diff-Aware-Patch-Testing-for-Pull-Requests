@@ -140,6 +140,90 @@ symmetric places, `twinx` and `twiny`, and the test exercises `twinx` only. That
 metric doing exactly what it exists for: the test pins half of a symmetric bug, and the
 number says so.
 
+## Mutation
+
+Fail-to-pass says the test fails at base and passes at head. Changed-line coverage says it
+executed the lines the fix touched. Neither says the test would *object* to a fix that is
+nearly right — a test can flip, run every changed line, and still pass against a version of
+the patch with a comparison inverted or a boundary off by one.
+
+So `--mutants N` adds a step between the agent's output and the judge. Each mutant is a
+single small edit to the *fixed* code; the test is run against it. A mutant the test fails
+on is **killed**, one it still passes is a **survivor**, and each survivor names something
+the test does not pin down.
+
+### Deterministic, and no model call
+
+The mutants come from `mutmut` 3.7.0 — libcst 1.9.0 under it — not from a model. An
+earlier version asked a frontier model for `{file, find, replace}` edits, and it worked,
+but it made the metric depend on a sampling temperature: re-running an instance could
+produce a different denominator and so a different score for an unchanged test. A
+measurement that moves when nothing moved is not a measurement.
+
+`create_mutations(filename, source, covered_lines)` returns every mutation the operator
+set offers; `module.deep_replace(original, mutated)` applies exactly one. Two runs of the
+same instance produce byte-identical mutants, which has been checked.
+
+**Confined to the change.** `mutmut` will mutate a whole file given the chance; only
+mutations landing on lines the pull request touched are kept. A mutant elsewhere in the
+file asks whether the test covers code the pull request never changed, which is a
+different question and not the one being scored.
+
+**Spread, not clustered.** `_spread` round-robins over `(file, line)` groups before
+taking the first N, so ten mutants on a two-file patch sample both files and several lines
+rather than ten variants of one expression.
+
+### No gate: both columns, raw
+
+Every mutant is run against **two** tests — the agent's, and the maintainer's from
+`test_patch` — on the identical mutant set, and both numbers are reported side by side:
+
+| | agent test | developer test |
+|---|---|---|
+| `out/`, 23 instances, 90 mutants | 74 (82%) | 69 (77%) |
+| `out_compare_repo_search/full`, 24 instances, 100 mutants | 75 | 79 |
+| `out_compare_repo_search/repo-search`, same 100 mutants | 76 | 79 |
+
+An earlier design filtered the denominator down to mutants the maintainer's test kills, on
+the argument that the rest are unfair questions — equivalent mutants, or behaviour outside
+what the pull request is about. That gate is gone by decision: it folded a judgement into
+the number, and the raw pair says more. The developer column doubles as a control — the
+same 100 mutants give 79 in both series, so an agent difference of 75 against 76 is a
+like-for-like comparison and not two different exams.
+
+The two corpora disagree about which test is stronger, and that is the honest finding:
+across instances the agent's tests and the maintainer's are within a few points either
+way, with real spread underneath. `sphinx-7454` went 10/10 against the maintainer's 9;
+`flask-5014` killed 1 of 4.
+
+### Operators, and the instances that score zero
+
+Six of 23 instances produced **no mutants at all**. `mutmut`'s operators work on
+expressions — comparisons, operators, constants, keywords — and a patch that only adds a
+statement, a decorator or a framework declaration offers them nothing to change. A
+statement-deletion operator would cover most of these; it is deliberately deferred, and
+until then `0/0` is reported as what it is rather than counted as a perfect score.
+
+### Two guards
+
+Before any mutant, **both** tests must pass on the unmutated fixed code — otherwise every
+mutant reads as killed and the score is meaningless rather than obviously wrong. And the
+tree is returned to base afterwards, tests off, because a tree left patched would make the
+next "before the fix" run be the after run.
+
+Every mutant is written to `out/<instance>/mutations/NN-<name>.diff` with an `index.json`,
+so a survivor can be read as a diff rather than taken on trust.
+
+### Ordering, and what the agent never sees
+
+This reads `test_patch`, the held-out answer, so it sits where the judge sits: after the
+generated test is finalised and scored. It runs only for a `YES` — asking what a test
+would notice about a wrong fix presumes it notices the right one — and inside the sandbox,
+since every mutant needs the container the verdict was computed in.
+
+The agent is never told a mutant exists, never sees a survivor, and never sees a mutation
+score. A score in front of the agent is a score to raise.
+
 ## The judge
 
 One call per instance to a stronger model that wrote none of these tests, after the F2P
@@ -197,29 +281,31 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 470 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
-| `arms.py` | 89 | The coverage A/B: every pull request twice, with the tool and without. |
-| `checks.py` | 107 | What the agent actually did, checked rather than assumed. |
+| `agent.py` | 675 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `checks.py` | 119 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 176 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 398 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 122 | Refresh the generated blocks in `docs/system-design.md`. |
+| `features.py` | 219 | What the agent is given, as one registry that everything else reads. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
-| `images.py` | 282 | Prepared SWE-bench images, and the disk they compete for. |
+| `image_cache.py` | 238 | Instance images kept on the host disk, so each one is pulled from the registry once. |
+| `images.py` | 315 | Prepared SWE-bench images, and the disk they compete for. |
 | `layout.py` | 24 | Where the project is on disk, and the environment it runs with. |
-| `llm_config.py` | 143 | One place the model connection is configured, shared by every caller. |
+| `llm_config.py` | 150 | One place the model connection is configured, shared by every caller. |
+| `mutants.py` | 378 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
-| `parallel.py` | 211 | Running several pull requests at once, as separate processes. |
-| `prompt.py` | 121 | Assemble the agent's prompt from the pieces in prompts/. |
+| `parallel.py` | 235 | Running several pull requests at once, as separate processes. |
+| `prompt.py` | 209 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 298 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 315 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 173 | `out/RUNS.md` -- the state of every instance, for someone who has just cloned this. |
-| `sandbox.py` | 238 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 444 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `runs.py` | 261 | `out/RUNS.md` -- the state of every instance, for someone who has just cloned this. |
+| `sandbox.py` | 283 | One container per instance, and the only door into it. |
+| `sandbox_tools.py` | 518 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `swebench_env.py` | 89 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 304 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 266 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 307 | The F2P decision. One implementation, used by every arm. |
 <!-- /generated:modules -->
 
 ## The agent's tools
@@ -250,7 +336,7 @@ read one to three neighbouring tests and see for itself.
 
 `verify` and `coverage` exist for the agent too, not only for the harness. The agent may
 call them as often as it likes; what is *recorded* is the harness's own run, after the
-agent has stopped. Under `--blind` neither is registered, because both need the diff.
+agent has stopped. Under `--no-patch` neither is registered, because both need the diff.
 
 ## The prompt
 
@@ -263,6 +349,7 @@ one arm and kept for another.
 |---|---|
 | `10-situation.md` | Establishes where the model is and, critically, that the bug is still present. Without this the model tends to assume the code is already correct and writes a t |
 | `15-repo.md` | How testing works in this checkout -- runner, target path, neighbouring tests, and the project's own pytest configuration verbatim. Read off the tree by `repo_f |
+| `16-explore.md` | What to establish about the checkout, for runs where the harness hands none of it over. The counterpart to `15-repo.md`, which is dropped in the same configurat |
 | `20-goal.md` | The deliverable, stated as an engineering task rather than as our scoring function. This was rewritten after review. The earlier version read "write a test that |
 | `30-issue.md` | The bug report, verbatim from the dataset's problem_statement field. This is the only instance data the model ever sees. The developer's fix and the developer's |
 | `35-change.md` | The pull request's diff, framed as evidence to interpret rather than a target to satisfy. The closing instruction used to be "the test has to run the lines abov |
@@ -270,9 +357,9 @@ one arm and kept for another.
 | `45-tools-verify.md` | Introduces `verify` as the property the test must have rather than a score. Separable because it only exists once the diff is an input: with the patch withheld  |
 | `46-tools-coverage.md` | Says what `coverage` is *for* -- a better test -- which the previous version left implicit while describing only what it reports. Sixteen of twenty-two agents n |
 | `50-rules.md` | The constraints. The first one is load-bearing for the measurement rather than for the model -- an agent that edits the library can make any test pass, and then |
-| `55-check-runs.md` | Step one of the finishing sequence, and the only step that exists in every arm -- `run_tests` is registered whether or not the diff was given. Split from the ot |
+| `55-check-runs.md` | Step one of the finishing sequence, and the only step that exists in every configuration -- `run_tests` is registered whether or not the diff was given. Split f |
 | `56-check-flips.md` | Step two. Dropped with the diff, since `verify` needs the patch to have a second state to run against. |
-| `57-check-reaches.md` | Step three, plus how to read a low figure. Dropped with the diff, and dropped again by --compare-coverage, which is exactly what that flag measures. Rewritten t |
+| `57-check-reaches.md` | Step three, plus how to read a low figure. Dropped with the diff, and by `--no-coverage-tool` on its own. Rewritten twice. The first version said "iterate until |
 | `58-finish.md` | The stop condition, on its own so that changing when the agent stops does not mean editing what it checks. Rewritten twice. The first version ended the sequence |
 <!-- /generated:prompts -->
 
@@ -286,6 +373,202 @@ way: an earlier version told the agent to iterate until coverage answered well, 
 an instruction to maximise the number we score by. Asking is mandatory; raising the answer
 is not, and adding a call with no assertion behind it is called out as unacceptable.
 
+## Configuration
+
+A run is defined partly by its instance and partly by what the agent was *given*. Those
+switches used to be booleans threaded by hand: a `--blind` that removed the diff, a
+`coverage_tool` that removed one tool, each with its own branch in the prompt builder and
+its own line in the child command. Adding a third meant touching five files and hoping
+none was missed.
+
+They are now one registry, `features.py`. A `Feature` names itself, the tools that live
+and die with it, and the features it depends on:
+
+```python
+Feature("coverage-tool",
+        "withhold the `coverage` tool. The harness still measures changed-line "
+        "coverage; the agent just cannot see it while it works",
+        needs=("patch",), tools=("coverage",))
+```
+
+That single entry produces a `--no-coverage-tool` flag, a line in `--help`, dependency
+handling, a place in every recorded result, and the ability to gate a prompt piece. There
+is nowhere else to edit.
+
+Two rules are enforced rather than documented. **Dependencies cascade**: `coverage`
+needs the diff, so `--no-patch` withdraws it too and reports
+`without patch, coverage-tool (needs patch)` — refusing the combination would only make
+the caller pass two flags to mean one thing. **Something has to describe the bug**:
+`--no-issue --no-patch` is refused, because with neither the report nor the diff the task
+is not harder but impossible, and the run would still write a row that looks like a
+measurement.
+
+### Withholding a component can mean adding an instruction
+
+`--repo-search` (also spelled `--no-repo-facts`) is the first feature where taking a
+component away is not enough. The other four make the prompt shorter and nothing else:
+drop the diff and there is simply no diff. Drop the briefing on how this project tests
+and the agent has to be *told* to work it out, or the run measures a missing instruction
+rather than a missing input — a distinction the whole point of these switches depends on.
+
+So `prompt.py` grew a negated condition. `needs: !repo-facts` keeps a piece only while
+that feature is off, and `16-explore.md` uses it to ask the same questions `15-repo.md`
+answers: where a new test file has to live to be collected, what the test configuration
+enforces, how the tests already there are written. It answers none of them — an answer
+would be the per-repository advice that was deleted from `prompts/` once already.
+
+Two things about it are worth stating plainly, because they bound what the flag measures.
+
+**The runner is not really withheld.** `run_tests` picks this project's runner in every
+configuration and converts a path to whatever form it wants, and the agent could always
+have read a configuration file with `run`. What the briefing uniquely supplied is the
+*destination*: the shallowest directory named `tests`, `testing` or `test`, which is the
+one fact that took twelve repositories to get right.
+
+**So the destination moves to the agent, and the harness follows it.** The filename stays
+ours — it is not repo knowledge, it keeps the file findable afterwards, and it stops the
+agent overwriting a test that was already there — while the directory becomes the agent's
+to establish. `written_test_path` resolves it: the write log first, confirmed against the
+container, then a `find`, then the path the harness would have chosen. It runs before
+`audit`, which flags every write that is not the test file; left later, the agent's own
+chosen path would be reported as a stray write on every run.
+
+Resolving it once is not enough, and finding that out cost a run. `verify` derived the
+path itself from `gen_test_path`, so an agent that put its test in django's
+`tests/auth_tests/` — beside the model it imports, where django's own developers keep
+this test — wrote `from .models import ...`, correct there, and the harness relocated the
+file to `tests/`, where there is no parent package. The verdict came back *"still failing
+after the fix — the test is wrong, not the code"* about an ImportError the harness had
+manufactured. `verify` now takes `test_path`, `recheck` passes what the run recorded, and
+`mutate_saved` prefers it over re-deriving. Re-judging that run with no LLM call turned it
+from `NO` to `YES` at 100% coverage.
+
+The line that broke already carried a comment about the same class of bug one
+configuration earlier: pytest keeps its tests in `testing/`, the briefing said so
+correctly, and a verdict computed at `tests/` reported "nothing collected on either side"
+for a test that was fine. A derived path is the bug; the parameter is the fix.
+
+**The runner leaked through a channel the prompt scan cannot see.** `run_tests` built its
+description from `runner_for(box)["cmd"]`, so every `--repo-search` run handed django's
+`./tests/runtests.py --verbosity 2` to the model in the tool schema — before it took a
+single action — while the briefing that was supposed to be withheld sat unused. The
+observation echoed `$ <command>` too, which taught the dotted-label conversion on first
+use. `prompt.build` had guaranteed for months that no assembled prompt names an
+unregistered tool; tool *descriptions* had no such guarantee, and that is exactly where
+the leak was.
+
+Now the runner is named only when the briefing names it. `reveal_runner` controls both the
+description and the echo, and `_check_no_leak` refuses to register a tool whose
+description contains the runner command while `repo-facts` is withheld. The capability is
+identical either way — `run_tests` still builds and runs the right command — and only the
+knowledge differs. The first A/B measured before this fix; the second, after.
+
+Both paths are recorded, always, as `test_path` and `test_path_default`. A test in a
+directory the runner never collects from fails for a reason that has nothing to do with
+how good the test is, and without the pair on record those two failures are
+indistinguishable in the table.
+
+### What the agent changed, verified
+
+The measurement rests on the agent not having edited the library: the "before the fix" run
+happens in the container as the agent left it, so a source edit makes that run a fact about
+something other than the pull request. `50-rules.md` says so, and for a long time the
+checking was a fiction. `audit` asked `git status`; `strip_git` had already deleted the
+repository, so the answer was always "not a repository" and the tree always read clean. It
+could not have caught anything. The other check, `files_written_outside_test`, reads the
+tool log — which sees `write_file` calls and is blind to `sed -i` or a shell redirect.
+
+The tree is now compared against a snapshot taken before the agent is let in. The
+repository holding that snapshot lives **outside the checkout**:
+
+    git --git-dir=/tmp/f2p_tree.git --work-tree=/testbed
+
+Putting `.git` back under `/testbed` would have changed what we measure — `setuptools_scm`
+and friends compute a package version from git, and every verdict on record was taken with
+no repository there, so one untagged commit could change a version string and break tests
+for reasons unrelated to the agent. Outside, the checkout still has no `.git`, the single
+commit holds only the base state so there is no history to leak, and `tree_changes()`
+still returns an exact list of what moved.
+
+Verified on a live container: an agent editing `django/forms/models.py` with a shell
+redirect is invisible to the tool log and appears immediately in the tree diff. Across the
+48 runs of the first A/B, every run created exactly one file and changed nothing else —
+which is now a checked fact rather than an assumption.
+
+### An input is not its tool
+
+The diff and `verify` were one switch to begin with, on the reasoning that a check against
+the change is only possible once the change has been shown. That was wrong. The harness
+holds the patch in *every* configuration — it applies it and reverts it itself — so
+`verify` can report whether the agent's test flips without the agent seeing a line of the
+diff. It leaks nothing: the verdict is a fact about the agent's own test.
+
+Coupling them was also a methodological mistake. If `--no-patch` withheld the feedback
+loop as well as the input, a drop in the result could not be attributed to either — which
+defeats the purpose of having the switches at all. They are separate features now.
+
+The one that genuinely cannot be separated is `coverage`. It prints the source of the lines
+a test missed, and those lines *are* the diff, so it needs `patch`. What survives the split
+is a graded scale of information:
+
+| what the agent gets | leaks the diff? |
+|---|---|
+| the flip verdict from `verify` | nothing — it describes the agent's own test |
+| `verify`'s shortfall line | a count: "3 of the 5 lines this pull request changed" |
+| the `coverage` tool | **yes** — the source of each missed line and its conditions |
+
+That middle row is why `verify` adapts its own output. When `coverage` is not registered it
+must not say "call `coverage`" — the same failure the prompt scan catches, one layer later
+in a tool's output, where no scan reaches. The executor is told whether the tool exists
+beside it and words the shortfall accordingly.
+
+### The prompt has to follow
+
+A configuration that removes a tool but leaves the text describing it sends the agent
+after something that never answers — and that failure is silent, findable only by reading
+a transcript several runs later. So the prompt adapts two ways.
+
+`needs:` in a piece's header drops the piece: `35-change.md` *is* the diff. But most
+instructions are not all-or-nothing, so `{?feature} ... {/feature}` inside a body drops a
+paragraph. Withholding the diff should not delete the goal, only the clause telling the
+agent to work out what the code will do *after* the change; and the finishing sequence
+keeps its first check while losing the sentence that frames three of them as a sequence.
+
+| configuration | pieces | tools the agent holds |
+|---|---|---|
+| `full` | 13 | `run` `write_file` `run_tests` `verify` `coverage` |
+| `no-issue` | 12 | `run` `write_file` `run_tests` `verify` `coverage` |
+| `no-coverage-tool` | 11 | `run` `write_file` `run_tests` `verify` |
+| `no-patch+coverage-tool` | 10 | `run` `write_file` `run_tests` `verify` |
+| `no-verify-tool+coverage-tool` | 9 | `run` `write_file` `run_tests` |
+| `no-patch+verify-tool+coverage-tool` | 8 | `run` `write_file` `run_tests` |
+
+Eight configurations are reachable from four switches, and every one of them is built and
+scanned as part of checking this in.
+
+Then it is checked. `prompt.build` scans the assembled text for the names of tools that
+were not registered and raises, naming the piece to fix; an unknown feature name in a
+`needs:` or a `{?...}` raises when the piece is parsed. The scan works because the pieces
+backtick tool names consistently — `` `coverage` `` is the tool, "changed-line coverage"
+is prose.
+
+### Comparing configurations
+
+There is no pair-comparison code. There was: an `arms.py` that ran every pull request
+twice, once with the coverage tool and once without, and reported the paired difference.
+It is gone, because a pair is the wrong unit — the interesting comparisons are between
+*series* of runs whose configurations differ, and a paired harness fixes the axis at two
+values chosen when it was written.
+
+What replaces it is bookkeeping. Every result records `features.config`; `RUNS.md` states
+which configuration produced its rows and warns when they came from more than one. A
+series is a directory:
+
+```bash
+uv run openhands-f2p --out-root out_full
+uv run openhands-f2p --out-root out_nocov --no-coverage-tool
+```
+
 ## CLI
 
 <!-- generated:cli -->
@@ -293,12 +576,13 @@ is not, and adding a call with no assertion behind it is called out as unaccepta
 |---|---|
 | `--max-iterations` | hard cap on agent steps per PR. Observed use ranges from 12  (sympy) to 65 (scikit-learn), so the headroom is deliberate |
 | `--dry-run` | show the target path and runner command, make no LLM call |
-| `--blind` | withhold the PR diff. Harder task, comparable to TDD-Bench  baselines; drops the coverage and verify tools with it |
 | `--no-compare` | skip the concept judgement against the developer's test |
-| `--compare-coverage` | run each PR twice, with and without the coverage tool, into  out_compare_coverage/<pr>/{with,without}_coverage_tool/ |
+| `--mutants` | measure mutation on the tests already in out/, without  running the agent again. Adds the `mutation` field and  changes nothing else. Needs --mutants N |
 | `--recheck` | re-judge the saved tests under the current harness, without  calling the model again |
 | `--retry-broken` | run only instances with no result, or whose result is BROKEN.  A BROKEN verdict records that the harness or the connection  failed and says nothing about the instance, so it is worth  retrying; YES and NO are findings and are left alone |
-| `--parallel` | how many PRs to run at once (F2P_MAX_PARALLEL, default 5).  Doubled in --compare-coverage, since each PR is two runs |
+| `--parallel` | how many PRs to run at once (F2P_MAX_PARALLEL, default 5) |
+| `--out-root` | write results here instead of out/. One directory per  configuration is how a series of runs is kept separable |
+| `--label` | a name for this run, recorded in every result. Defaults to  the configuration, e.g. no-coverage-tool |
 <!-- /generated:cli -->
 
 ## What a run leaves behind
@@ -320,14 +604,19 @@ size: directories earn their keep when there are several independent consumers, 
 is one here — the CLI. The import graph has **no cycles** and layers cleanly:
 
 ```
-layout  dataset  flow  llm_config  prompt  prs      leaves
-images  runners                                     no internal deps either
+features  flow  images  layout  llm_config  prs  runners      leaves
+   ├── prompt, parallel        (read the feature registry)
+   ├── dataset, runs, trace, compare
    └── sandbox ── coverage_metric
-         └── swebench_env  (facade: re-exports all four)
-               └── verify, sandbox_tools, trajectory
-                     └── agent ── arms, checks, parallel, compare, docs, runs
-                         oracle, trace                      entry points
+         └── swebench_env      (facade: re-exports images/runners/sandbox/coverage)
+               └── verify, sandbox_tools, checks, trajectory
+                     └── agent                               entry point
+                         oracle                              entry point
 ```
+
+`features.py` is a leaf on purpose. It is the registry of what the agent is given, and
+four layers read it -- the prompt builder, the tool registration, the child command line,
+and the recorded result -- so anything it imported would be imported by all of them.
 
 `swebench_env.py` was 1091 lines holding four subjects that barely touched each other, and
 `agent.py` was 807 holding six. Both are split:
@@ -335,7 +624,7 @@ images  runners                                     no internal deps either
 | was | is now |
 |---|---|
 | `swebench_env` 1091 | `images` 282 &middot; `runners` 315 &middot; `sandbox` 238 &middot; `coverage_metric` 398 &middot; facade 89 |
-| `agent` 807 | `agent` 470 &middot; `parallel` 211 &middot; `checks` 107 &middot; `arms` 89 |
+| `agent` 807 | `agent` 470 &middot; `parallel` 211 &middot; `checks` 107 |
 
 `runners` grew past its extracted size on purpose: it absorbed `repo_facts`, `test_config`
 and `example_tests` when the `repo_info` sub-agent was deleted, so everything the system

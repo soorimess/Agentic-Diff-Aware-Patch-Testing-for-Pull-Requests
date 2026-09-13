@@ -47,11 +47,23 @@ def audit(box: E.Sandbox, tool_log: list, test_file: str) -> dict:
                      if e["tool"] == "run" and NETWORK.search(e.get("command", ""))]
     wrote_elsewhere = [e["path"] for e in tool_log
                        if e["tool"] == "write_file" and e.get("path") != test_file]
-    dirty = box.exec("git status --porcelain 2>/dev/null || echo NO_GIT").output.strip()
+    # Against the snapshot taken before the agent started, not against the checkout's
+    # own git -- that was deleted by `strip_git`, which made the previous version of this
+    # line structurally dead: it asked `git status`, always got "not a repository", and
+    # always reported a clean tree however much the agent had changed. It could not have
+    # caught anything.
+    #
+    # This also covers what the tool log cannot. `files_written_outside_test` sees
+    # `write_file` calls; an agent editing source with `sed -i` or a shell redirect is
+    # invisible to it. The tree is not.
+    touched = [p for p in box.tree_changes() if p != test_file]
     return {"network_attempts": tried_network,
             "files_written_outside_test": wrote_elsewhere,
             "isolation": box.audit_isolation(),
-            "vcs": "absent" if "NO_GIT" in dirty else dirty[:300]}
+            "tree_changed": touched,
+            "vcs": "clean apart from the test" if not touched
+                   else f"{len(touched)} other path(s) changed: "
+                        f"{', '.join(touched[:5])}"[:300]}
 
 
 def budget_exhausted(out_dir: Path) -> dict | None:

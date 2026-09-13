@@ -192,8 +192,20 @@ def evict_one_image(keep: str) -> bool:
             best, best_size = name, gb(size.strip())
     if not best:
         return False
+    # Archived on the way out, if it is not already. Eviction used to mean a
+    # three-hour re-download the next time this instance came up; with the archive it
+    # means a load off the host disk. The archive is written before the delete, and
+    # `image_cache.save` verifies it before this returns, so the expensive copy is never
+    # thrown away on the strength of a file nobody read back.
+    from openhands_f2p import image_cache
+    try:
+        image_cache.save(best, quiet=False)
+    except Exception as exc:
+        print(f"  could not archive {best} before evicting: "
+              f"{type(exc).__name__}: {exc}")
     _run(["docker", "image", "rm", "-f", best], timeout=600)
-    print(f"  evicted {best.split('.')[-1]} ({best_size:.1f} GB) to make room")
+    print(f"  evicted {best.split('.')[-1]} ({best_size:.1f} GB) to make room"
+          f"{' (archived)' if image_cache.have_archive(best) else ''}")
     return True
 
 
@@ -224,6 +236,13 @@ def pull_image(image: str, quiet: bool = False,
     """
     if have_image(image):
         return
+    # The archive is tried *before* the lock, because a load is a local operation and
+    # has no business queueing behind somebody else's download. It used to sit inside
+    # the lock, and one instance with no archive pulling at 0.3 MB/s held seven that had
+    # archives -- twenty-five seconds of work each -- waiting on it for hours.
+    from openhands_f2p import image_cache
+    if image_cache.have_archive(image) and image_cache.load(image, quiet=quiet):
+        return
     with PULL_LOCK.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
@@ -235,6 +254,11 @@ def pull_image(image: str, quiet: bool = False,
 def _pull_locked(image: str, quiet: bool, need_gb: float) -> None:
     if have_image(image):
         return                  # the worker ahead of us in the queue wanted it too
+    # Re-checked here as well: the worker ahead in the queue may have pulled this very
+    # image and archived it while we waited, in which case there is nothing left to do.
+    from openhands_f2p import image_cache
+    if image_cache.have_archive(image) and image_cache.load(image, quiet=quiet):
+        return
     free = vm_free_gb()
     if free is not None and free < need_gb:
         # Reclaim what is definitely safe before giving up: build cache is cache by
@@ -268,6 +292,15 @@ def _pull_locked(image: str, quiet: bool, need_gb: float) -> None:
         # one attempt has the whole link to itself.
         r = _run(["docker", "pull", "--platform", PLATFORM, image], timeout=2400)
         if r.returncode == 0:
+            # Archived here, while the lock is still held and the image is certainly
+            # present. This is the only moment the expensive thing has just been paid
+            # for, so it is the only moment worth spending two minutes of gzip on.
+            from openhands_f2p import image_cache
+            try:
+                image_cache.save(image, quiet=quiet)
+            except Exception as exc:      # a failed archive must not fail the run
+                if not quiet:
+                    print(f"  could not archive {image}: {type(exc).__name__}: {exc}")
             return
         last = r
         if "no space left" in (r.stderr or ""):

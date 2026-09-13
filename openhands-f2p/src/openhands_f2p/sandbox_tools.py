@@ -42,6 +42,7 @@ from openhands.sdk.tool import (
 )
 
 from openhands_f2p import swebench_env as E
+from openhands_f2p.features import FeatureSet
 from openhands_f2p.swebench_env import REPO_DIR, Sandbox
 
 MAX_OUTPUT = 4000        # what comes back to the model, per call
@@ -160,10 +161,17 @@ class TestObservation(Observation):
 
 
 class TestExecutor(ToolExecutor[TestAction, TestObservation]):
-    def __init__(self, box: Sandbox, repo: str, log: list | None = None):
+    def __init__(self, box: Sandbox, repo: str, log: list | None = None,
+                 reveal_runner: bool = True):
         self.box = box
         self.repo = repo
         self.log = log if log is not None else []
+        self.reveal_runner = reveal_runner
+        """Whether the observation may quote the command it ran. With `repo-facts`
+        withheld the runner is exactly what the agent is supposed to work out, and one
+        echoed `$ ./tests/runtests.py --verbosity 2 auth_tests.test_x` hands over both
+        the command and the label convention. The tool still runs; it just stops
+        narrating. The log keeps the command either way -- that is for us."""
 
     def __call__(self, action: TestAction, conversation=None) -> TestObservation:
         command = E.test_command(self.box, [action.target])
@@ -174,26 +182,40 @@ class TestExecutor(ToolExecutor[TestAction, TestObservation]):
                          "outcomes": outcomes, "output": r.output[:4000]})
         summary = ", ".join(f"{k.split('::')[-1]}: {v}"
                             for k, v in list(outcomes.items())[:12]) or "no tests ran"
+        head = f"$ {command}" if self.reveal_runner else f"ran {action.target}"
         return TestObservation.from_text(
-            f"$ {command}\nexit code {r.returncode}\n{summary}\n\n{_clip(r.output)}",
+            f"{head}\nexit code {r.returncode}\n{summary}\n\n{_clip(r.output)}",
             is_error=not outcomes)
 
 
 class SandboxTestTool(ToolDefinition[TestAction, TestObservation]):
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
-               log: list | None = None, **params):
+               log: list | None = None, reveal_runner: bool = True, **params):
         assert box is not None and repo, "SandboxTestTool needs a Sandbox and a repo"
-        runner = E.runner_for(box)["cmd"]
+        # The tool schema reaches the model before it takes a single action, and it used
+        # to carry `runner_for(box)["cmd"]` verbatim -- django's
+        # `./tests/runtests.py --verbosity 2`. That is the most repo-specific fact the
+        # harness computes, and it was being handed over in `--repo-search` runs whose
+        # whole point is to withhold it. The prompt scan could not see it either: that
+        # reads the assembled prompt, and this is a tool description.
+        #
+        # So the runner is named only when the briefing names it too. The capability is
+        # identical in both; only the knowledge differs.
+        if reveal_runner:
+            what = (f"Invokes `{E.runner_for(box)['cmd']}` for you, so pass a test file "
+                    f"path (or a pytest node id where that applies) and nothing else.")
+        else:
+            what = ("Runs it with this project's own test runner, whatever that is, so "
+                    "pass a test file path (or a pytest node id where that applies) and "
+                    "nothing else.")
         return [cls(
             name="run_tests",
-            description=(f"Run tests in this repository. Invokes `{runner}` for you, "
-                         "so pass a test file path (or a pytest node id where that "
-                         "applies) and nothing else."),
+            description=f"Run tests in this repository. {what}",
             action_type=TestAction,
             observation_type=TestObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
-            executor=TestExecutor(box, repo, log),
+            executor=TestExecutor(box, repo, log, reveal_runner=reveal_runner),
         )]
 
 
@@ -309,11 +331,17 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
     agent's instrument; that one is the measurement.
     """
 
-    def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None):
+    def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
+                 reveal_missed: bool = True):
         self.box = box
         self.repo = repo
         self.patch = patch
         self.log = log if log is not None else []
+        # Whether `coverage` is registered alongside. Without it there is no tool to
+        # send the agent to, and naming one it does not have is exactly the failure the
+        # prompt scan catches -- one layer later, in a tool's own output, where no scan
+        # reaches.
+        self.reveal_missed = reveal_missed
 
     def __call__(self, action: VerifyAction, conversation=None) -> VerifyObservation:
         state = self.box.ensure_base(self.patch)
@@ -393,20 +421,27 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         if not missed:
             return "\n\nIt runs every line this pull request changed."
         total = cov["executable_changed_lines"]
-        return (f"\n\nIt runs {cov['covered']} of the {total} lines this pull request "
-                f"changed; {missed} never execute. Call `coverage` on this file to see "
-                f"which they are, the code on each one and the conditions above it. "
-                f"Then decide: part of the behaviour you set out to pin down and worth "
-                f"another assertion, a separate case that deserves its own test "
-                f"function, or genuinely outside what this test is for. If you change "
-                f"the test, run `verify` again -- a new test is a new answer and the "
-                f"old one no longer describes it.")
+        head = (f"\n\nIt runs {cov['covered']} of the {total} lines this pull request "
+                f"changed; {missed} never execute.")
+        where = (" Call `coverage` on this file to see which they are, the code on each "
+                 "one and the conditions above it."
+                 if self.reveal_missed else
+                 " Which ones is not something you can be shown here, so work back from "
+                 "the behaviour: the change has more than one path through it and your "
+                 "input took one.")
+        return (head + where +
+                " Then decide: part of the behaviour you set out to pin down and worth "
+                "another assertion, a separate case that deserves its own test "
+                "function, or genuinely outside what this test is for. If you change "
+                "the test, run `verify` again -- a new test is a new answer and the "
+                "old one no longer describes it.")
 
 
 class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
-               patch: str = "", log: list | None = None, **params):
+               patch: str = "", log: list | None = None, reveal_missed: bool = True,
+               **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="verify",
@@ -416,29 +451,68 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
             action_type=VerifyAction,
             observation_type=VerifyObservation,
             annotations=ToolAnnotations(readOnlyHint=False),
-            executor=VerifyExecutor(box, repo, patch, log),
+            executor=VerifyExecutor(box, repo, patch, log, reveal_missed),
         )]
 
 
 def register(box: Sandbox, repo: str, log: list, patch: str = "",
-             coverage_tool: bool = True, gen_path: str = "",
+             features: FeatureSet | None = None, gen_path: str = "",
              version: str = "") -> list[str]:
     """Register the agent's tools against one sandbox. Returns their names.
 
-    `coverage` and `verify` both need the patch, and both exist only because the agent
-    is shown it. Without a patch they are left out rather than silently degraded, which
-    is what makes a blind arm a real comparison instead of the same arm with worse tools.
+    Which tools exist is part of the run's configuration, and the registry in `features`
+    is the single place that says so -- each `Feature` names the tools that live and die
+    with it. A withheld feature leaves its tools out rather than registering a degraded
+    version of them, so the difference between two configurations is the component
+    itself and not the same component answering worse.
+
+    `verify` and `coverage` both need the patch: without it there is no second state to
+    run a test against, and nothing to measure coverage of.
     """
-    register_tool("run", SandboxRunTool.create(box=box, log=log)[0])
-    register_tool("write_file", SandboxWriteTool.create(box=box, log=log)[0])
-    register_tool("run_tests", SandboxTestTool.create(box=box, repo=repo, log=log)[0])
+    features = features if features is not None else FeatureSet.of()
+    briefed = "repo-facts" in features
+    made = {"run": SandboxRunTool.create(box=box, log=log)[0],
+            "write_file": SandboxWriteTool.create(box=box, log=log)[0],
+            "run_tests": SandboxTestTool.create(box=box, repo=repo, log=log,
+                                                reveal_runner=briefed)[0]}
+    for n, tool in made.items():
+        register_tool(n, tool)
     names = ["run", "write_file", "run_tests"]
-    if patch:
+    # `patch` here is the harness's copy, held by the executor and applied by it. It is
+    # not the same question as whether the agent was *shown* the diff: `verify` reports
+    # whether the agent's test flips without quoting a line of it, so it survives
+    # `--no-patch`. `coverage` does not -- it prints the source of the lines the test
+    # missed, which is the diff.
+    if "verify-tool" in features:
         register_tool("verify", SandboxVerifyTool.create(
-            box=box, repo=repo, patch=patch, log=log)[0])
+            box=box, repo=repo, patch=patch, log=log,
+            reveal_missed=("coverage-tool" in features))[0])
         names.append("verify")
-        if coverage_tool:
+        if "coverage-tool" in features:
             register_tool("coverage", SandboxCoverageTool.create(
                 box=box, repo=repo, patch=patch, log=log)[0])
             names.append("coverage")
+    _check_no_leak(made, box, features)
     return names
+
+
+def _check_no_leak(made: dict, box: Sandbox, features: FeatureSet) -> None:
+    """No tool may name the runner while `repo-facts` is withheld.
+
+    The prompt has had this guarantee since the feature registry existed -- `build`
+    refuses to assemble text that names an unregistered tool. Tool *descriptions* had no
+    such check, and that is precisely where the leak was: `run_tests` carried
+    `./tests/runtests.py --verbosity 2` into every `--repo-search` run for django. The
+    two channels reach the same model, so they need the same guarantee.
+    """
+    if "repo-facts" in features:
+        return
+    runner = E.runner_for(box)["cmd"].split()[0]
+    named = sorted(n for n, t in made.items()
+                   if runner in getattr(t, "description", ""))
+    if named:
+        raise AssertionError(
+            f"the description of {', '.join(named)} names {runner!r}, which "
+            f"--repo-search exists to withhold. The agent reads tool descriptions "
+            f"before it acts, so this hands over the runner as surely as the briefing "
+            f"would.")

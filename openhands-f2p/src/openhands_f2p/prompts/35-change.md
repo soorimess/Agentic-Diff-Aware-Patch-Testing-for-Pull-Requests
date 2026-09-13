@@ -1,4 +1,5 @@
 ---
+needs: patch
 name: change
 job: The pull request's diff, framed as evidence to interpret rather than a target to
   satisfy. The closing instruction used to be "the test has to run the lines above",
@@ -11,8 +12,7 @@ job: The pull request's diff, framed as evidence to interpret rather than a targ
   work needs the same input. What stays hidden is `test_patch`, the developer's test --
   the assignment is explicit about that one and only that one.
 
-  Drop this piece for the blind arm, which is the harder task and the one comparable to
-  TDD-Bench baselines.
+  Dropped by `--no-patch`, which is the harder task and the one comparable to TDD-Bench baselines.
 ---
 ## What this pull request changes
 

@@ -1,7 +1,7 @@
 ---
+needs: coverage-tool
 name: check-reaches
-job: Step three, plus how to read a low figure. Dropped with the diff, and dropped again
-  by --compare-coverage, which is exactly what that flag measures.
+job: Step three, plus how to read a low figure. Dropped with the diff, and by `--no-coverage-tool` on its own.
 
   Rewritten twice. The first version said "iterate until both answer well" -- an
   instruction to maximise the numbers we score by, which makes a high number evidence of

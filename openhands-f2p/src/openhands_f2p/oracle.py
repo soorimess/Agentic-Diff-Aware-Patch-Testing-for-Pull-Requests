@@ -58,8 +58,8 @@ def check(pr: dict, save: bool = True) -> dict:
         after = box.audit_isolation()
         print(f"    isolation: dns={before['dns_resolves']} "
               f"git_before={before['git_present']} git_after={after['git_present']}")
-        # The same verify() the agent arm uses. If the oracle passed through different
-        # code than the arms, it would not be testing the thing it claims to test.
+        # The same verify() an agent run uses. If the oracle passed through different
+        # code, it would not be testing the thing it claims to test.
         verdict = V.verify(inst, box, use_gold_test=True, quiet=True)
 
     for n in verdict.f2p_nodes[:2]:

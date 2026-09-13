@@ -1,5 +1,6 @@
 ---
 name: repo
+needs: repo-facts
 job: How testing works in this checkout -- runner, target path, neighbouring tests, and
   the project's own pytest configuration verbatim. Read off the tree by `repo_facts`, with
   no model involved.

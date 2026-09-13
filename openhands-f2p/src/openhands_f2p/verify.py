@@ -2,8 +2,8 @@
 
 This exists because there were two. The oracle had the base/head comparison inlined and
 the agent had its own copy, and they had already drifted -- the agent's ran on the host
-while the oracle's ran in a container. Two arms running different verification code
-cannot be compared: any difference in their numbers is partly a difference in how they
+while the oracle's ran in a container. Two runs measured by different verification
+code cannot be compared: any difference in their numbers is partly a difference in how they
 were measured, and there is no way afterwards to say how much.
 
 So the rule is that nothing computes an F2P verdict except `verify()`.
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from openhands_f2p import flow
@@ -85,6 +86,37 @@ def gen_test_path(instance_id: str, box: Sandbox | None = None) -> str:
         return f"tests/{name}.py"           # provisional, before a container exists
     directory = E.test_directory(box)
     return f"{directory}/{name}.py" if directory else f"{name}.py"
+
+
+def written_test_path(box: Sandbox, tool_log: list, fallback: str) -> str:
+    """Where the agent's test actually ended up.
+
+    With `repo-facts` withheld the agent chooses the directory, so the path cannot be
+    known before the run the way `gen_test_path` knows it. Everything downstream --
+    `verify`, coverage, the mutants, the copy saved to out/ -- addresses the test by one
+    path, so exactly one place resolves it and the rest are unchanged.
+
+    The write log comes first because it records what the agent meant, and a path is
+    only accepted once the file is confirmed present: `write_file` can fail, and a
+    failed write that still named a path would send the whole verdict at an empty file.
+    A `find` covers a test written some other way, and `fallback` keeps a path to
+    address when there is nothing at all -- a run with no test is a `NO`, and it should
+    report as one rather than crash here.
+    """
+    name = Path(fallback).name
+    wrote = [e["path"] for e in tool_log
+             if e.get("tool") == "write_file" and "error" not in e
+             and e.get("path") and Path(e["path"]).name == name]
+    for path in reversed(wrote):                    # the last write of it wins
+        if box.read(path):
+            return path.lstrip("./")
+    found = box.exec(f"find . -name '{name}' -not -path './.*' 2>/dev/null "
+                     f"| head -5").output.split()
+    if found:
+        # Shallowest, for the same reason `test_directory` prefers it: a project runner
+        # that takes a label relative to its own directory cannot resolve a deep one.
+        return min((p.lstrip("./") for p in found), key=lambda p: (p.count("/"), p))
+    return fallback
 
 
 def targets_for_gold(box: Sandbox, instance: dict[str, Any]) -> list[str]:
@@ -162,6 +194,7 @@ def verify(
     box: Sandbox,
     *,
     generated_test: str | None = None,
+    test_path: str = "",
     use_gold_test: bool = False,
     coverage: bool = True,
     quiet: bool = False,
@@ -179,12 +212,20 @@ def verify(
         targets = targets_for_gold(box, instance)
         expected = json.loads(instance["FAIL_TO_PASS"])
     elif generated_test is not None:
-        # With the box, so the probe can look. Without it the fallback is `tests/`,
-        # and pytest's own repository has no such directory -- the agent wrote its test
-        # to `testing/` (where the briefing correctly pointed it) while the verdict was
-        # computed on an empty file at `tests/`, giving "nothing collected on either
-        # side" for a test that was fine.
-        rel = gen_test_path(iid, box)
+        # `test_path` when the caller resolved one, because under `--repo-search` the
+        # directory is the agent's choice and deriving it here quietly relocates the
+        # file. That cost a run: an agent put its test in django's `tests/auth_tests/`,
+        # beside the model it imports, wrote `from .models import ...` -- correct there
+        # -- and this line moved the file to `tests/`, where there is no parent package.
+        # The verdict came back "the test is wrong, not the code" about an import error
+        # the harness had created.
+        #
+        # The fallback still probes with the box. Without it the answer is `tests/`, and
+        # pytest's own repository has no such directory -- the agent wrote to `testing/`
+        # where the briefing correctly pointed it, while the verdict was computed on an
+        # empty file at `tests/`, reporting "nothing collected on either side" for a
+        # test that was fine. Same failure, one layer earlier.
+        rel = test_path or gen_test_path(iid, box)
         box.write(rel, generated_test)
         flow.record(flow.VERIFY, "install test", f"{rel} "
                     f"({generated_test.count(chr(10)) + 1} lines)")

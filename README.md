@@ -25,6 +25,14 @@ uv sync
 cp ../.env.example ../.env      # then fill in
 ```
 
+**On Apple silicon, the interpreter must be native arm64.** `mutmut` 3 needs `libcst`,
+which publishes a macOS wheel for `arm64` only — an x86_64 Python under Rosetta finds no
+wheel, falls back to building from source, and needs a Rust toolchain to do it. `uv python
+list` shows the architecture; `uv venv --python cpython-3.12-macos-aarch64-none` pins a
+native one for this project without committing a platform into `.python-version`. The
+images themselves stay amd64 and keep running under emulation either way — this is about
+the harness, not the container.
+
 The SWE-bench Verified rows are a download, not a source file, so they are not in the
 repository. Put the dump at `data/swebench_verified.json` in the repository root or point `F2P_DATASET` at a copy
 you have; `openhands_f2p/dataset.py` prints the fetch command if it cannot find one.
@@ -84,14 +92,117 @@ root, `openhands-f2p/.venv/bin/python main.py 3` also works.
 | `--parallel N` | N PRs at once, as separate processes |
 | `--recheck` | re-judge the saved tests under the current harness, with **no model call** — how a harness fix is verified against the whole set for free |
 | `--retry-broken` | rerun only the instances with no usable result |
-| `--blind` | withhold the diff. Harder task; drops the `verify` and `coverage` tools with it |
-| `--compare-coverage` | each PR twice, with and without the coverage tool, into `out_compare_coverage/` |
+| `--mutants N` | after the verdict, generate N mutants of the patch with `mutmut` and report how many the agent's test kills and how many the maintainer's does, on the same set |
 | `--no-compare` | skip the final judgement against the maintainer's test |
+| `--out-root DIR` | write results here instead of `out/`. One directory per configuration |
+| `--label NAME` | a name for this run, recorded in every result |
 | `--max-iterations N` | cap on agent steps, default 100. One instance has reached it: `sphinx-7454` spent 91 of its 100 steps in `run`, searching rather than looping |
 
 The instances are in `src/openhands_f2p/prs.py`: 26 across 12 repositories, five django
 versions from 3.0 to 5.0, and for every other repository one old and one recent — the
 oldest is `psf/requests` at 1.1, from 2013.
+
+## Withhold a component
+
+Every component the agent is given can be taken away, one flag each. The harness measures
+the same things either way, so a run made with a flag is comparable to one made without:
+
+```bash
+uv run openhands-f2p --no-coverage-tool     # the tool goes; the measurement stays
+uv run openhands-f2p --no-patch             # the agent works the bug out from the report
+uv run openhands-f2p --no-verify-tool       # it can watch its test fail, never pass
+uv run openhands-f2p --no-issue             # only the diff says what the bug is
+uv run openhands-f2p --repo-search          # no briefing; the agent works the repo out
+```
+
+`--repo-search` is the same switch as `--no-repo-facts`, spelled for what the run is for.
+It withholds the briefing on how the project tests — the target convention, where a test
+file has to live to be collected, the neighbouring tests, the configuration — and the
+agent establishes them itself with `run`. The destination becomes the agent's: the harness
+names the filename, the agent picks the directory, and `test_path` and
+`test_path_default` are both recorded so a test in a directory the runner never collects
+from can be told apart from a weak test.
+
+Measured on 24 instances against `full`: **24/24 fail-to-pass either way**, mean coverage
+95.0% against 97.1%, mutation 75/100 against 76/100 on identical mutant sets. Eleven of
+the 24 chose a different directory from the harness heuristic, every one of them beside
+the code under test, and all passed. It costs about 11% more.
+
+`--no-issue --no-patch` is refused rather than run: with neither, nothing tells the agent
+which bug to write a test for, and the run would still produce a verdict.
+
+**An input and a tool are separate switches even when they are about the same thing.**
+`--no-patch` withholds the diff from the *prompt*; the harness still holds it, applies it
+and reverts it, so `verify` keeps working and reports whether the agent's test flips
+without quoting a line of the diff. These were one switch at first, and that was wrong
+twice over: it was not technically necessary, and it confounded the very comparison the
+flags exist for &mdash; if withholding the diff also withheld the feedback loop, a drop in
+the result could not be attributed to either.
+
+What genuinely cannot be separated is `coverage`: it prints the source of the lines a test
+missed, which *is* the diff. So it needs `patch`, and dependencies cascade and say so
+&mdash; `--no-patch` reports `without patch, coverage-tool (needs patch)`.
+
+**To compare configurations, give each its own directory and compare the series:**
+
+```bash
+uv run openhands-f2p --out-root out_full
+uv run openhands-f2p --out-root out_nocov --no-coverage-tool
+```
+
+Each `result.json` records `features.config`, and `RUNS.md` says which configuration its
+rows came from &mdash; and warns when they came from more than one.
+
+Adding a switch is one entry in `FEATURES` in `openhands_f2p/features.py`. That gets it a
+flag, a line in `--help`, dependency handling, a place in every recorded result, and the
+ability to gate a prompt piece. The prompt adapts two ways: `needs:` in a piece's header
+drops the whole piece, and `{?feature} ... {/feature}` inside a body drops a paragraph
+&mdash; because most instructions are not all-or-nothing. Withholding the diff should not
+delete the goal, only the clause telling the agent to work out what the code will do
+*after* the change.
+
+That the finished prompt never mentions a tool the agent does not have is checked, not
+hoped for: `prompt.build` scans the assembled text for the names of tools that were not
+registered and raises, naming the piece to fix. Ask for the assembled prompt in any
+configuration:
+
+```bash
+uv run python -m openhands_f2p.prompt --explain --no-patch   # which pieces, and why
+uv run python -m openhands_f2p.prompt --no-coverage-tool     # the text itself
+```
+
+## Would the test notice a wrong fix?
+
+```bash
+uv run openhands-f2p 3 --mutants 5
+```
+
+`mutmut` generates five mutants — single edits to the *fixed* code, confined to the lines
+the pull request changed and spread across them rather than clustered on one expression.
+Each is applied in turn and the test is run against it. A mutant the test fails on is
+killed; one it still passes is a survivor, and each survivor names a behaviour the test
+does not pin down.
+
+Deterministic, and no model call: two runs of the same instance produce byte-identical
+mutants, so a score only moves when the test moves.
+
+**Both columns, raw.** Every mutant is run against the maintainer's test as well, and both
+numbers are reported side by side rather than one being filtered by the other. Across 24
+instances and 100 mutants the agent's tests killed 75 and the maintainer's 79 — close, with
+real spread underneath: `sphinx-7454` scored 10/10 against the maintainer's 9, `flask-5014`
+killed 1 of 4. The maintainer's column doubles as a control, since it is the same mutant
+set in every run.
+
+Six of 23 instances produced **no mutants at all** — `mutmut` works on expressions, and a
+patch that only adds a statement or a framework declaration offers nothing to change. That
+reports as `0/0`, not as a perfect score. A statement-deletion operator would cover most of
+them and is deferred.
+
+Each mutant is saved to `out/<instance>/mutations/NN-<name>.diff`, so a survivor can be
+read rather than taken on trust.
+
+Runs after the verdict and only for a `YES`, in the same position as the judge, since it
+reads the held-out test. The agent is never told it exists.
 
 ## Read what happened
 
@@ -133,10 +244,33 @@ what looks like agency was instruction.
 
 ```bash
 docker ps -a --filter name=f2p-      # removed on exit; none should linger
-docker images | grep sweb            # ~3 GB per instance, evicted automatically
 rm -rf .cache                        # SDK workspaces and event log, never read
 uv run python -m openhands_f2p.docs --check    # is the design doc current
 ```
+
+### Images are pulled once, ever
+
+The registry link here has been measured at **0.3 MB/s** — about three hours for one
+3-4 GB image, and two runs have already died mid-pull. So every image is kept as a
+gzipped `docker save` on the host and loaded from there instead:
+
+```bash
+uv run python -m openhands_f2p.image_cache list           # what is stored
+uv run python -m openhands_f2p.image_cache archive-all    # archive what Docker holds
+uv run python -m openhands_f2p.image_cache load <id>      # one, by hand
+```
+
+Nothing is automatic about the pull path: it checks Docker, then the archive, then the
+registry — and archives whatever it had to pull, while it still holds the pull lock.
+Measured on `requests-1142`: 2.67 GB in Docker, **1.1 GB** archived, 52 s to write,
+**26 s to load**. Sixteen images are 19.7 GB on disk against ~36 GB in Docker.
+
+The archive is the durable copy, so Docker's is dropped when a run finishes with it —
+otherwise the space is spent twice. Two rules make that safe: nothing is deleted before
+its archive has been read back and verified (`gzip -t` plus a `manifest.json` check), and
+an image another worker has claimed is never touched. `F2P_KEEP_IMAGES=1` keeps Docker's
+copy, which is what you want while iterating on one instance. `F2P_IMAGE_CACHE` moves the
+directory.
 
 ## Known limits
 
@@ -147,8 +281,9 @@ uv run python -m openhands_f2p.docs --check    # is the design doc current
   Desktop restarted, and `scikit-learn-25747` was still downloading at 0.3 MB/s when the
   run was stopped. Neither started an agent. `out/<id>/result.json` says so, and
   `--retry-broken` picks up exactly these.
-- **The coverage A/B has not been run.** `--compare-coverage` works, but 26 PRs twice
-  needs the budget for it.
+- **No configuration has been compared against another yet.** The switches to do it
+  exist and every result records which were in force, but the runs cost what they cost,
+  so every number here comes from the full configuration.
 - **Isolation rests on discipline, not a process boundary.** The host has a network. The
   guarantee is that every executor takes `box` and has no other exit; a sixth tool
   written carelessly would undo it.

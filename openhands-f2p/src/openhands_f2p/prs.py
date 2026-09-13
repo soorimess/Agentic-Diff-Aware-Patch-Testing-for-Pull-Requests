@@ -18,7 +18,7 @@ split, and both `mwaskom/seaborn` instances are v0.12, so neither has an old/new
 
 The pairs do something singles cannot. Two instances from one repository share a build,
 so any difference between them is localisation rather than plumbing -- and that is the
-axis the arms are supposed to differ on. `psf/requests` shows it plainly: both build in
+axis a run is supposed to differ on. `psf/requests` shows it plainly: both build in
 seconds, but one was solved first try and the other failed five runs in a row.
 
 Two axes of difficulty, recorded separately because they are not the same axis:

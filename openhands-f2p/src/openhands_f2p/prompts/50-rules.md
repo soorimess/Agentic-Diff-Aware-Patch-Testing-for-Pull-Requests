@@ -11,5 +11,8 @@ In particular, do not change the library source to make your test pass. The test
 supposed to fail here — that is the entire point — and editing the code under test
 destroys the measurement.
 
-Read the source before you write. The report describes a symptom; the cause may be
-several layers below it and may never be named in the report.
+Read the source before you write.
+{?issue}
+The report describes a symptom; the cause may be several layers below it and may never be
+named in the report.
+{/issue}

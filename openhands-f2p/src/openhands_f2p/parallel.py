@@ -17,6 +17,8 @@ import threading
 import time
 from pathlib import Path
 
+from openhands_f2p.features import FeatureSet, child_flags
+
 
 
 # --------------------------------------------------------------------- parallel
@@ -36,24 +38,28 @@ from pathlib import Path
 CHILD_ENV_FLAG = "F2P_CHILD_OF"
 
 
-def _child_argv(pr_id: str, args, coverage_tool: bool, out_root: Path,
+def _child_argv(pr_id: str, args, features: FeatureSet, out_root: Path,
                 label: str) -> list[str]:
+    """The command line that reproduces this run for one instance.
+
+    Everything that changes what the agent is given has to be forwarded, because the
+    child is where the work happens. `--dry-run` was once dropped here and the parent
+    printed nothing while forking real runs that started containers and spent real
+    tokens. The feature flags come from `features.child_flags`, generated from the
+    registry, so a new switch cannot be added and forgotten on this line.
+    """
     argv = [sys.executable, "-m", "openhands_f2p.agent", pr_id,
             "--max-iterations", str(args.max_iterations),
             "--out-root", str(out_root)]
-    # `--dry-run` has to reach the child, because the child is where the work happens.
-    # Without it `--compare-coverage --dry-run` was not a dry run at all: the parent
-    # printed nothing and forked two real runs per PR, each starting a container and
-    # spending real tokens. A flag whose whole purpose is to not do the thing must not
-    # be the one flag that gets dropped on the way.
     if args.dry_run:
         argv.append("--dry-run")
-    if args.blind:
-        argv.append("--blind")
     if args.no_compare:
         argv.append("--no-compare")
-    if not coverage_tool:
-        argv.append("--no-coverage-tool")
+    if getattr(args, "mutants", 0):
+        argv += ["--mutants", str(args.mutants)]
+    if getattr(args, "mutate_saved", False):
+        argv.append("--mutate-saved")
+    argv += child_flags(features)
     if label:
         argv += ["--label", label]
     return argv
@@ -111,8 +117,21 @@ def _progress_line(out_dir: Path, pr_id: str, width: int = 20) -> str:
             f"{acts:3d} actions  {detail:{width}s} {last.get('t', 0):5.0f}s")
 
 
-def _run_children(jobs: list[tuple], parallel: int) -> list[dict]:
-    """Each job is (pr_id, argv, out_dir, label). Returns whatever the children wrote."""
+def _run_children(jobs: list[tuple], parallel: int,
+                  may_replace_result: bool = True) -> list[dict]:
+    """Each job is (pr_id, argv, out_dir, label). Returns whatever the children wrote.
+
+    `may_replace_result` is about what a *failed* child means. For a run that produces
+    the verdict, a child that writes nothing has produced nothing, and recording BROKEN
+    is the honest answer. For a pass that only adds a field to a result already on disk
+    -- `--mutate-saved` -- it is the opposite: the child failing says nothing about the
+    verdict sitting in that file, and overwriting it destroys a real result.
+
+    That is not hypothetical. Three instances whose images had no local archive tried to
+    pull, the registry timed out, their children died before writing anything, and three
+    genuine YES verdicts were replaced by BROKEN rows. They were recoverable only
+    because the older file is kept as `result.stale.json`.
+    """
     import subprocess
     from concurrent.futures import ThreadPoolExecutor      # threads only wait on procs
 
@@ -186,12 +205,17 @@ def _run_children(jobs: list[tuple], parallel: int) -> list[dict]:
             row = json.loads(rj.read_text())
         else:
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-            row = {"instance_id": pr_id, "f2p": "BROKEN",
-                   "why": f"child exited {proc.returncode} without writing a result"
-                          + (f": {tail[-1][:300]}" if tail else "")}
-            if rj.exists():             # keep the older verdict, but stop reporting it
-                rj.replace(out_dir / "result.stale.json")
-            rj.write_text(json.dumps(row | {"label": label}, indent=2))
+            why = (f"child exited {proc.returncode} without writing a result"
+                   + (f": {tail[-1][:300]}" if tail else ""))
+            row = {"instance_id": pr_id, "f2p": "BROKEN", "why": why}
+            if may_replace_result:
+                if rj.exists():         # keep the older verdict, but stop reporting it
+                    rj.replace(out_dir / "result.stale.json")
+                rj.write_text(json.dumps(row | {"label": label}, indent=2))
+            else:
+                # Reported to the caller, written nowhere. The file on disk is a result
+                # this pass was only going to annotate.
+                row = {"instance_id": pr_id, "failed": why}
         row["label"] = label
         if not live:                       # piped output: one line per finish
             print(f"  {row.get('f2p', '?'):6s} {labels[idx]}", flush=True)

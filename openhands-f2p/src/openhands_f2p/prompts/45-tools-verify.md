@@ -1,11 +1,11 @@
 ---
+needs: verify-tool
 name: tools-verify
 job: Introduces `verify` as the property the test must have rather than a score. Separable
   because it only exists once the diff is an input: with the patch withheld there is
   nothing for the agent to verify against.
 ---
-Because the change is given to you, you can check your work against it rather than
-guessing whether it is right:
+You can check your work against the change rather than guessing whether it is right:
 
 - `verify` — runs your test against the code before the change, applies the change, runs
   it again, then puts the code back. It reports which of your tests failed before and

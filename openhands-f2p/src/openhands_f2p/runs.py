@@ -30,6 +30,20 @@ VERDICT_NOTE = {
 }
 
 
+# What `arm` meant before configurations were a registry. Results written since carry
+# `features.config` and need no translation; these two are the only values the old
+# field ever took, so the table reads the same across the change.
+LEGACY_ARM = {"agent": "full", "agent-blind": "no-patch+coverage-tool"}
+
+
+def _config_of(r: dict) -> str:
+    named = (r.get("features") or {}).get("config")
+    if named:
+        return named
+    arm = r.get("arm") or ""
+    return LEGACY_ARM.get(arm, arm or "—")
+
+
 def _ran_at(d: Path, f: Path, r: dict) -> datetime:
     """When the agent ran -- not when the result file was last touched.
 
@@ -52,12 +66,21 @@ def _ran_at(d: Path, f: Path, r: dict) -> datetime:
     return datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
 
 
-def _row(pr: dict) -> dict:
-    d = OUT / pr["id"]
+# Every key `build` reads, so a row for an instance with no result has the same shape as
+# one that has it. This was a shorter dict, which was fine while the only table ever
+# built was over `out/` with all twenty-six results present -- and a KeyError the first
+# time a series directory held five of them.
+BLANK = {"f2p": "\u2014", "when": "", "cov": None, "covered": None, "total": None,
+         "actions": None, "why": "never run", "judge": "\u2014", "issue": "\u2014",
+         "readable": "\u2014", "uncovered": [], "rechecked": False,
+         "config": "\u2014", "tokens": 0, "cost": 0.0, "mutation": {}}
+
+
+def _row(pr: dict, root: Path) -> dict:
+    d = root / pr["id"]
     f = d / "result.json"
     if not f.exists():
-        return {**pr, "f2p": "—", "when": "", "cov": None, "actions": None,
-                "why": "never run", "judge": "—", "rechecked": False}
+        return {**pr, **BLANK}
     r = json.loads(f.read_text())
     c = r.get("changed_line_coverage") or {}
     when = _ran_at(d, f, r)
@@ -74,12 +97,25 @@ def _row(pr: dict) -> dict:
             "uncovered": ((r.get("concept") or {}).get("issue_coverage")
                           or {}).get("uncovered") or [],
             "rechecked": bool(r.get("rechecked")),
+            "config": _config_of(r),
+            "mutation": r.get("mutation") or {},
             "tokens": (r.get("usage") or {}).get("total_tokens") or 0,
             "cost": (r.get("usage") or {}).get("cost_usd") or 0.0}
 
 
-def build() -> str:
-    rows = [_row(pr) for pr in PRS]
+def build(root: Path = OUT) -> str:
+    """The table for one series of runs.
+
+    `root` is which series: a run made with `--out-root out_nocov` writes its results
+    there, and its table has to be built from there too. Reading `out/` regardless would
+    describe a different series than the one that just finished.
+    """
+    # Only instances this directory actually holds. `out/` holds the whole set, so
+    # nothing changes there; a series run on a subset used to get all 26 rows, 21 of
+    # them dashes linking to directories that were never created. A table of mostly
+    # absent rows reads as a run that mostly failed, which is the opposite of true.
+    present = [pr for pr in PRS if (root / pr["id"] / "result.json").is_file()]
+    rows = [_row(pr, root) for pr in (present or PRS)]
     decided = [r for r in rows if r["f2p"] in ("YES", "NO")]
     yes = [r for r in rows if r["f2p"] == "YES"]
     covs = [r["cov"] for r in rows if r["cov"] is not None]
@@ -99,6 +135,21 @@ def build() -> str:
             f"{sum(r['tokens'] for r in rows) / 1e6:.1f}M tokens in total",
             ""]
 
+    # The column only exists when something filled it. A `mutants` column of dashes on
+    # every row of every table describes nothing and pushes the rest sideways.
+    has_mutation = any(r["mutation"].get("measured") for r in rows)
+    configs = sorted({r["config"] for r in rows if r["config"] != "—"})
+    if len(configs) == 1:
+        out += [f"Every row was produced with the same configuration: "
+                f"**`{configs[0]}`** &mdash; what the agent was given. `full` means "
+                f"nothing was withheld.", ""]
+    elif configs:
+        out += ["> **These rows come from more than one configuration** "
+                f"({', '.join(f'`{c}`' for c in configs)}), so the totals above mix "
+                "runs in which the agent was given different things. Compare a series "
+                "against a series, one `--out-root` each, rather than reading this "
+                "table as a single measurement.", ""]
+
     out += ["Coverage is measured only for tests that are fail-to-pass; for anything "
             "else the question does not apply. A `—` in that column means not "
             "measured, not zero.", "",
@@ -107,14 +158,36 @@ def build() -> str:
             "the test is about the same behaviour as the maintainer's, whether it "
             "reaches every behaviour the pull request settles, and whether it would pass "
             "review. None of them feeds the F2P verdict.", "",
-            "| instance | version | verdict | coverage | actions | concept | issue | "
-            "readable | last run |",
-            "|---|---|---|---|---|---|---|---|---|"]
+            *([] if not has_mutation else
+              ["The two `mutants` columns are the same set of mutants asked of two "
+               "tests. `mutmut` mutates the lines the patch changed -- negating a "
+               "condition, moving a boundary, replacing a literal -- and each column is "
+               "how many of those mutants that test fails on, which is how many wrong "
+               "versions of the fix it would have caught. Nothing is filtered out, so "
+               "the columns are comparable: a mutant the developer's test kills and the "
+               "agent's does not is a gap, and one neither kills is probably "
+               "behaviourally equivalent to the fix and says nothing about either test. "
+               "The individual diffs are in each instance's `mutations/`.", ""]),
+            f"| instance | version | verdict | coverage |"
+            f"{' mutants: agent test | mutants: dev test |' if has_mutation else ''}"
+            f" actions | concept | issue | readable | last run |",
+            f"|---|---|---|---|{'---|---|' if has_mutation else ''}"
+            f"---|---|---|---|---|"]
     for r in rows:
         cov = (f"{r['cov']:.0f}% ({r['covered']}/{r['total']})"
                if r["cov"] is not None else "—")
+        m = r["mutation"]
+        # Killed over total, not a percentage: `2/2` says more than `100%` when the
+        # denominator is two, and the denominator is the interesting part.
+        def _cell(side: str) -> str:
+            if not m.get("measured"):
+                return "—"
+            if not m.get("total"):
+                return "no mutants"
+            return f"{m[side]['killed']}/{m['total']}"
+        cell = (f" {_cell('agent')} | {_cell('developer')} |" if has_mutation else "")
         out.append(f"| [`{r['id']}`](./{r['id']}/) | {r['version']} | "
-                   f"{r['f2p']}{' ¹' if r['rechecked'] else ''} | {cov} | "
+                   f"{r['f2p']}{' ¹' if r['rechecked'] else ''} | {cov} |{cell} "
                    f"{r['actions'] if r['actions'] is not None else '—'} | "
                    f"{r['judge']} | {r['issue']} | {r['readable']} | "
                    f"{r['when'] or '—'} |")
@@ -161,13 +234,28 @@ def build() -> str:
     return "\n".join(line for line in out if line is not None) + "\n"
 
 
-def main() -> int:
-    OUT.mkdir(parents=True, exist_ok=True)
-    path = OUT / "RUNS.md"
-    path.write_text(build())
-    print(f"wrote {path.relative_to(Path(__file__).resolve().parents[3])}")
+def main(root: Path | None = None) -> int:
+    root = root or OUT
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "RUNS.md"
+    path.write_text(build(root))
+    try:
+        shown = path.relative_to(Path(__file__).resolve().parents[3])
+    except ValueError:
+        shown = path
+    print(f"wrote {shown}")
     return 0
 
 
+def _cli() -> int:
+    import argparse
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--out-root", default=None,
+                   help="build the table for the series in this directory "
+                        "(default: out/)")
+    a = p.parse_args()
+    return main(Path(a.out_root) if a.out_root else None)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_cli())

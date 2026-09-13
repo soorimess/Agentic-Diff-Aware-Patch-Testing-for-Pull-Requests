@@ -35,10 +35,12 @@ from pathlib import Path
 
 import time
 
-from openhands_f2p import (arms, compare, docs, flow, llm_config, prompt, runs,
+from openhands_f2p import (compare, docs, flow, llm_config, prompt, runs,
                            sandbox_tools, swebench_env as E, trajectory, verify as V)
 from openhands_f2p.checks import audit, budget_exhausted, token_usage
 from openhands_f2p.dataset import load
+from openhands_f2p import image_cache, mutants
+from openhands_f2p.features import FeatureSet, add_arguments
 from openhands_f2p.layout import CACHE, OUT, PROJECT_ROOT
 from openhands_f2p.parallel import (CHILD_ENV_FLAG, _child_argv, _needs_retry,
                                     _run_children)
@@ -51,19 +53,22 @@ def field(label: str, text: str) -> None:
 
 
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
-              out_dir: Path, blind: bool = False,
-              coverage_tool: bool = True) -> dict:
+              out_dir: Path, features: FeatureSet) -> dict:
     from openhands.sdk import Agent, Conversation, Tool
     from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 
     t_start = time.time()
     llm, model, proxy = llm_config.configure_llm(out_dir / "completions")
     tool_log: list = []
-    # The patch reaches the tools and the prompt together, or neither: the `coverage`
-    # and `verify` tools only exist because the agent is shown the change.
-    patch = "" if blind else instance["patch"]
-    names = sandbox_tools.register(box, instance["repo"], tool_log, patch=patch,
-                                   coverage_tool=coverage_tool, gen_path=test_file)
+    # Two different questions, kept apart. `verify` and `coverage` need the harness to
+    # *hold* the patch, which it always does -- it applies it and reverts it itself. The
+    # `patch` feature is about whether the agent is *shown* it, which only the prompt
+    # cares about. Conflating them once made `--no-patch` silently remove the feedback
+    # loop as well as the input, so a drop in the result could not be attributed to
+    # either.
+    names = sandbox_tools.register(box, instance["repo"], tool_log,
+                                   patch=instance["patch"], features=features,
+                                   gen_path=test_file)
     agent = Agent(llm=llm, tools=[Tool(name=n) for n in names])
 
     transcript: list[dict] = []
@@ -97,9 +102,18 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
         transcript.append(row)
 
     # Assembled from prompts/, one file per instruction. See prompts/README.md.
-    task = prompt.build(repo=instance["repo"], test_file=test_file,
-                        repo_facts=E.repo_facts(box, test_file),
-                        problem=instance["problem_statement"], patch=patch, coverage_tool=coverage_tool,
+    # With the briefing withheld the destination is the agent's to establish, so the
+    # prompt names the file and not the directory. The harness keeps the filename: it is
+    # not repo knowledge, it keeps the name unique enough to find afterwards, and it
+    # stops the agent overwriting a test that was already there.
+    briefed = "repo-facts" in features
+    shown = test_file if briefed else Path(test_file).name
+    task = prompt.build(repo=instance["repo"], test_file=shown,
+                        repo_facts=E.repo_facts(box, test_file) if briefed else "",
+                        problem=instance["problem_statement"] if "issue" in features
+                        else "",
+                        patch=instance["patch"] if "patch" in features else "",
+                        features=features,
                         skip=set(filter(None, (os.getenv("F2P_PROMPT_SKIP") or "")
                                         .split(","))))
     field("model", f"{model}   {llm.api_mode} api"
@@ -154,7 +168,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
 
 
 
-def recheck(pr: dict) -> dict:
+def recheck(pr: dict, root: Path | None = None) -> dict:
     """Re-judge a test the agent already wrote, without running the agent again.
 
     A harness bug that only affects the verdict or the coverage measurement -- not the
@@ -164,19 +178,22 @@ def recheck(pr: dict) -> dict:
     Kept separate from `do_pr` so it cannot be mistaken for a run: nothing here calls an
     LLM, and the trajectory and token counts of the original are left untouched.
     """
-    d = OUT / pr["id"]
+    d = (root or OUT) / pr["id"]
     inst = load(pr["id"])
     saved = next((f for f in d.glob("test_f2p_*.py")), None)
     if saved is None:
         return {"id": pr["id"], "f2p": "BROKEN", "why": "no saved test to re-judge"}
     code = saved.read_text()
+    old = json.loads((d / "result.json").read_text())
     print(f"  rechecking {pr['id']}  ({saved.name}, {code.count(chr(10)) + 1} lines)")
 
     with E.Sandbox(pr["id"], quiet=True, extra_packages=("coverage",)) as box:
         box.strip_git()
-        verdict = V.verify(inst, box, generated_test=code, quiet=True)
+        # The path the run itself recorded, so a re-judge of a `--repo-search` result
+        # does not relocate the test and contradict the verdict it is re-checking.
+        verdict = V.verify(inst, box, generated_test=code, quiet=True,
+                           test_path=old.get("test_path") or "")
 
-    old = json.loads((d / "result.json").read_text())
     cov = verdict.changed_line_coverage or {}
     old.update({"f2p": verdict.f2p, "why": verdict.why, "f2p_nodes": verdict.f2p_nodes,
                 "targets": verdict.targets, "changed_line_coverage": cov,
@@ -189,20 +206,87 @@ def recheck(pr: dict) -> dict:
     return old
 
 
-def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
-          no_compare: bool = False, coverage_tool: bool = True,
-          out_root: Path | None = None, label: str = "") -> dict:
+def mutate_saved(pr: dict, n: int, root: Path | None = None) -> dict:
+    """Measure mutation on a test the agent already wrote, and nothing else.
+
+    Kept apart from `recheck`, which re-runs the verdict and the coverage measurement:
+    those numbers are already recorded for these instances and re-deriving them would
+    quietly replace committed results with a fresh roll of the same dice. This adds one
+    field. If the mutation step fails, the row it is added to is unchanged.
+
+    Only a `YES` is eligible. Asking what a test would notice about a wrong fix presumes
+    it notices the right one, and for a `NO` the question has no meaning.
+    """
+    # Same convention as `do_pr`: when given, this is the exact directory for this
+    # instance, not a parent to append the id to. The parent computes those when it
+    # fans out, and a child is handed one directly.
+    d = root if root is not None else OUT / pr["id"]
+    rj = d / "result.json"
+    if not rj.exists():
+        return {"id": pr["id"], "skipped": "no result to add to"}
+    r = json.loads(rj.read_text())
+    if r.get("f2p") != "YES":
+        return {"id": pr["id"], "skipped": f"f2p is {r.get('f2p')}, not YES"}
+    saved = next((f for f in d.glob("test_f2p_*.py")), None)
+    if saved is None:
+        return {"id": pr["id"], "skipped": "no saved test"}
+    code = saved.read_text()
+    inst = load(pr["id"])
+    print(f"\n{'-' * 74}")
+    print(f"  [{pr['tier']}] {pr['id']}".ljust(52) + inst["repo"].rjust(20))
+    print(f"  mutation only, on the saved test ({saved.name}, "
+          f"{code.count(chr(10)) + 1} lines)")
+
+    image = E.image_for(pr["id"])
+    with flow.recording(d, f"{pr['id']}  mutation on the saved test"), \
+            E.Sandbox(pr["id"], quiet=True, extra_packages=("coverage",)) as box:
+        box.strip_git()
+        test_file = r.get("test_path") or V.gen_test_path(pr["id"], box)
+        score = mutants.measure(inst, box, code, test_file, n, out_dir=d,
+                                quiet=False)
+    field("mutants", mutants.line(score.as_dict()))
+
+    new = score.as_dict()
+    old = r.get("mutation") or {}
+    if not new.get("measured") and old.get("measured"):
+        # A failed attempt does not erase a successful one. The sweep re-ran an instance
+        # that had already been measured 2/2, timed out, and wrote the timeout over the
+        # number -- losing a real measurement to a transient gateway problem.
+        print(f"    keeping the earlier measurement "
+              f"({old.get('agent', {}).get('killed')}/{old.get('total')}); "
+              f"this attempt: {new.get('why')}")
+        return {"id": pr["id"], "mutation": old,
+                "failed": f"kept the earlier measurement -- {new.get('why')}"}
+    r["mutation"] = new
+    rj.write_text(json.dumps(r, indent=2))
+    if not os.getenv("F2P_KEEP_IMAGES"):
+        try:
+            if image_cache.save(image, quiet=True):
+                image_cache.drop_image(image, quiet=True)
+        except Exception:
+            pass
+    return {"id": pr["id"], "mutation": score.as_dict()}
+
+
+def do_pr(pr: dict, max_iterations: int, dry_run: bool,
+          features: FeatureSet | None = None, no_compare: bool = False,
+          out_root: Path | None = None, label: str = "",
+          n_mutants: int = 0) -> dict:
+    features = features if features is not None else FeatureSet.of()
     inst = load(pr["id"])
     repo = inst["repo"]
     test_file = V.gen_test_path(pr["id"])      # provisional; re-resolved in the box
     print(f"\n{'─' * 74}")
     print(f"  [{pr['tier']}] {pr['id']}".ljust(52) + repo.rjust(20))
     print(f"  {pr['note'][:70]}")
+    if not features.default:
+        print(f"  config    {features.describe()}")
     print(f"{'─' * 74}")
 
     # `out_root`, when given, is the exact directory for this run -- not a parent to
-    # append the id to. Appending produced out_compare_coverage/<pr>/<label>/<pr>/ and,
-    # worse, left the "output" line pointing at out/ where nothing had been written.
+    # append the id to. Appending nested the id twice and, worse, left the "output" line
+    # pointing at out/ where nothing had been written.
+    mutation: dict | None = None
     d = out_root if out_root is not None else OUT / pr["id"]
     d.mkdir(parents=True, exist_ok=True)
     (d / "pr.json").write_text(json.dumps(
@@ -213,7 +297,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
     shutil.rmtree(d / "completions", ignore_errors=True)   # counts are per run
 
     if dry_run:
-        field("target", test_file)
+        field("target", test_file if "repo-facts" in features else
+              f"{Path(test_file).name}, in a directory the agent establishes")
         # No container in a dry run, and the runner is a property of the checkout.
         field("runner", "detected from the checkout when the container starts")
         return {"id": pr["id"], "tier": pr["tier"], "f2p": "SKIPPED"}
@@ -222,20 +307,35 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
     if not E.have_image(image):
         field("image", f"pulling {image.split('.')[-1]} (once, 1-5 GB)")
 
-    with flow.recording(d, f"{pr['id']}  ({repo})  arm=agent"), \
+    with flow.recording(d, f"{pr['id']}  ({repo})  config={features.slug()}"), \
             E.Sandbox(pr["id"], quiet=True,
                       # installed on the bridge, then the network is removed and
                       # the seal re-checked -- see Sandbox._install_then_seal
                       extra_packages=("coverage",)) as box:
         flow.record(flow.SETUP, "instance", f"{pr['note']}")
         box.strip_git()
+        # Before the agent, so the diff afterwards is exactly what the agent did.
+        box.snapshot_tree()
         test_file = V.gen_test_path(pr["id"], box)
         flow.record(flow.SETUP, "test path", test_file)
         field("sandbox", f"{image.split('.')[-1]}   network=none, git stripped")
-        field("target", test_file)
+        # Under --repo-search this is only what the harness *would* have chosen; the
+        # line the run is judged on is `chose`, printed once the agent has decided.
+        field("target", test_file if "repo-facts" in features else
+              f"{Path(test_file).name}, in a directory the agent establishes "
+              f"(we would have used {test_file})")
 
-        run = run_agent(inst, box, test_file, max_iterations, d, blind=blind,
-                        coverage_tool=coverage_tool)
+        run = run_agent(inst, box, test_file, max_iterations, d, features)
+        # Resolved before `audit`, which flags every write that is not the test file:
+        # left unresolved, the agent's own chosen path would be reported as a stray
+        # write on every run of this configuration.
+        default_path = test_file
+        if "repo-facts" not in features:
+            test_file = V.written_test_path(box, run["tool_log"], default_path)
+            flow.record(flow.AGENT, "test path chosen", test_file)
+            field("chose", f"{test_file}"
+                           + ("" if test_file == default_path
+                              else f"   (the harness would have used {default_path})"))
         code = box.read(test_file)
         flow.record(flow.AGENT, "test written" if code else "no test",
                     f"{test_file} ({code.count(chr(10)) + 1} lines)" if code
@@ -246,7 +346,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
                     f"git={checks['isolation']['git_present']} vcs={checks['vcs'][:40]}")
         flow.record(flow.AUDIT, "agent behaviour",
                     f"network_attempts={checks['network_attempts'] or 'none'}  "
-                    f"stray_writes={checks['files_written_outside_test'] or 'none'}")
+                    f"stray_writes={checks['files_written_outside_test'] or 'none'}  "
+                    f"tree_changed={checks['tree_changed'] or 'nothing but the test'}")
 
         starved = budget_exhausted(d) if run["actions"] == 0 else None
         if code is None and starved:
@@ -272,7 +373,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
         else:
             (d / Path(test_file).name).write_text(code)
             field("test", f"{code.count(chr(10)) + 1} lines written")
-            verdict = V.verify(inst, box, generated_test=code, quiet=True)
+            verdict = V.verify(inst, box, generated_test=code, quiet=True,
+                               test_path=test_file)
             def tally(o):
                 c = {}
                 for st in o.values():
@@ -289,6 +391,16 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
                                      if cov["missed"] else ""))
             elif cov:
                 field("coverage", f"not measured: {cov['reason']}")
+            # Inside the sandbox, because every mutant has to be applied to the code and
+            # the test run against it -- the container is gone a few lines below. After
+            # the verdict, because a test that does not flip cannot be asked what it
+            # would notice about a wrong fix. And it reads the developer's test, so it
+            # belongs on this side of the line with the judge, never before it.
+            if n_mutants and verdict.f2p == "YES":
+                mut = mutants.measure(inst, box, code, test_file, n_mutants,
+                                      out_dir=d, quiet=True)
+                mutation = mut.as_dict()
+                field("mutants", mutants.line(mutation))
 
     iso = checks["isolation"]
     field("audit", f"network {checks['network_attempts'] or 'none'}, "
@@ -305,8 +417,13 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
               # and was wrong the moment anything touched the file afterwards -- a
               # re-judge moved two instances a day forward in the run table.
               "ran_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-              "arm": label or ("agent-blind" if blind else "agent"),
-              "coverage_tool": coverage_tool,
+              "arm": label or features.slug(),
+              "features": features.as_dict(),
+              # Both paths, always. A test in a directory the runner never collects from
+              # fails for a reason that has nothing to do with how good the test is, and
+              # without the pair on record the two are indistinguishable in the table.
+              "test_path": test_file,
+              "test_path_default": default_path,
               "usage": usage,
               "model": run["model"], "agent_status": run["status"],
               "agent_error": flow.scrub(run.get("error") or "") or None,
@@ -315,7 +432,14 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
               "task": run["task"],
               "actions": run["actions"],
               "files_edited_outside_test": checks["files_written_outside_test"],
+              # From the tree, not the tool log: this is the one that would catch an
+              # agent editing the library with the shell, which is what would make the
+              # "before the fix" run a fact about something other than the pull request.
+              "tree_changed": checks["tree_changed"],
               "audit": checks}
+    if mutation is not None:
+        # Beside the verdict, like coverage and the judge. Nothing here changes F2P.
+        result["mutation"] = mutation
     # The concept check goes here and nowhere earlier: it is the only step that reads
     # the developer's test, so it must not run until the F2P verdict is settled. Its
     # answer is recorded beside the verdict, never folded into it.
@@ -326,6 +450,20 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
         except Exception as exc:
             result["concept"] = {"verdict": "error", "reasoning": str(exc)[:200]}
             field("concept", f"comparison failed: {str(exc)[:70]}")
+
+    # The archive is the durable copy; Docker's is the working one. Now that the run is
+    # over and the container is gone, holding both spends the space twice -- sixteen
+    # images are ~36 GB in Docker against ~15 GB compressed on the host. Dropped only
+    # once the archive has been read back and verified, and never while another worker
+    # has claimed it. `F2P_KEEP_IMAGES=1` keeps it, which is what you want while
+    # iterating on one instance: a load is minutes, and paying it every attempt is
+    # worse than the disk.
+    if not os.getenv("F2P_KEEP_IMAGES"):
+        try:
+            if image_cache.save(image, quiet=True):
+                image_cache.drop_image(image, quiet=True)
+        except Exception as exc:          # never fail a finished run over housekeeping
+            field("images", f"could not archive: {type(exc).__name__}: {exc}")
 
     (d / "result.json").write_text(json.dumps(result, indent=2))
     traj = trajectory.write(d)
@@ -343,7 +481,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool, blind: bool = False,
 
     return {"id": pr["id"], "tier": pr["tier"], "f2p": verdict.f2p,
             "why": verdict.why, "actions": run["actions"],
-            "coverage_tool": coverage_tool, "label": label,
+            "config": features.slug(), "label": label,
             "changed_line_coverage": verdict.changed_line_coverage,
             "usage": usage}
 
@@ -360,14 +498,19 @@ def main() -> int:
                         "(sympy) to 65 (scikit-learn), so the headroom is deliberate")
     p.add_argument("--dry-run", action="store_true",
                    help="show the target path and runner command, make no LLM call")
-    p.add_argument("--blind", action="store_true",
-                   help="withhold the PR diff. Harder task, comparable to TDD-Bench "
-                        "baselines; drops the coverage and verify tools with it")
     p.add_argument("--no-compare", action="store_true",
                    help="skip the concept judgement against the developer's test")
-    p.add_argument("--compare-coverage", action="store_true",
-                   help="run each PR twice, with and without the coverage tool, into "
-                        "out_compare_coverage/<pr>/{with,without}_coverage_tool/")
+    p.add_argument("--mutants", type=int, default=0,
+                   metavar="N", nargs="?", const=mutants.DEFAULT_MUTANTS,
+                   help=f"after the verdict, mutate the lines the patch changed with "
+                        f"mutmut and count how many mutants each test kills -- the "
+                        f"generated one and the developer's, on the same set. Bare "
+                        f"--mutants uses {mutants.DEFAULT_MUTANTS}. Deterministic and "
+                        f"offline; the diffs land in out/<id>/mutations/. 0 is off")
+    p.add_argument("--mutate-saved", action="store_true",
+                   help="measure mutation on the tests already in out/, without "
+                        "running the agent again. Adds the `mutation` field and "
+                        "changes nothing else. Needs --mutants N")
     p.add_argument("--recheck", action="store_true",
                    help="re-judge the saved tests under the current harness, without "
                         "calling the model again")
@@ -378,42 +521,104 @@ def main() -> int:
                         "retrying; YES and NO are findings and are left alone")
     p.add_argument("--parallel", type=int,
                    default=int(os.getenv("F2P_MAX_PARALLEL") or 5),
-                   help="how many PRs to run at once (F2P_MAX_PARALLEL, default 5). "
-                        "Doubled in --compare-coverage, since each PR is two runs")
-    # set by the parent when it forks a child; not for people
-    p.add_argument("--no-coverage-tool", action="store_true", help=argparse.SUPPRESS)
-    p.add_argument("--out-root", default=None, help=argparse.SUPPRESS)
-    p.add_argument("--label", default="", help=argparse.SUPPRESS)
+                   help="how many PRs to run at once (F2P_MAX_PARALLEL, default 5)")
+    p.add_argument("--out-root", default=None,
+                   help="write results here instead of out/. One directory per "
+                        "configuration is how a series of runs is kept separable")
+    p.add_argument("--label", default="",
+                   help="a name for this run, recorded in every result. Defaults to "
+                        "the configuration, e.g. no-coverage-tool")
+    add_arguments(p)
     args = p.parse_args()
 
+    features = FeatureSet.from_args(args)
+    # Resolved before the early-returning branches below, which all report on a series
+    # and so all need to know which one.
+    out_root = Path(args.out_root) if args.out_root else None
     prs = pick(args.which)
 
     if args.retry_broken:
-        root = Path(args.out_root) if args.out_root else OUT
-        prs = [pr for pr in prs if _needs_retry(root / pr["id"])]
+        prs = [pr for pr in prs if _needs_retry((out_root or OUT) / pr["id"])]
         if not prs:
             print("  nothing to retry: every selected instance has a YES or NO result")
             return 0
         print(f"  retrying {len(prs)} instance(s) with no usable result")
 
-    # Refused rather than run: with --blind there is no diff, so the coverage tool is
-    # never registered in either arm and the prompts come out byte-identical. The
-    # comparison would be a thing against itself, and the noise between two runs of the
-    # same configuration would read as an effect of the tool.
-    if args.recheck:
+    if args.mutate_saved:
+        if args.mutants <= 0:
+            raise SystemExit("  --mutate-saved needs --mutants N (how many per instance)")
+        child = bool(os.getenv(CHILD_ENV_FLAG))
+        # Filtered here, in the parent, and not left to the child to decline. A child
+        # that declines writes no `result.json`, and the parent's freshness check reads
+        # a file it did not write as "the child exited without producing one" -- which
+        # would have replaced a real NO verdict with a BROKEN row. The child is only
+        # ever given work it will do.
+        if not child:
+            skip, keep = [], []
+            for pr in prs:
+                d = (out_root or OUT) / pr["id"]
+                rj = d / "result.json"
+                why = ""
+                if not rj.exists():
+                    why = "no result to add to"
+                else:
+                    got = json.loads(rj.read_text()).get("f2p")
+                    if got != "YES":
+                        why = f"f2p is {got}, not YES"
+                    elif not next((f for f in d.glob("test_f2p_*.py")), None):
+                        why = "no saved test"
+                (skip if why else keep).append((pr, why))
+            for pr, why in skip:
+                print(f"  skipping {pr['id']}: {why}")
+            prs = [pr for pr, _ in keep]
+            if not prs:
+                print("  nothing eligible: mutation needs a YES with a saved test")
+                return 0
+            print(f"  measuring mutation on {len(prs)} saved test(s), "
+                  f"{args.mutants} mutant(s) each")
         E.reap_orphans(quiet=False)
-        rows = [recheck(pr) for pr in prs]
-        yes = sum(1 for r in rows if r.get("f2p") == "YES")
-        print(f"\n  {yes}/{len(rows)} still fail-to-pass after re-judging")
-        runs.main()
+        if child or len(prs) == 1 or args.parallel <= 1:
+            rows = [mutate_saved(pr, args.mutants,
+                                 out_root if child or len(prs) == 1
+                                 else (out_root or OUT) / pr["id"])
+                    for pr in prs]
+        else:
+            # A process each, for the same reason the agent gets one: `flow._current` is
+            # a module global, so two of these in one interpreter would write their step
+            # logs into each other's file.
+            jobs = []
+            for pr in prs:
+                out = (out_root or OUT) / pr["id"]
+                jobs.append((pr["id"], _child_argv(pr["id"], args, features, out, ""),
+                             out, ""))
+            # A child that dies here must not be allowed to replace the result it was
+            # only adding a field to.
+            rows = _run_children(jobs, args.parallel, may_replace_result=False)
+        done = [r for r in rows if (r.get("mutation") or {}).get("measured")]
+        counted = sum(r["mutation"]["total"] for r in done)
+        killed = sum(r["mutation"]["agent"]["killed"] for r in done)
+        dev = sum(r["mutation"]["developer"]["killed"] for r in done)
+        if counted:
+            print(f"\n  measured {len(done)}/{len(rows)} instance(s) over {counted} "
+                  f"mutant(s): the generated tests killed {killed} "
+                  f"({100.0 * killed / counted:.0f}%), the developers' killed {dev} "
+                  f"({100.0 * dev / counted:.0f}%)")
+        else:
+            print(f"\n  measured {len(done)}/{len(rows)} instance(s)")
+        for r in rows:
+            note = r.get("skipped") or r.get("failed")
+            if note:
+                print(f"    {r.get('id') or r.get('instance_id', '?')}: {note[:150]}")
+        runs.main(out_root or OUT)
         return 0
 
-    if args.compare_coverage and args.blind:
-        raise SystemExit(
-            "--compare-coverage and --blind cannot be combined. The coverage tool needs "
-            "the diff, so under --blind neither arm has it and both arms are identical. "
-            "Run --compare-coverage without --blind to measure the tool, or --blind on "
-            "its own to measure the harder task.")
+    if args.recheck:
+        E.reap_orphans(quiet=False)
+        rows = [recheck(pr, out_root) for pr in prs]
+        yes = sum(1 for r in rows if r.get("f2p") == "YES")
+        print(f"\n  {yes}/{len(rows)} still fail-to-pass after re-judging")
+        runs.main(out_root or OUT)
+        return 0
 
     if not os.getenv(CHILD_ENV_FLAG):
         if not args.dry_run:
@@ -421,23 +626,19 @@ def main() -> int:
             if refusal:
                 raise SystemExit(f"  {refusal}")
         E.reap_orphans(quiet=False)      # a killed run leaves its container running
-    out_root = Path(args.out_root) if args.out_root else None
     child = bool(os.getenv(CHILD_ENV_FLAG))
-
-    if args.compare_coverage and not child:
-        return arms.compare_coverage(prs, args)
 
     # One PR, or a child doing exactly one: run it here so its output streams.
     if child or len(prs) == 1 or args.dry_run or args.parallel <= 1:
-        results = [do_pr(pr, args.max_iterations, args.dry_run, args.blind,
-                         args.no_compare, not args.no_coverage_tool, out_root,
-                         args.label) for pr in prs]
+        results = [do_pr(pr, args.max_iterations, args.dry_run, features,
+                         args.no_compare, out_root, args.label, args.mutants)
+                   for pr in prs]
     else:
         jobs = []
         for pr in prs:
             out = (out_root or OUT) / pr["id"]
             jobs.append((pr["id"],
-                         _child_argv(pr["id"], args, not args.no_coverage_tool, out, ""),
+                         _child_argv(pr["id"], args, features, out, ""),
                          out, ""))
         results = _run_children(jobs, args.parallel)
 
@@ -454,11 +655,15 @@ def main() -> int:
         (out_root or OUT).mkdir(parents=True, exist_ok=True)
         ((out_root or OUT) / "agent_summary.json").write_text(json.dumps(results, indent=2))
 
-    # out/RUNS.md is the index a reader opens first, so it is rewritten from the results
-    # on disk at the end of every run rather than maintained by hand. A child skips it:
-    # it owns one directory, and twenty-six children racing on one file would interleave.
-    if not child and not args.dry_run and out_root is None:
-        runs.main()
+    # RUNS.md is the index a reader opens first, so it is rewritten from the results on
+    # disk at the end of every run rather than maintained by hand. Two exclusions. A
+    # child skips it: it owns one directory, and twenty-six children racing on one file
+    # would interleave. And a single instance skips it, because there `--out-root` names
+    # that instance's own directory rather than a series -- the table would have one row
+    # and sit inside it.
+    series = len(prs) > 1
+    if not child and not args.dry_run and series:
+        runs.main(out_root or OUT)
         # The generated blocks in the design document are read out of the code, so a
         # renamed module or a new flag updates them here rather than going stale until
         # someone notices.

@@ -1,4 +1,5 @@
 ---
+needs: verify-tool
 name: check-flips
 job: Step two. Dropped with the diff, since `verify` needs the patch to have a second
   state to run against.

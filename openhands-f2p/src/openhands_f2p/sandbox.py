@@ -26,6 +26,21 @@ from openhands_f2p.images import (PLATFORM, _run, claim_image, image_for, pull_i
 
 REPO_DIR = "/testbed"
 
+# A git repository for the *harness*, deliberately not inside the checkout.
+#
+# The tree needs to be diffable -- "the agent created one file and edited nothing else"
+# should be a verified fact, not an assumption -- and git does that better than any
+# hash manifest. But putting `.git` back under /testbed would change what we measure:
+# `setuptools_scm` and friends compute a package version from git, and every verdict on
+# record was measured with no repository there. A repo with one untagged commit could
+# produce a different version string and break tests for reasons that have nothing to do
+# with the agent.
+#
+# `--git-dir` outside the tree gives the diff without the tree ever knowing. The agent
+# still finds no `.git` in the checkout, and the single commit holds nothing but the base
+# state, so there is no history to leak either.
+TREE_GIT = "/tmp/f2p_tree.git"
+
 
 # ------------------------------------------------------------------- the sandbox
 @dataclass
@@ -221,6 +236,36 @@ class Sandbox:
         """
         flow.record(flow.SETUP, "strip git", "rm -rf /testbed/.git")
         self.exec(f"rm -rf {REPO_DIR}/.git")
+
+    # -- what the agent changed, verified rather than assumed ------------------
+    def _tree_git(self) -> str:
+        return f"git --git-dir={TREE_GIT} --work-tree={REPO_DIR}"
+
+    def snapshot_tree(self) -> bool:
+        """Commit the tree as it stands, before the agent is let in.
+
+        Respects the project's own `.gitignore`, which is what makes this cheap: the
+        build artefacts and `.pyc` files in these images are numerous, uninteresting,
+        and already ignored by the repositories themselves.
+        """
+        g = self._tree_git()
+        r = self.exec(
+            f"{g} init -q && {g} add -A && "
+            f"{g} -c user.email=f2p@local -c user.name=f2p "
+            f"commit -q -m base --no-verify", timeout=900)
+        ok = r.returncode == 0
+        flow.record(flow.SETUP, "snapshot tree",
+                    f"{TREE_GIT} holds the base state" if ok
+                    else f"could not snapshot: {r.output.strip()[:160]}")
+        return ok
+
+    def tree_changes(self) -> list[str]:
+        """Paths that differ from the snapshot. Empty when nothing was touched."""
+        r = self.exec(f"{self._tree_git()} status --porcelain", timeout=300)
+        if r.returncode != 0:
+            return []
+        return [line[3:].strip().strip('"') for line in r.output.splitlines()
+                if len(line) > 3]
 
     def audit_isolation(self) -> dict:
         """Evidence, gathered from inside, that the box is what we say it is."""

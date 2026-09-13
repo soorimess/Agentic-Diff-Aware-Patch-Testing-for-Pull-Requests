@@ -63,7 +63,8 @@ def gateway_refusal() -> str | None:
 def configure_llm(completions_dir: Path | None = None,
                   usage_id: str = "f2p-agent",
                   model: str | None = None,
-                  timeout: int | None = None):
+                  timeout: int | None = None,
+                  num_retries: int | None = None):
     """Build the LLM without putting the proxy into the environment.
 
     litellm is given an explicit httpx client instead, so HTTP_PROXY and friends stay
@@ -136,7 +137,13 @@ def configure_llm(completions_dir: Path | None = None,
                # instances into BROKEN, each having written nothing, and each of them
                # succeeded on its own later. Waiting is cheap here and a lost run is
                # not, so the ceiling is raised rather than the concurrency lowered.
-               num_retries=int(os.getenv("LLM_NUM_RETRIES") or 10),
+               # Ten by default, because the agent's own calls are the run and a
+               # rate-limited gateway is worth waiting out. A measurement taken after
+               # the verdict is not the run, and ten retries at up to two minutes each
+               # would hold a finished instance open for twenty -- so the callers that
+               # only want a number pass a smaller figure.
+               num_retries=(num_retries if num_retries is not None
+                            else int(os.getenv("LLM_NUM_RETRIES") or 10)),
                retry_max_wait=int(os.getenv("LLM_RETRY_MAX_WAIT") or 120),
                **log_kwargs, **extra), model, proxy
 

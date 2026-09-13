@@ -14,10 +14,15 @@ job: The deliverable, stated as an engineering task rather than as our scoring f
   doing that well. They remain how we score; they are no longer what we ask for.
 ---
 A pull request changes how this library behaves. Your job is to write the regression test
-that pins that behaviour down: one test at `{test_file}` that would have caught this bug
+that pins that behaviour down: one test in `{test_file}` that would have caught this bug
 before it was fixed, and that will catch it again if anyone reintroduces it.
 
+{?patch}
 Work out what the code does *now*, what it will do *after* the change, and assert the
-difference. That difference is the whole subject of the test -- not the bug report's
-wording, not the surrounding function, and not some other property that happens to be
-broken at the same time.
+difference. That difference is the whole subject of the test -- not the surrounding
+function, and not some other property that happens to be broken at the same time.
+{/patch}
+{?issue}
+The report itself is not the subject. It describes a symptom somebody noticed; what you
+assert has to be the behaviour underneath it, not the wording of the complaint.
+{/issue}

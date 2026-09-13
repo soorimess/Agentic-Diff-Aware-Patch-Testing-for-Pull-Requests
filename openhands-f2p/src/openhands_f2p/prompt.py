@@ -2,23 +2,62 @@
 
 One file per instruction, joined in filename order. The point is attribution: when a
 result moves, you can say which instruction moved it, and a piece can be dropped for one
-arm while kept for another without touching Python.
+configuration while kept for another without touching Python.
 
 Each file carries a `---` header naming it and stating its job. The header is stripped
 before anything is sent -- it is for us, not the model.
 
     from openhands_f2p import prompt
-    text = prompt.build(repo=..., test_file=..., problem=...)
+    text = prompt.build(repo=..., test_file=..., problem=..., features=...)
     prompt.explain()        # what each piece is for, without building anything
+
+Configuration reaches the text two ways, because dropping whole instructions is not
+enough on its own:
+
+* **`needs:` in the header** drops the piece. `35-change.md` *is* the diff, so without
+  the `patch` feature there is nothing left of it to include. A name can be negated:
+  `needs: !repo-facts` keeps the piece only while that feature is *off*, which is how a
+  withheld component gets a substitute instruction. Without it, withholding the briefing
+  on how a project tests would leave a hole where it used to be, and the run would
+  measure a missing instruction rather than a missing input.
+* **`{?feature} ... {/feature}`** in the body drops a sentence or a paragraph. Most
+  pieces are not all-or-nothing: `20-goal.md` still has a job to do when the diff is
+  withheld, but the clause telling the agent to work out "what it will do after the
+  change" describes something it can no longer see.
+
+Both are checked. An unknown feature name in either place raises, and the finished
+prompt is scanned for the names of tools that were not registered -- so a piece cannot
+quietly send the agent after a tool that does not exist. That last check is the one that
+matters: the failure it prevents is silent, and the agent's own transcript is where you
+would find out, several runs later.
 """
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from openhands_f2p.features import BY_NAME, FeatureSet
 
 PROMPTS = Path(__file__).resolve().parent / "prompts"
 HEADER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
+# {?patch} ... {/patch}  -- kept only while that feature is on; {?!patch} for the
+# inverse. Non-greedy and name-matched, so two blocks in one file cannot swallow each
+# other, and the backreference makes a mismatched closing tag simply not match.
+BLOCK = re.compile(r"[ \t]*\{\?(!?[a-z][a-z0-9-]*)\}\n?(.*?)\n?[ \t]*\{/\1\}\n?",
+                   re.S)
+# A tool the prompt refers to. The pieces always backtick tool names, which is what
+# makes this precise: `coverage` is a tool, "changed-line coverage" is prose.
+TOOL_REF = re.compile(r"`([a-z_]+)`")
+
+
+def holds(name: str, features: FeatureSet) -> bool:
+    """Is the condition `name` satisfied? `f` means f is on, `!f` means f is off."""
+    return name[1:] not in features if name.startswith("!") else name in features
+
+
+def _label(name: str) -> str:
+    return f"no {name[1:]}" if name.startswith("!") else name
 
 
 @dataclass
@@ -27,6 +66,10 @@ class Piece:
     name: str
     job: str
     body: str
+    needs: tuple[str, ...] = ()
+    blocks: tuple[str, ...] = field(default_factory=tuple)
+    """Features this piece gates a paragraph on -- reported so `explain` can show a
+    piece that survives in a reduced form rather than only which ones vanish."""
 
     @property
     def order(self) -> str:
@@ -39,7 +82,7 @@ def _parse(path: Path) -> Piece:
     if not m:
         raise ValueError(f"{path.name} has no `---` header naming it and its job")
     head, body = m.group(1), raw[m.end():].strip()
-    fields = {}
+    fields: dict[str, str] = {}
     key = None
     for line in head.splitlines():
         if ":" in line and not line.startswith(" "):
@@ -47,11 +90,21 @@ def _parse(path: Path) -> Piece:
             fields[key.strip()] = val.strip()
         elif key:                                   # a wrapped continuation line
             fields[key] += " " + line.strip()
-    return Piece(path, fields.get("name", path.stem), fields.get("job", ""), body)
+
+    needs = tuple(n.strip() for n in fields.get("needs", "").split(",") if n.strip())
+    blocks = tuple(dict.fromkeys(m.group(1) for m in BLOCK.finditer(body)))
+    for name in (*needs, *blocks):
+        if name.lstrip("!") not in BY_NAME:
+            where = "needs:" if name in needs else "a {?...} block"
+            raise ValueError(
+                f"{path.name}: {where} names {name!r}, which is not a feature. "
+                f"Known: {', '.join(BY_NAME)}")
+    return Piece(path, fields.get("name", path.stem), fields.get("job", ""),
+                 body, needs, blocks)
 
 
 def pieces() -> list[Piece]:
-    """Every piece that applies to this repository, in order.
+    """Every piece, in order.
 
     Every piece applies to every repository. There used to be `60-runner-<kind>.md`
     files carrying per-project advice -- where django puts its tests, that sympy has no
@@ -61,38 +114,53 @@ def pieces() -> list[Piece]:
     knowledge now comes from `15-repo.md`, which is read off the checkout at run
     time by `repo_facts` with no model involved.
     """
-    out = []
-    for path in sorted(PROMPTS.glob("*.md")):
-        if path.name == "README.md":
-            continue
-        out.append(_parse(path))
-    return out
+    return [_parse(path) for path in sorted(PROMPTS.glob("*.md"))
+            if path.name != "README.md"]
 
 
-def build(*, repo: str, test_file: str, problem: str, repo_facts: str = "",
-          patch: str = "", coverage_tool: bool = True,
-          skip: set[str] | None = None) -> str:
-    """The finished prompt. `skip` drops pieces by name, for arm comparisons.
+def _resolve_blocks(body: str, features: FeatureSet) -> str:
+    """Keep the inside of `{?f}` blocks whose feature is on, drop the rest."""
+    def one(m: re.Match) -> str:
+        return f"{m.group(2)}\n" if holds(m.group(1), features) else ""
+    return BLOCK.sub(one, body)
 
-    An empty `patch` drops the `change` piece automatically. That is the blind arm, and
-    it is a real difference in the task rather than a formatting accident -- so it is
-    made explicit here rather than left to whoever calls this.
-    """
+
+def _check_no_absent_tools(text: str, features: FeatureSet) -> None:
+    absent = set(features.absent_tools)
+    if not absent:
+        return
+    named = sorted(absent & set(TOOL_REF.findall(text)))
+    if named:
+        raise AssertionError(
+            f"the assembled prompt refers to {', '.join('`' + n + '`' for n in named)}, "
+            f"which will not be registered for this configuration "
+            f"({features.describe()}). Gate that text with a `needs:` header or a "
+            f"{{?feature}} block in the piece that mentions it.")
+
+
+def build(*, repo: str, test_file: str, problem: str = "", repo_facts: str = "",
+          patch: str = "", features: FeatureSet | None = None,
+          skip: object = None) -> str:
+    """The finished prompt. `skip` drops pieces by name, for ablations by hand."""
+    features = features if features is not None else FeatureSet.of()
     skip = set(skip or ())
-    if not patch:
-        # Everything that only makes sense with the diff goes together: the diff itself,
-        # the tools that read it, and the instruction to use them.
-        skip |= {"change", "tools-verify", "tools-coverage",
-                 "check-flips", "check-reaches"}
-    elif not coverage_tool:
-        # The coverage arm of --compare-coverage. The tool is not registered, so
-        # describing it would send the agent after something that never answers.
-        skip |= {"tools-coverage", "check-reaches"}
-    used = [p for p in pieces() if p.name not in skip]
-    text = "\n\n".join(p.body for p in used)
-    build.last_pieces = [p.name for p in used]
-    return text.format(repo=repo, test_file=test_file, repo_facts=repo_facts,
-                       problem=problem.strip()[:6000], patch=patch.strip()[:8000])
+
+    used, text_parts = [], []
+    for p in pieces():
+        if p.name in skip or any(not holds(n, features) for n in p.needs):
+            continue
+        body = _resolve_blocks(p.body, features).strip()
+        if not body:                        # every paragraph of it was gated away
+            continue
+        used.append(p.name)
+        text_parts.append(body)
+
+    text = "\n\n".join(text_parts).format(
+        repo=repo, test_file=test_file, repo_facts=repo_facts,
+        problem=problem.strip()[:6000], patch=patch.strip()[:8000])
+    _check_no_absent_tools(text, features)
+    build.last_pieces = used
+    return text
 
 
 # The names of the pieces the last `build` call actually included. Reported rather than
@@ -102,20 +170,40 @@ def build(*, repo: str, test_file: str, problem: str, repo_facts: str = "",
 build.last_pieces: list[str] = []
 
 
-def explain() -> str:
-    lines = ["The prompt is built from these pieces, in this order:\n"]
+def explain(features: FeatureSet | None = None) -> str:
+    features = features if features is not None else FeatureSet.of()
+    lines = [f"Prompt pieces, in order. Configuration: {features.describe()}\n"]
     for p in pieces():
-        lines.append(f"  {p.path.name:22s} {p.name}")
+        dropped = [n for n in p.needs if not holds(n, features)]
+        gated = [n for n in p.blocks if not holds(n, features)]
+        if dropped:
+            mark = f"DROPPED (needs {', '.join(_label(n) for n in dropped)})"
+        elif gated:
+            mark = f"reduced (no {', '.join(_label(n) for n in gated)})"
+        else:
+            mark = ""
+        lines.append(f"  {p.path.name:22s} {p.name:14s} {mark}")
         lines.append(f"  {'':22s} {p.job}\n")
     return "\n".join(lines)
 
 
 if __name__ == "__main__":
     import sys
+    from openhands_f2p.features import FEATURES
+    alias = {a: f.name for f in FEATURES for a in f.aliases}
+    off = [alias.get(a) or a[len("--no-"):] for a in sys.argv[1:]
+           if a.startswith("--no-") or a in alias]
+    fs = FeatureSet.of(off)
     if "--explain" in sys.argv:
-        print(explain())
+        print(explain(fs))
     else:
-        print(build(repo="psf/requests", test_file="tests/test_f2p.py",
+        # The bare filename when the briefing is withheld, because that is what
+        # `run_agent` passes then -- the directory is the agent's to establish, and a
+        # preview showing a path would contradict the piece that says so.
+        print(build(repo="psf/requests",
+                    test_file="tests/test_f2p.py" if "repo-facts" in fs
+                              else "test_f2p.py",
                     problem="<the issue text goes here>",
                     patch="<the pull request diff goes here>",
-                    ))
+                    repo_facts="<what repo_facts read off the checkout>",
+                    features=fs))
