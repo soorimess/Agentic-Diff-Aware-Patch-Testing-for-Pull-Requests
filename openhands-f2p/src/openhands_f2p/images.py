@@ -47,6 +47,24 @@ def _run(cmd: list[str], stdin: str | None = None, timeout: int = 1800):
             text(exc.stderr) + f"\ntimed out after {timeout}s")
 
 
+def daemon_refusal() -> str | None:
+    """Why Docker cannot be used, or None if it can.
+
+    Checked once at startup for the same reason the gateway is. Without it the run gets
+    all the way to fanning out children, and each one discovers separately that there is
+    no daemon -- nine instances wrote nine BROKEN results and nine child.log files, at
+    zero actions each, before anything said the words "docker daemon". A machine that has
+    just rebooted is the ordinary way to arrive here.
+    """
+    r = _run(["docker", "info", "--format", "{{.ServerVersion}}"], timeout=60)
+    if r.returncode == 0:
+        return None
+    detail = (r.stderr or r.stdout or "").strip().splitlines()
+    return ("docker is not answering, so no instance can run.\n"
+            f"  {detail[0] if detail else 'no detail'}\n"
+            "  Start Docker Desktop (`open -a Docker`) and run this again.")
+
+
 def have_image(image: str) -> bool:
     return _run(["docker", "image", "inspect", image], timeout=60).returncode == 0
 

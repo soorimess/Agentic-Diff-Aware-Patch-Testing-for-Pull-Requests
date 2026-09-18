@@ -307,6 +307,93 @@ class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
         )]
 
 
+# -------------------------------------------------------------------- mutation
+class MutationAction(Action):
+    target: str = Field(
+        description="The test file to try, same value you would pass to run_tests.")
+
+
+class MutationObservation(Observation):
+    pass
+
+
+class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
+    """Small wrong variants of the fix, and which ones the test fails to notice.
+
+    The agent's instrument. The harness measures a mutation score of its own after the
+    agent has finished, and -- because this tool exists -- it measures it on the half of
+    the mutant pool this one never shows. Tuning a test until the ten mutants in front of
+    you die is easy and proves nothing; the score is taken on ten others.
+
+    `test_patch` is never applied here. The developer's test is the held-out answer, and
+    a tool that installed it during the agent's turn would put it in a tree the agent can
+    read.
+    """
+
+    def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
+                 n: int = 5):
+        self.box = box
+        self.repo = repo
+        self.patch = patch
+        self.log = log if log is not None else []
+        self.n = n
+
+    def __call__(self, action: MutationAction,
+                 conversation=None) -> MutationObservation:
+        from openhands_f2p import mutants as M
+        r = M.probe(self.box, self.patch, action.target, self.n)
+        if not r.get("ok"):
+            self.log.append({"tool": "mutation", "target": action.target,
+                             "error": r.get("why", "")})
+            return MutationObservation.from_text(
+                f"could not run mutants: {r.get('why', 'unknown')}", is_error=True)
+        got = r.get("mutants") or []
+        if not got:
+            self.log.append({"tool": "mutation", "target": action.target,
+                             "total": 0, "why": r.get("why", "")})
+            return MutationObservation.from_text(
+                f"{r.get('why', 'no mutants available')}. Nothing to read into that -- "
+                f"it is a property of the change, not of your test.")
+        killed = [m for m in got if m.agent_kills]
+        lived = [m for m in got if not m.agent_kills]
+        self.log.append({"tool": "mutation", "target": action.target,
+                         "total": len(got), "killed": len(killed),
+                         "survived": [m.operator for m in lived]})
+        lines = [f"{len(killed)} of {len(got)} wrong variants of the fix were caught by "
+                 f"{action.target}."]
+        if lived:
+            lines += ["", "Not caught -- each of these is a broken version of the fix "
+                          "that your test still passes on:"]
+            lines += [f"  {m.file}:{m.line}    {m.operator}" for m in lived]
+            lines += ["",
+                      "For each one, ask whether a reviewer would call that behaviour "
+                      "part of what this pull request fixes. Where the answer is yes, "
+                      "the test is missing an assertion about it. Where the answer is "
+                      "no -- the variant breaks something the change was never about, "
+                      "or nothing observable at all -- leave it alone."]
+        else:
+            lines += ["", "Every variant tried was caught."]
+        return MutationObservation.from_text("\n".join(lines))
+
+
+class SandboxMutationTool(ToolDefinition[MutationAction, MutationObservation]):
+    @classmethod
+    def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
+               patch: str = "", log: list | None = None, n: int = 5, **params):
+        assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
+        return [cls(
+            name="mutation",
+            description=("Break the fix in small ways on purpose and see whether your "
+                         "test notices. Reports each variant your test still passes on, "
+                         "which is a behaviour the change makes and your test does not "
+                         "check."),
+            action_type=MutationAction,
+            observation_type=MutationObservation,
+            annotations=ToolAnnotations(readOnlyHint=True),
+            executor=MutationExecutor(box, repo, patch, log, n=n),
+        )]
+
+
 # --------------------------------------------------------------------- verify
 class VerifyAction(Action):
     target: str = Field(
@@ -332,11 +419,18 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
     """
 
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
-                 reveal_missed: bool = True):
+                 reveal_missed: bool = True, point_at_mutation: bool = False):
         self.box = box
         self.repo = repo
         self.patch = patch
         self.log = log if log is not None else []
+        # Whether `mutation` is registered alongside. Same reasoning as `reveal_missed`
+        # one field below, and found the same way: on the first five-instance test of the
+        # mutation tool the agent read "fail-to-pass" plus "it runs every line this pull
+        # request changed", concluded it was done, and finished -- never calling
+        # `mutation`, which is the only check nothing else answers. Verify is where the
+        # agent feels finished, so verify is where the remaining question belongs.
+        self.point_at_mutation = point_at_mutation
         # Whether `coverage` is registered alongside. Without it there is no tool to
         # send the agent to, and naming one it does not have is exactly the failure the
         # prompt scan catches -- one layer later, in a tool's own output, where no scan
@@ -397,7 +491,15 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         body = (f"\n\nbefore the change:\n{_clip(before.output, 1800)}"
                 f"\n\nafter the change:\n{_clip(after.output, 1200)}"
                 if base_out or head_out else "")
-        return VerifyObservation.from_text(head + missed + body, is_error=not flipped)
+        # Only when the test actually flips: asking what a test would notice about a
+        # wrong fix presumes it notices the right one, and saying this after a NOT
+        # fail-to-pass would send the agent at the wrong problem.
+        nxt = ("\n\nThat it flips, and what it reaches, are two of the three questions. "
+               "Whether it would notice a fix that is subtly *wrong* is the third, and "
+               "nothing above answers it -- `mutation` does."
+               if flipped and self.point_at_mutation else "")
+        return VerifyObservation.from_text(head + missed + nxt + body,
+                                           is_error=not flipped)
 
     def _reach(self, target: str) -> str:
         """How much of the change this test runs, and what to do if it is not all of it.
@@ -441,7 +543,7 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, reveal_missed: bool = True,
-               **params):
+               point_at_mutation: bool = False, **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="verify",
@@ -451,13 +553,14 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
             action_type=VerifyAction,
             observation_type=VerifyObservation,
             annotations=ToolAnnotations(readOnlyHint=False),
-            executor=VerifyExecutor(box, repo, patch, log, reveal_missed),
+            executor=VerifyExecutor(box, repo, patch, log, reveal_missed,
+                                    point_at_mutation),
         )]
 
 
 def register(box: Sandbox, repo: str, log: list, patch: str = "",
              features: FeatureSet | None = None, gen_path: str = "",
-             version: str = "") -> list[str]:
+             version: str = "", probe_mutants: int = 5) -> list[str]:
     """Register the agent's tools against one sandbox. Returns their names.
 
     Which tools exist is part of the run's configuration, and the registry in `features`
@@ -484,14 +587,25 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     # `--no-patch`. `coverage` does not -- it prints the source of the lines the test
     # missed, which is the diff.
     if "verify-tool" in features:
-        register_tool("verify", SandboxVerifyTool.create(
+        made["verify"] = SandboxVerifyTool.create(
             box=box, repo=repo, patch=patch, log=log,
-            reveal_missed=("coverage-tool" in features))[0])
+            reveal_missed=("coverage-tool" in features),
+            point_at_mutation=("mutation-tool" in features))[0]
+        register_tool("verify", made["verify"])
         names.append("verify")
         if "coverage-tool" in features:
-            register_tool("coverage", SandboxCoverageTool.create(
-                box=box, repo=repo, patch=patch, log=log)[0])
+            made["coverage"] = SandboxCoverageTool.create(
+                box=box, repo=repo, patch=patch, log=log)[0]
+            register_tool("coverage", made["coverage"])
             names.append("coverage")
+        # Beside `coverage` and for the same reason: it reports on the lines the change
+        # touched, so it needs the change. It also needs the test to already pass on the
+        # fixed code, which is what `verify` establishes.
+        if "mutation-tool" in features:
+            made["mutation"] = SandboxMutationTool.create(
+                box=box, repo=repo, patch=patch, log=log, n=probe_mutants)[0]
+            register_tool("mutation", made["mutation"])
+            names.append("mutation")
     _check_no_leak(made, box, features)
     return names
 

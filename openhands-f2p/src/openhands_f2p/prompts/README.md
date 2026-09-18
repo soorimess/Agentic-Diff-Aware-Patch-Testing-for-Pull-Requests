@@ -17,11 +17,13 @@ stripped before the prompt is sent** — the model sees only the body.
 | `40-tools.md` | the always-present tools, that `run_tests` builds the command, and to read neighbouring tests first |
 | `45-tools-verify.md` | `verify`, which needs the diff |
 | `46-tools-coverage.md` | `coverage`, and what it is for |
+| `47-tools-mutation.md` | `mutation`, and how to read a survivor without gaming it |
 | `50-rules.md` | the constraints, and why each exists |
 | `55-check-runs.md` | check one: does the file run |
 | `56-check-flips.md` | check two: does it fail before and pass after |
 | `57-check-reaches.md` | check three: does it reach the changed lines |
-| `58-finish.md` | when to stop |
+| `57b-check-notices.md` | check four: would it notice a wrong fix |
+| `58-finish.md` | when to stop, and to re-run the checks after changing the test |
 
 The `5x` checks are separate files because configurations have different tools. A step
 that named a tool the agent had not been given would send it after something that never

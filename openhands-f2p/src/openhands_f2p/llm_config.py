@@ -16,7 +16,7 @@ import httpx
 from pydantic import SecretStr
 
 
-def gateway_refusal() -> str | None:
+def gateway_refusal(model: str | None = None) -> str | None:
     """One cheap call to find out whether the gateway will serve us at all.
 
     Worth a second at startup. A LiteLLM key that has spent its budget answers 429 with
@@ -31,7 +31,10 @@ def gateway_refusal() -> str | None:
     base = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
     if not key or not base:
         return None                     # nothing to check against; let the run report it
-    model = (os.getenv("LLM_MODEL") or "gpt-5-mini").split("/")[-1]
+    from openhands_f2p import models as M
+    # The model the run will actually use, not a global: probing gpt-5-mini and
+    # then running gpt-5.5 answers a question nobody asked.
+    model = (model or M.DEFAULT_MODEL).split("/")[-1]
     # Three attempts, because one flaky proxy hiccup made the probe return "willing"
     # and the run went on to spend forty minutes pulling an image for a gateway that
     # was never going to answer.
@@ -64,18 +67,30 @@ def configure_llm(completions_dir: Path | None = None,
                   usage_id: str = "f2p-agent",
                   model: str | None = None,
                   timeout: int | None = None,
-                  num_retries: int | None = None):
+                  num_retries: int | None = None,
+                  provider: str | None = None):
     """Build the LLM without putting the proxy into the environment.
 
     litellm is given an explicit httpx client instead, so HTTP_PROXY and friends stay
     unset. That keeps the LLM's route to the model and the sandbox's lack of a route
     genuinely separate, rather than one leaking into the other.
     """
-    from openhands.sdk import LLM
+    from openhands_f2p.llm_adapters import llm_class
 
-    key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    # Resolve the model first: which credentials to look for is a property of the
+    # provider its profile names, not a fixed pair of variable names.
+    from openhands_f2p import models as M
+    # The command line, then the registry. `DEFAULT_MODEL` has already folded in
+    # FALLBACK_LLM_MODEL and the built-in, so there is nothing left to chain here --
+    # and no `LLM_MODEL` any more, which was a second spelling for the same choice.
+    model = model or M.DEFAULT_MODEL
+    profile = M.profile_for(model)
+    prov = M.BY_PROVIDER[provider or profile.provider]
+    key = prov.key()
     if not key:
-        raise SystemExit("no LLM_API_KEY (or OPENAI_API_KEY) -- see .env.example")
+        raise SystemExit(
+            f"no API key for provider {prov.name!r} -- set one of "
+            f"{', '.join(prov.key_env)}. See .env.example")
     proxy = os.getenv("LLM_PROXY")
     if proxy:
         import litellm
@@ -99,29 +114,33 @@ def configure_llm(completions_dir: Path | None = None,
         litellm.aclient_session = httpx.AsyncClient(proxy=proxy, timeout=clock,
                                                     limits=limits)
 
-    native = os.getenv("LLM_NATIVE_TOOL_CALLING")
-    extra = ({} if native is None
-             else {"native_tool_calling":
-                   native.lower() not in ("0", "false", "no", "off")})
-    # An explicit model wins, then the environment. The judge passes one so that the
-    # step which decides whether two tests mean the same thing is not done by the same
-    # model that wrote one of them -- and it is a single call per instance, so a larger
-    # model costs almost nothing here.
-    model = model or os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5-mini"
-    # 'chat' rather than 'auto'. Auto resolves gpt-5-mini to the Responses API, which
-    # is a different litellm entry point -- and against this gateway it hung for the
-    # full 300-second timeout. The chat-completions path is the one measured working.
-    api_mode = os.getenv("LLM_API_MODE") or "chat"
+    want_native = profile.setting("native_tool_calling")
+    extra = {} if want_native is None else {"native_tool_calling": want_native}
+    # An explicit model wins, then the registry's default. The judge passes one so that
+    # the step which decides whether two tests mean the same thing is not done by the
+    # same model that wrote one of them -- and it is a single call per instance, so a
+    # larger model costs almost nothing here.
+    # Prefixed once, by the provider, so `--model gpt-5-mini` and
+    # `--model litellm_proxy/gpt-5-mini` mean the same thing.
+    model = profile.qualified(model)
+    # From the profile, which records why: `auto` resolved gpt-5-mini to the Responses
+    # API, a different litellm entry point, and against this gateway it hung for the
+    # full 300-second timeout. `FALLBACK_LLM_API_MODE` is consulted only if no profile
+    # names one.
+    api_mode = profile.setting("api_mode")
     # Raw prompt and response per call, on disk. Off by default in the SDK, and it is
     # the only place the *exact* bytes sent to the model can be read back -- our own
     # transcript records the parsed events, which is a summary of them.
     log_kwargs = ({"log_completions": True,
                    "log_completions_folder": str(completions_dir)}
                   if completions_dir else {})
+    # The class, not just the parameters: a gateway that puts the tool call in a choice
+    # other than the first needs a different reader, and no value can express that.
+    LLM = llm_class(profile.picks_first_choice)
     return LLM(usage_id=usage_id, model=model,
-               base_url=os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or None,
+               base_url=prov.base_url(),
                api_key=SecretStr(key), api_mode=api_mode,
-               max_output_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS") or 16000),
+               max_output_tokens=profile.setting("max_output_tokens"),
                # litellm's own timeout wins over the httpx client's, and it defaults to
                # 300s -- which a request carrying several test logs will exceed.
                # The agent needs a long timeout: its requests carry test logs and it
@@ -130,7 +149,7 @@ def configure_llm(completions_dir: Path | None = None,
                # fifteen minutes with nothing on screen to say why.
                # 600 rather than 900: the agent's requests carry test logs and need
                # room, but a wedged call should surface inside ten minutes, not fifteen.
-               timeout=timeout or int(os.getenv("LLM_TIMEOUT") or 600),
+               timeout=timeout or profile.setting("timeout"),
                # The SDK's defaults -- five attempts, backing off to a minute -- give up
                # after roughly three minutes of refusals. That is not enough against a
                # shared gateway: three agents running at once rate-limited four
@@ -143,8 +162,8 @@ def configure_llm(completions_dir: Path | None = None,
                # would hold a finished instance open for twenty -- so the callers that
                # only want a number pass a smaller figure.
                num_retries=(num_retries if num_retries is not None
-                            else int(os.getenv("LLM_NUM_RETRIES") or 10)),
-               retry_max_wait=int(os.getenv("LLM_RETRY_MAX_WAIT") or 120),
+                            else profile.setting("num_retries")),
+               retry_max_wait=profile.setting("retry_max_wait"),
                **log_kwargs, **extra), model, proxy
 
 

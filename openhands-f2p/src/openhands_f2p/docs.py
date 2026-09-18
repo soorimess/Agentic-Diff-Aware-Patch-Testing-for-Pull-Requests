@@ -50,27 +50,72 @@ def modules() -> str:
 
 
 def cli() -> str:
-    """The agent's flags, from the parser itself."""
-    src = (PKG / "agent.py").read_text()
-    rows = ["| flag | what it does |", "|---|---|"]
-    pattern = re.compile(
-        r'p\.add_argument\(\s*"(--[a-z-]+)".*?help=(?:\()?((?:\s*"[^"]*"\s*)+)\)?[,)]',
-        re.S)
-    for flag, helptext in pattern.findall(src):
-        text = " ".join(re.findall(r'"([^"]*)"', helptext)).strip()
-        if not text:
+    """Every flag the parser accepts, read off the parser.
+
+    Including the ones `features.py` and `models.py` contribute, which a scrape of
+    `agent.py` could never see. Grouped the way `--help` groups them, and the default is
+    shown where there is one worth knowing, because "what happens if I leave it out" is
+    the question a flag table is usually consulted for.
+    """
+    import argparse
+
+    from openhands_f2p.agent import build_parser
+
+    parser = build_parser()
+    # Which argparse group each action belongs to, so the table reads like `--help`.
+    group_of = {}
+    for g in parser._action_groups:
+        for a in g._group_actions:
+            group_of[id(a)] = g.title or ""
+    order, rows = [], {}
+    for a in parser._actions:
+        if isinstance(a, argparse._HelpAction):
             continue
-        rows.append(f"| `{flag}` | {text} |")
-    return "\n".join(rows)
+        title = group_of.get(id(a), "options")
+        title = {"positional arguments": "the instances to run",
+                 "options": "the run"}.get(title, title)
+        if title not in rows:
+            order.append(title)
+            rows[title] = []
+        flag = ", ".join(f"`{o}`" for o in a.option_strings) or f"`{a.dest}`"
+        help_text = " ".join((a.help or "").split())
+        tail = help_text.rstrip()
+        sep = "" if tail.endswith((".", "!", "?")) else "."
+        if a.choices:
+            help_text = tail + sep + " Choices: " + ", ".join(f"`{c}`" for c in a.choices) + "."
+            tail, sep = help_text, ""
+        shown = a.default
+        if shown not in (None, False) and "default" not in help_text.lower():
+            help_text = tail + sep + f" Default: `{shown}`."
+        rows[title].append(f"| {flag} | {help_text} |")
+    out = []
+    for title in order:
+        out.append(f"\n**{title}**\n")
+        out.append("| flag | what it does |")
+        out.append("|---|---|")
+        out.extend(rows[title])
+    return "\n".join(out).strip()
 
 
 def tools() -> str:
+    """Every tool `sandbox_tools.py` defines, discovered rather than listed.
+
+    This used to match against a hardcoded alternation of the five tools that existed
+    when it was written, so `mutation` was added and the generated block stayed at five
+    -- and `--check` passed, because the generator agreed with its own stale output. A
+    documentation generator with an allow-list of the things it may document is not
+    generating anything.
+
+    Which of these a given run registers depends on the feature set; `features.py` owns
+    that, and the configuration table below says which go with which.
+    """
     src = (PKG / "sandbox_tools.py").read_text()
-    names = re.findall(r'name\s*=\s*"(run|write_file|run_tests|verify|coverage)"', src)
     seen: list[str] = []
-    for n in names:
+    for n in re.findall(r'^\s+name="([a-z_]+)",$', src, re.M):
         if n not in seen:
             seen.append(n)
+    if not seen:                       # the declaration style moved; say so loudly
+        raise SystemExit("  docs.tools(): no tool names found in sandbox_tools.py")
     return "\n".join(f"- `{n}`" for n in seen)
 
 

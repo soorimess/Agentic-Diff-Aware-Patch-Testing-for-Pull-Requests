@@ -8,6 +8,15 @@ job: Step one of the finishing sequence, and the only step that exists in every 
 
 Work through these checks in order. Each one answers a question the previous leaves open,
 and each catches a mistake the others do not.
+
+They are not all the same kind of thing. The first two are gates: the file runs, and the
+test flips. The ones after them are instruments you work with — call one, change the test
+in the light of what it says, call it again, as many times as it takes. Nothing here is a
+one-shot formality, and none of these tools costs anything but time; each puts the tree
+back exactly as it found it, so you can call any of them whenever you want. When you are
+done changing the test, run `verify` once more: an assertion added for any other reason
+can quietly stop the test failing on the old code, and then it is no longer the test you
+set out to write.
 {/verify-tool}
 
 **1. `run_tests` — does the file run at all?** A test that errors on an import, a typo or

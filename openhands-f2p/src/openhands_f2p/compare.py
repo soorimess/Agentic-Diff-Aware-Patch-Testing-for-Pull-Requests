@@ -25,8 +25,6 @@ F2P but `different` is the interesting case, and so is one that is `same` but no
 """
 from __future__ import annotations
 
-import os
-
 import json
 import re
 from typing import Any
@@ -138,17 +136,18 @@ def _parse(text: str) -> dict[str, Any]:
 
 
 def compare(instance: dict[str, Any], generated: str,
-            quiet: bool = False) -> dict[str, Any]:
+            quiet: bool = False, model: str | None = None) -> dict[str, Any]:
     """Judge one generated test against the developer's. Never call before scoring."""
     from openhands.sdk.llm import Message, TextContent
+
+    from openhands_f2p import models as M
 
     # Deliberately a stronger model than the agent's. This call has to read two tests
     # and decide whether they check the same thing -- a judgement, not a search -- and
     # it happens once per instance rather than thirty times.
     llm, model, _ = llm_config.configure_llm(
         usage_id="f2p-compare",
-        model=os.getenv("LLM_JUDGE_MODEL") or "litellm_proxy/gpt-5.5",
-        timeout=int(os.getenv("LLM_JUDGE_TIMEOUT") or 180))
+        model=model or M.DEFAULT_JUDGE, timeout=M.DEFAULT_JUDGE_TIMEOUT)
     user = USER.format(
         problem=instance["problem_statement"].strip()[:3000],
         patch=instance["patch"][:3000],

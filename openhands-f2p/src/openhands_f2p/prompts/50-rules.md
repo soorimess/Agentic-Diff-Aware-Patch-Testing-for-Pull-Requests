@@ -4,6 +4,18 @@ job: The constraints. The first one is load-bearing for the measurement rather t
   the model -- an agent that edits the library can make any test pass, and then the
   "before the fix" run is not a fact about the pull request. It is enforced afterwards
   by hashing the tree, but stating it avoids wasting a run.
+
+  "Read the source before you write" used to be the whole of the last rule, and on a large
+  repository that has no stopping point. `sphinx-10614` followed it to the end of its
+  budget: 98 of 100 actions were `sed`, `grep` and `ls`, one was a write, one was a test
+  run, and the run was cut off holding a test that did not flip. Across four runs of that
+  same instance the outcome ranks exactly by how many times it revised -- w=4 v=2 c=2 gave
+  full coverage and 9 of 10 mutants, w=1 v=1 c=0 gave nothing -- and not at all by how much
+  it read, which ran 50, 66, 91, 98 with no relation to the result.
+
+  So the rule now says what the reading is *for* and hands the stopping point to the test.
+  It names no metric: preferring a draft you have run to a file you have skimmed is how the
+  work is done whether or not anyone is scoring it.
 ---
 Create only `{test_file}`. Do not modify, create or delete any other file.
 
@@ -11,7 +23,10 @@ In particular, do not change the library source to make your test pass. The test
 supposed to fail here — that is the entire point — and editing the code under test
 destroys the measurement.
 
-Read the source before you write.
+Read the source before you write -- enough to know what to assert, not enough to be
+certain of everything. Then get a test running, and let what it does correct the rest of
+your reading: a draft you have executed tells you more than another file you have skimmed,
+and it is cheap to change. Reading has no natural stopping point and running does.
 {?issue}
 The report describes a symptom; the cause may be several layers below it and may never be
 named in the report.

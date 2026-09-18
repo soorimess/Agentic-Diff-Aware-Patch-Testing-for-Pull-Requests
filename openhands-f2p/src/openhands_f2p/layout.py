@@ -15,7 +15,12 @@ from dotenv import load_dotenv
 
 # src/openhands_f2p/layout.py -> src/openhands_f2p -> src -> openhands-f2p -> the root
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-OUT = PROJECT_ROOT / "out"
+# `out/` is a container of run folders, not a run folder. One run per subdirectory:
+# `out/out_full_run/` is the twenty-six tuned-against instances, `out/out_compare_repo_search/`
+# is an arm comparison, and a run with no `--out-root` lands in `out/default/` rather than
+# scattering instance directories among them. A dozen sibling `out_*` folders at the project
+# root is what this replaced.
+OUT = PROJECT_ROOT / "out" / "default"
 CACHE = PROJECT_ROOT / "cache" if (PROJECT_ROOT / "cache").exists() \
     else PROJECT_ROOT / ".cache"
 

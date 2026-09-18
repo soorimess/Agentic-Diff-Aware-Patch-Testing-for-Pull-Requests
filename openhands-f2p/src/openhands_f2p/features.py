@@ -82,6 +82,13 @@ FEATURES: tuple[Feature, ...] = (
                              "changed-line coverage; the agent just cannot see it while "
                              "it works",
             needs=("patch", "verify-tool"), tools=("coverage",)),
+    Feature("mutation-tool", "withhold the `mutation` tool, which runs the agent's test "
+                             "against small wrong variants of the fix and reports which "
+                             "ones it fails to notice. The harness still measures a "
+                             "mutation score afterwards, on mutants the agent was never "
+                             "shown",
+            needs=("patch", "verify-tool"), tools=("mutation",),
+            aliases=("--no-mutation",)),
     Feature("repo-facts", "withhold the briefing on how this project tests: the target "
                           "convention, where a new test file has to live to be "
                           "collected, the neighbouring tests and the test "

@@ -12,6 +12,17 @@ job: The pull request's diff, framed as evidence to interpret rather than a targ
   work needs the same input. What stays hidden is `test_patch`, the developer's test --
   the assignment is explicit about that one and only that one.
 
+  The closing paragraph on choosing inputs was added after `seaborn-3187`. Its test
+  executed every changed line and still could not tell the patch from its absence: the
+  change disables an additive offset, and the values it used were nowhere near the range
+  where matplotlib would have applied one. Coverage said 100%, a mutant flipping that very
+  flag survived, and the judge independently reported the behaviour uncovered. Reaching a
+  line and discriminating on it are different properties, and nothing in the prompt had
+  asked for the second.
+
+  It names no metric, which is the test for whether it belongs here: an input that cannot
+  distinguish the two versions is a bad test whether or not anyone is scoring it.
+
   Dropped by `--no-patch`, which is the harder task and the one comparable to TDD-Bench baselines.
 ---
 ## What this pull request changes
@@ -30,3 +41,12 @@ removes, and work out what each one does for a caller: a condition that now hold
 that is now taken, a case that is now handled differently. Understanding the change means
 being able to say what it does everywhere it acts, not only where you first recognised
 it.
+
+Then choose inputs the difference is visible in. Many changes are silent for most values:
+a mode turned off does nothing until the input is one the mode would have acted on, a
+widened bound matters only just outside the old one, an extra case matters only in that
+case. Feed such a change ordinary data and both versions agree, and the test is
+indistinguishable from one that asserts nothing about it. So for each difference you
+found, say what the old code would have produced for the input you picked -- if the
+answer is "the same thing", that input does not test this change and you need a
+different one.

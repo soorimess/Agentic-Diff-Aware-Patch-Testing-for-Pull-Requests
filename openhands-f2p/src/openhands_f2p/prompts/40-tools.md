@@ -19,14 +19,13 @@ You have these tools:
   test file and nothing else. It builds the command itself, correctly for this project
   and this version of it.
 
-Before you write, read one to three of the tests already in that directory -- the
-briefing above names them. You are adding a file to somebody's project, and the people
+Before you write, read one to three of the tests already in that directory. You are
+adding a file to somebody's project, and the people
 who maintain it will read yours next to theirs, so a test that matches the handwriting
 around it is easier for them to keep. Read them with `run`: the imports they use, whether
 they are classes or plain functions, how they name things, what they set up and what they
 leave alone.
 
-Do not type a test command yourself. The runner named in the briefing is the one this
-checkout uses, and `run_tests` builds it correctly for this project and this version --
-the invocation differs between projects and between versions of the same project in ways
-that are easy to get subtly wrong.
+Do not type a test command yourself. `run_tests` builds the right one for this project
+and this version -- the invocation differs between projects, and between versions of the
+same project, in ways that are easy to get subtly wrong.

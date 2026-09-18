@@ -174,8 +174,8 @@ def _spread(candidates: list[tuple], limit: int) -> list[tuple]:
     return picked
 
 
-def generate(box: Sandbox, patch: str, limit: int) -> list[Mutant]:
-    """The mutants for one patch, read off the code as the patch leaves it.
+def _gather(box: Sandbox, patch: str) -> tuple[list[tuple], dict[str, str]]:
+    """Every candidate mutation on the changed lines, and the files they came from.
 
     The box must be at head: the lines the patch adds exist at no other moment, and they
     are exactly the lines worth mutating.
@@ -195,9 +195,12 @@ def generate(box: Sandbox, patch: str, limit: int) -> list[Mutant]:
             continue
         heads[path] = head
         candidates += _candidates(head, path, changed)
+    return candidates, heads
 
+
+def _build(picked: list[tuple], heads: dict[str, str]) -> list[Mutant]:
     out: list[Mutant] = []
-    for path, line, index, mutated in _spread(candidates, limit):
+    for path, line, index, mutated in picked:
         source = heads[path]
         rows_a, rows_b = source.splitlines(), mutated.splitlines()
         before = rows_a[line - 1].strip() if len(rows_a) >= line else ""
@@ -210,6 +213,120 @@ def generate(box: Sandbox, patch: str, limit: int) -> list[Mutant]:
                 source.splitlines(keepends=True), mutated.splitlines(keepends=True),
                 fromfile=f"a/{path}", tofile=f"b/{path}", n=2))))
     return out
+
+
+def _halve(candidates: list[tuple]) -> tuple[list[tuple], list[tuple]]:
+    """Two candidate sets, alternating *within* each (file, line) group.
+
+    Within, not across, and the distinction is the whole point. `_spread` round-robins
+    over groups, so consecutive entries in its output come from *different* lines --
+    taking every other one therefore splits by line, not by sample. On a two-line patch
+    that gives one half every mutant on line A and the other every mutant on line B.
+
+    That is not hypothetical. `requests-1142` split that way scored the developer's own
+    test at 0 of 5, because the held-out half was entirely on a line that test does not
+    exercise. A denominator built like that measures which line landed where.
+
+    Alternating inside each group instead puts mutants from every changed line in both
+    halves -- every line mutmut offers more than one of, at least; a line with a single
+    candidate can only land on one side, and rotation is what stops that side always
+    being the same one.
+
+    The side each group *starts* on rotates, and that is a second bug's worth of care.
+    While index 0 of every group went to the same half, and mutmut's order within one
+    literal is fixed -- `False -> None` before `False -> True` -- one half collected every
+    type-changing mutant and the other every value-changing one. Those are not the same
+    question. `seaborn-3187` showed the agent `set_useOffset(None)`, which raises a
+    TypeError deep in matplotlib and so dies against any test at all, and scored it on
+    `set_useOffset(True)`, which formats identically unless the data is in the range where
+    an offset would appear. The agent read a kill it had not earned and never learned that
+    its inputs could not tell the fix from its absence.
+
+    Rotating costs one counter and makes the halves samples of the same distribution of
+    operators, which is the only thing that makes a held-out number mean anything.
+    """
+    groups: dict[tuple, list] = {}
+    for c in candidates:
+        groups.setdefault((c[0], c[1]), []).append(c)
+    a, b = [], []
+    for off, key in enumerate(sorted(groups)):
+        for i, c in enumerate(groups[key]):
+            (a if (i + off) % 2 == 0 else b).append(c)
+    return a, b
+
+
+def generate(box: Sandbox, patch: str, limit: int) -> list[Mutant]:
+    """The mutants for one patch, read off the code as the patch leaves it."""
+    candidates, heads = _gather(box, patch)
+    return _build(_spread(candidates, limit), heads)
+
+
+def split_pool(box: Sandbox, patch: str, n: int) -> tuple[list[Mutant], list[Mutant]]:
+    """Two disjoint samples: one to show the agent, one to score it on.
+
+    Without this the feature eats its own metric. `generate` is deterministic, so the
+    agent's tool and the harness's measurement would be handed the *same* mutants; an
+    agent that tunes its test until those ten die would then be scored on those ten, and
+    the number would record compliance rather than whether the test generalises. It is
+    the oldest mistake in the book -- testing on the training set.
+
+    The split happens at the candidate level, inside each (file, line) group, for the
+    reason `_halve` gives: splitting the *spread* output would divide the pool by line
+    instead of sampling it.
+
+    Only used when the agent has the `mutation` tool. Otherwise nothing has been shown to
+    anyone and the whole pool is fair game, which is what every run so far measured.
+    """
+    candidates, heads = _gather(box, patch)
+    shown, held = _halve(candidates)
+    return _build(_spread(shown, n), heads), _build(_spread(held, n), heads)
+
+
+def probe(box: Sandbox, patch: str, test_path: str, n: int) -> dict:
+    """Run one test against the mutants the *agent* is allowed to see.
+
+    The agent's instrument, not the measurement -- `measure` is the measurement, it runs
+    later, and it uses the half of the pool this never shows.
+
+    Unlike `measure` this never applies `test_patch`. The developer's test is the held-out
+    answer; a tool that installed it during the agent's turn would put it in the tree the
+    agent can read.
+    """
+    state = box.ensure_base(patch)
+    if state != "base":
+        return {"ok": False, "why": f"the working tree is {state}, not base"}
+    try:
+        for path in E.patched_source_files(patch):
+            text = box.read(path)
+            if text is not None:
+                box.write(f"{BASE_COPIES}/{path}", text)
+        box.apply_patch(patch)
+        collected = R.parse_output(
+            box.exec(R.test_command(box, [test_path]), timeout=1800).output)
+        if not collected:
+            return {"ok": False, "why": f"{test_path} collects nothing on the fixed code"}
+        expected = list(collected)
+        if _fails(box, [test_path], expected):
+            return {"ok": False,
+                    "why": "your test does not pass on the fixed code yet, so asking "
+                           "what it notices about a wrong fix has no answer"}
+        shown, _held = split_pool(box, patch, n)
+        if not shown:
+            return {"ok": True, "mutants": [],
+                    "why": "no mutations are available on the lines this change touches"}
+        originals = {m.file: box.read(m.file) or "" for m in shown}
+        for m in shown:
+            box.write(m.file, m.source)
+            try:
+                m.agent_kills = _fails(box, [test_path], expected)
+            finally:
+                box.write(m.file, originals[m.file])
+        return {"ok": True, "mutants": shown}
+    finally:
+        # The tree goes back whatever happened. A tree left at head would make the
+        # harness's "before the fix" run actually be the after run, and the verdict
+        # would invert silently.
+        box.ensure_base(patch)
 
 
 def _fails(box: Sandbox, targets: list[str], expected: list[str]) -> bool:
@@ -233,6 +350,10 @@ class Score:
     why: str = ""
     asked: int = 0
     total: int = 0
+    held_out: bool = False
+    """Scored on mutants the agent was never shown. True only when it had the
+    `mutation` tool -- a score taken on the sample the agent tuned against and one taken
+    on a fresh sample are different quantities and must not share a column."""
     agent_killed: int = 0
     developer_killed: int = 0
     mutants: list[dict] = field(default_factory=list)
@@ -243,6 +364,7 @@ class Score:
     def as_dict(self) -> dict:
         return {"measured": self.measured, "why": self.why or None,
                 "tool": "mutmut", "asked": self.asked, "total": self.total,
+                "held_out": self.held_out,
                 "agent": {"killed": self.agent_killed, "total": self.total,
                           "percent": self._pct(self.agent_killed)},
                 "developer": {"killed": self.developer_killed, "total": self.total,
@@ -288,14 +410,14 @@ def _write_records(d: Path, mutants: list[Mutant], score: Score) -> None:
 
 def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
             gen_path: str, n: int = DEFAULT_MUTANTS, out_dir: Path | None = None,
-            quiet: bool = False) -> Score:
+            quiet: bool = False, held_out: bool = False) -> Score:
     """Mutation score for one generated test, and for the developer's, on one set.
 
     The box arrives at base and is left at base. In between the real patch goes on --
     mutants are variants of the *fixed* code, so the fix has to be there first -- and
     both tests are installed, because every mutant is asked of both.
     """
-    score = Score(asked=n)
+    score = Score(asked=n, held_out=held_out)
     if n <= 0:
         score.why = "not requested"
         return score
@@ -336,7 +458,11 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
             score.why = "the generated test does not pass on the fixed code here"
             return score
 
-        mutants = generate(box, instance["patch"], n)
+        # `held_out` when the agent had the `mutation` tool: it was shown one half of
+        # the pool and is scored on the other, so the number says whether the test
+        # generalises rather than whether it memorised the sample.
+        mutants = (split_pool(box, instance["patch"], n)[1] if held_out
+                   else generate(box, instance["patch"], n))
         if not mutants:
             score.measured = True
             score.why = "mutmut offers no mutations on the lines this patch changed"

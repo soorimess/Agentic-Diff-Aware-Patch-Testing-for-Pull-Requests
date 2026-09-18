@@ -1,4 +1,4 @@
-"""`out/RUNS.md` -- the state of every instance, for someone who has just cloned this.
+"""`RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this.
 
 `out/` holds one directory per instance and each one holds a dozen files. That is the
 right shape for reading a single run in detail and the wrong shape for the first
@@ -138,6 +138,10 @@ def build(root: Path = OUT) -> str:
     # The column only exists when something filled it. A `mutants` column of dashes on
     # every row of every table describes nothing and pushes the rest sideways.
     has_mutation = any(r["mutation"].get("measured") for r in rows)
+    # A note rather than a column: it is a property of the whole run, and a score taken
+    # on mutants the agent had already been shown is not comparable with one taken on
+    # mutants it had not. Silently mixing the two in one column would be the error.
+    held_out = any(r["mutation"].get("held_out") for r in rows)
     configs = sorted({r["config"] for r in rows if r["config"] != "—"})
     if len(configs) == 1:
         out += [f"Every row was produced with the same configuration: "
@@ -152,7 +156,15 @@ def build(root: Path = OUT) -> str:
 
     out += ["Coverage is measured only for tests that are fail-to-pass; for anything "
             "else the question does not apply. A `—` in that column means not "
-            "measured, not zero.", "",
+            "measured, not zero.", ""]
+    if held_out:
+        out += ["The agent held the `mutation` tool in this run, so the mutants scored "
+                "here are the **held-out half** of the pool &mdash; the agent was shown "
+                "the other half and never these. That keeps the number a measurement "
+                "rather than a mark for revising against the sample, but it also halves "
+                "the denominator, so a per-instance figure is noisier than one from a "
+                "run without the tool. The two are not comparable row for row.", ""]
+    out += [
             "`concept`, `issue` and `readable` are three separate answers from one "
             "judgement call by a stronger model that wrote none of these tests: whether "
             "the test is about the same behaviour as the maintainer's, whether it "
@@ -228,9 +240,10 @@ def build(root: Path = OUT) -> str:
             "| `developer_test.diff` | the maintainer's test, which it is **not** |",
             "| `pr.json` | the full SWE-bench row |",
             "| `child.log` | the child process's stdout, under `--parallel` |", "",
-            "`completions/` (raw prompt and response bytes per model call) is not "
-            "committed: 43 MB across these instances. Set `LLM_LOG_COMPLETIONS=1` and "
-            "rerun to regenerate it locally.", ""]
+            "`completions/` (raw prompt and response bytes per model call) is written "
+            "on every run and git-ignored, being the largest thing a run produces. It "
+            "is the only place the exact bytes sent to the model can be read back; the "
+            "trajectory records the parsed events, which is a summary of them.", ""]
     return "\n".join(line for line in out if line is not None) + "\n"
 
 

@@ -26,6 +26,8 @@ Two axes of difficulty, recorded separately because they are not the same axis:
     build     can the environment be stood up and the tests run at all
     localise  can the bug be found from the issue text
 """
+import os
+from pathlib import Path
 
 PRS = [
     {
@@ -217,6 +219,28 @@ PRS = [
         "why": "Modern scikit-learn. Reproducing it needs a custom transformer and a DatetimeIndex.",
     },
 ]
+
+# An alternative instance list, for a set this system was not developed against.
+#
+# The twenty-six above were chosen by hand -- for coverage of repositories, runners and a
+# decade of versions -- and every prompt and heuristic here has been tuned while looking
+# at them. That makes them useless for the one question they cannot answer: whether the
+# system works on instances nobody looked at. `F2P_PRS_FILE` points at a JSON list of the
+# same shape, so an evaluation set runs through exactly the same code with nothing
+# special-cased for it.
+#
+#     F2P_PRS_FILE=evaluation/prs.json F2P_IMAGE_CACHE=image-cache-evaluation \
+#         uv run python -m openhands_f2p.agent all --model gpt-5-mini \
+#         --out-root evaluation/out_gpt5mini --mutants 10 --parallel 10
+_PRS_FILE = os.getenv("F2P_PRS_FILE")
+if _PRS_FILE:
+    import json as _json
+    _loaded = _json.loads(Path(_PRS_FILE).read_text())
+    missing = [k for k in ("id", "tier") for p in _loaded if k not in p]
+    if missing:
+        raise SystemExit(f"  {_PRS_FILE}: every entry needs at least 'id' and 'tier'")
+    PRS = [{"build": "unknown", "localise": "unknown", "runner": "pytest",
+            "version": "", "note": "", "why": "", **p} for p in _loaded]
 
 BY_ID = {p["id"]: p for p in PRS}
 BY_REPO: dict[str, list[str]] = {}

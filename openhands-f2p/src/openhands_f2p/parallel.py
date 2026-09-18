@@ -57,6 +57,14 @@ def _child_argv(pr_id: str, args, features: FeatureSet, out_root: Path,
         argv.append("--no-compare")
     if getattr(args, "mutants", 0):
         argv += ["--mutants", str(args.mutants)]
+    # Which model answers is part of what the run *is*, so it has to reach the child.
+    # Left off, a parallel run would quietly use the default while the header said
+    # otherwise -- the same class of mistake as dropping --dry-run, which once forked
+    # real runs that started containers and spent real tokens.
+    for flag in ("model", "judge_model", "provider"):
+        value = getattr(args, flag, None)
+        if value:
+            argv += [f"--{flag.replace('_', '-')}", str(value)]
     if getattr(args, "mutate_saved", False):
         argv.append("--mutate-saved")
     argv += child_flags(features)

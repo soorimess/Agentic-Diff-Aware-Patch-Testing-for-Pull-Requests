@@ -12,10 +12,23 @@ job: The deliverable, stated as an engineering task rather than as our scoring f
   So the instruction now names the job a developer would recognise -- capture the
   behaviour this pull request changes -- and lets F2P and coverage be consequences of
   doing that well. They remain how we score; they are no longer what we ask for.
+
+  "One test" became "the tests, one per separable behaviour" after `astropy-13398`, which
+  has 93 changed executable lines where every other instance on the evaluation set has one
+  to eight. It adds a whole module of coordinate transforms, and both gpt-5-mini and
+  gpt-5.5 wrote exactly one test function and left most of that module untested -- 32% and
+  57% coverage. They were obeying the instruction. `57-check-reaches.md` already said the
+  opposite, that a separate case "deserves a second test function", but it is gated on the
+  coverage tool and it is not the sentence that states the deliverable.
+
+  The clause "as many as the change has, and no more" is the half that keeps this from
+  being an invitation to pad. An uncapped "write tests" is the failure this piece was
+  rewritten to avoid the first time, arrived at from the other direction.
 ---
-A pull request changes how this library behaves. Your job is to write the regression test
-that pins that behaviour down: one test in `{test_file}` that would have caught this bug
-before it was fixed, and that will catch it again if anyone reintroduces it.
+A pull request changes how this library behaves. Your job is to write the regression tests
+that pin that behaviour down, in `{test_file}`: enough to have caught this bug before it
+was fixed, and to catch it again if anyone reintroduces it. One test function per
+behaviour the change settles separately -- as many as the change has, and no more.
 
 {?patch}
 Work out what the code does *now*, what it will do *after* the change, and assert the

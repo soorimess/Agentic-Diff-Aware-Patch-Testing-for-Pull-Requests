@@ -10,9 +10,17 @@ The agent runs **on the host**; only its effects reach the container, each as a
 [docs/system-design.md](docs/system-design.md) for the architecture, the diagrams and the
 decisions behind them.
 
-- **Results, per pull request:** [out/RUNS.md](out/RUNS.md)
+- **Results, per pull request:** [out/out_full_run/RUNS.md](out/out_full_run/RUNS.md)
+- **Held-out evaluation, four models:** [evaluation/RUNS.md](evaluation/RUNS.md)
 - **Design:** [docs/system-design.md](docs/system-design.md)
+- **Why it is built that way:** [docs/decisions.md](docs/decisions.md) — the measurements, the bugs and the dead ends
 - **Prompt design:** [openhands-f2p/src/openhands_f2p/prompts/README.md](openhands-f2p/src/openhands_f2p/prompts/README.md)
+
+The twenty-six instances in `out/out_full_run/` are the ones every prompt here was written
+while looking at. The ten in `evaluation/` are not: one per repository, drawn by seed, run
+through the same code with nothing special-cased. `gpt-5-mini` passes **10/10** of them,
+which is the only evidence in this repository that the system works on instances nobody
+tuned it against.
 
 ## Setup
 
@@ -41,16 +49,65 @@ you have; `openhands_f2p/dataset.py` prints the fetch command if it cannot find 
 |---|---|
 | `LLM_API_KEY` | falls back to `OPENAI_API_KEY` |
 | `LLM_BASE_URL` | falls back to `OPENAI_BASE_URL` |
-| `LLM_MODEL` | prefix with `litellm_proxy/` behind a LiteLLM gateway, or litellm strips the provider and the gateway 400s |
 | `LLM_PROXY` | set if the endpoint needs an HTTP proxy. Given to litellm as an explicit client, so it never enters the environment the container inherits |
-| `LLM_API_MODE` | `chat`. `auto` picks the Responses API for gpt-5-mini, which hangs against some gateways |
-| `LLM_TIMEOUT` | seconds; litellm's own default of 300 is too low once test logs are in context |
-| `LLM_MAX_OUTPUT_TOKENS` | reasoning models spend this before emitting anything; too low returns empty content |
-| `LLM_NUM_RETRIES`, `LLM_RETRY_MAX_WAIT` | how long to wait out a rate-limited gateway |
-| `LLM_JUDGE_MODEL`, `LLM_JUDGE_TIMEOUT` | the final comparison, deliberately a stronger model than the agent's |
+| `FALLBACK_LLM_*` | **fallbacks, not overrides.** `MODEL`, `API_MODE`, `TIMEOUT`, `MAX_OUTPUT_TOKENS`, `NUM_RETRIES`, `RETRY_MAX_WAIT`, `JUDGE_MODEL`, `JUDGE_TIMEOUT`. Each is consulted only where `models.json` says nothing — see below |
+| `F2P_MODELS_FILE` | a model registry somewhere other than `models.json` at the project root |
 | `F2P_MAX_PARALLEL` | PRs at once, default 5. Higher is not better: 30 exceeded the Docker VM's disk and rate-limited the gateway into failing four instances |
 | `F2P_DATASET` | path to the SWE-bench Verified dump |
+| `F2P_PRS_FILE` | a JSON list of instances to run instead of the twenty-six built in, e.g. `evaluation/prs.json`. Same shape; nothing is special-cased for it |
+| `F2P_IMAGE_CACHE` | where image archives are kept, default `image-cache/`. The evaluation set uses `image-cache-evaluation/` |
 | `F2P_PROMPT_SKIP` | comma-separated prompt pieces to omit, e.g. `check-flips` |
+
+To run the held-out set rather than the twenty-six:
+
+```bash
+F2P_PRS_FILE=evaluation/prs.json F2P_IMAGE_CACHE=image-cache-evaluation \
+  uv run python -m openhands_f2p.agent all --model gpt-5-mini \
+  --out-root evaluation/out_gpt5mini --mutants 10 --parallel 10
+```
+
+`out/` holds one folder per run — `out/out_full_run/`, `out/out_compare_repo_search/`, and
+`out/default/` for a run given no `--out-root`. Evaluation runs live apart, under
+`evaluation/`.
+
+### Which model answers
+
+`--model gpt-5-mini`, `--judge-model gpt-5.5`, `--provider anthropic`. The name is matched
+against the profile registry in **`models.json`** at the project root, which supplies the
+API mode, token ceiling, timeout and retry policy that model needs, and which credentials
+to look for. `python -m openhands_f2p.models` prints the table.
+
+Adding a model or a gateway is an edit to that file -- no Python, no reinstall, and
+`F2P_MODELS_FILE` points at a different one so a machine can carry its own:
+
+```json
+{ "match": "claude-*", "provider": "anthropic", "max_output_tokens": 32000,
+  "note": "why these values -- this is the only place the reason survives" }
+```
+
+Profiles match by glob against the bare model id, first match wins, so exact names go
+above their wildcards and a `"*"` entry stays last. Unknown fields are refused by name
+rather than ignored, which is the check a JSON file would otherwise lack.
+
+**Precedence is CLI flag, then `models.json`, then `FALLBACK_LLM_*`, then the built-in
+defaults.** The registry sits above the environment on purpose. A variable is *global* and
+a profile is *per-model*, so while the variable won, `LLM_TIMEOUT=600` in a `.env` silently
+overrode the 900 that `gpt-5.5`'s profile asks for — and no profile could be trusted to
+mean anything. The `FALLBACK_` prefix is the rename that makes that visible in `.env`
+itself. Nothing about a model is read from the environment first any more; the flags and
+the registry are the two places to look.
+
+A profile field left out is `None`, and that is what makes a fallback reachable at all: a
+field with a real default can never fall through to one. So an entry says only what it has
+a reason to say, and `python -m openhands_f2p.models` stars the values that came from the
+file to keep the difference visible.
+
+One profile records a gateway bug rather than a preference: through the LiteLLM gateway
+`gpt-5.5` answers with a text preamble in `choices[0]` and the tool call in `choices[1]`,
+and the SDK reads the first, so the run recorded zero actions. `picks_first_choice: false`
+routes it through `MultiChoiceLLM`, which reorders the choices — a wrapper around the
+SDK's `LLM`, because no value could have expressed it. With that in place `gpt-5.5` runs
+as the agent.
 
 All commands below run from `openhands-f2p/`.
 
@@ -94,7 +151,7 @@ root, `openhands-f2p/.venv/bin/python main.py 3` also works.
 | `--retry-broken` | rerun only the instances with no usable result |
 | `--mutants N` | after the verdict, generate N mutants of the patch with `mutmut` and report how many the agent's test kills and how many the maintainer's does, on the same set |
 | `--no-compare` | skip the final judgement against the maintainer's test |
-| `--out-root DIR` | write results here instead of `out/`. One directory per configuration |
+| `--out-root DIR` | write results here instead of `out/default/`. `out/` holds one folder per run |
 | `--label NAME` | a name for this run, recorded in every result |
 | `--max-iterations N` | cap on agent steps, default 100. One instance has reached it: `sphinx-7454` spent 91 of its 100 steps in `run`, searching rather than looping |
 
@@ -198,7 +255,27 @@ patch that only adds a statement or a framework declaration offers nothing to ch
 reports as `0/0`, not as a perfect score. A statement-deletion operator would cover most of
 them and is deferred.
 
-Each mutant is saved to `out/<instance>/mutations/NN-<name>.diff`, so a survivor can be
+### The agent can ask the same question
+
+`mutation` is also a tool the agent holds, alongside `verify` and `coverage`: it breaks
+the fix in small ways, runs the agent's test against each, and reports the ones it does
+not notice. `--no-mutation` withholds it, and then nothing in the prompt mentions it.
+
+Giving the agent the tool would ordinarily destroy the measurement — an agent that tunes
+its test until those ten mutants die, scored on those ten mutants, is being marked on its
+own revision. So when the tool is registered the pool is **split**: the agent is shown one
+half, the harness scores the other, and results record `held_out: true`. The halves are
+drawn alternately *within* each changed line rather than across lines, because splitting
+`_spread`'s output divides the pool by line — the first attempt gave the maintainer's own
+test 0 of 5, its half being entirely on a line that test never exercises.
+
+The tool changes tests, but rarely, and the reason is worth knowing before expecting more:
+across 90 mutants in 23 instances there is exactly **one** survivor the maintainer's test
+kills and the agent's does not. Almost every survivor is one *neither* test kills — an
+equivalent mutant — and the prompt tells the agent to leave those alone. On most instances
+the honest answer is that there is nothing to fix.
+
+Each mutant is saved to `out/<run>/<instance>/mutations/NN-<name>.diff`, so a survivor can be
 read rather than taken on trust.
 
 Runs after the verdict and only for a `YES`, in the same position as the judge, since it
@@ -213,11 +290,11 @@ uv run python -m openhands_f2p.trace 3 --full     # nothing truncated
 uv run python -m openhands_f2p.trace 3 --llm 2    # the raw 2nd LLM exchange
 ```
 
-`out/<id>/flow.log` is the same run as aligned text, top to bottom. For the visual
-timeline, upload `out/<id>/trajectory.json` at
+`out/<run>/<id>/flow.log` is the same run as aligned text, top to bottom. For the visual
+timeline, upload `out/<run>/<id>/trajectory.json` at
 [trajectory-visualizer.vercel.app](https://trajectory-visualizer.vercel.app/).
 
-[out/RUNS.md](out/RUNS.md) is the index: one row per pull request with its verdict,
+[out/out_full_run/RUNS.md](out/out_full_run/RUNS.md) is the index: one row per pull request with its verdict,
 coverage, and when it last ran. It is regenerated from the results on disk at the end of
 every run, so it cannot drift.
 
@@ -279,7 +356,7 @@ directory.
 - **Two instances have no verdict.** Both are infrastructure, not results:
   `matplotlib-26208` lost the Docker socket 76 minutes into its image pull when Docker
   Desktop restarted, and `scikit-learn-25747` was still downloading at 0.3 MB/s when the
-  run was stopped. Neither started an agent. `out/<id>/result.json` says so, and
+  run was stopped. Neither started an agent. `out/<run>/<id>/result.json` says so, and
   `--retry-broken` picks up exactly these.
 - **No configuration has been compared against another yet.** The switches to do it
   exist and every result records which were in force, but the runs cost what they cost,

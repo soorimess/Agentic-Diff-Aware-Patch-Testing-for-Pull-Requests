@@ -14,6 +14,11 @@ passes today and will still pass tomorrow if that branch breaks again. The misse
 are the inputs you did not think of, and the conditions printed above each one say what
 your input has to satisfy to get there.
 
+Work at this one rather than reading it once. Call `coverage`, decide what the missed
+lines are, change the test, call it again — you do not need to re-run the earlier checks
+in between, and you should keep going until what remains is missed for a reason you can
+state.
+
 A low figure is not a bad mark. It is a description of your test, usually a precise one:
 the change has more than one path through it and you took one. So ask whether the missed
 lines are the same behaviour reached another way -- one more assertion normally covers

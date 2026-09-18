@@ -19,7 +19,8 @@ from openhands_f2p.coverage_metric import (COV_DATA, COV_RC, COV_RC_SRC,
                                            changed_lines, coverage_command, is_test_file,
                                            measure_coverage, patched_source_files)
 from openhands_f2p.images import (CLAIMS, DEFAULT_IMAGE_HEADROOM_GB, IMAGE, PLATFORM,
-                                  PULL_LOCK, claim_image, claimed_images, evict_one_image,
+                                  PULL_LOCK, claim_image, claimed_images,
+                                  daemon_refusal, evict_one_image,
                                   have_image, image_for, pull_image, reap_orphans,
                                   release_image, vm_free_gb)
 from openhands_f2p.runners import (ANSI, DEFAULT_RUNNER, DJANGO_LINE, PYTEST,
@@ -32,7 +33,8 @@ from openhands_f2p.sandbox import REPO_DIR, ExecResult, Sandbox
 __all__ = [
     # images
     "CLAIMS", "DEFAULT_IMAGE_HEADROOM_GB", "IMAGE", "PLATFORM", "PULL_LOCK",
-    "claim_image", "claimed_images", "evict_one_image", "have_image", "image_for",
+    "claim_image", "claimed_images", "daemon_refusal", "evict_one_image",
+    "have_image", "image_for",
     "pull_image", "reap_orphans", "release_image", "vm_free_gb",
     # runners
     "ANSI", "DEFAULT_RUNNER", "DJANGO_LINE", "PYTEST", "PYTEST_LINE", "PYTEST_VERBOSE",

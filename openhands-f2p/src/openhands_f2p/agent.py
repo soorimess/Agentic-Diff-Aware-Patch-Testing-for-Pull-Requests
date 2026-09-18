@@ -40,11 +40,28 @@ from openhands_f2p import (compare, docs, flow, llm_config, prompt, runs,
 from openhands_f2p.checks import audit, budget_exhausted, token_usage
 from openhands_f2p.dataset import load
 from openhands_f2p import image_cache, mutants
+from openhands_f2p import models
 from openhands_f2p.features import FeatureSet, add_arguments
 from openhands_f2p.layout import CACHE, OUT, PROJECT_ROOT
 from openhands_f2p.parallel import (CHILD_ENV_FLAG, _child_argv, _needs_retry,
                                     _run_children)
 from openhands_f2p.prs import pick
+
+
+def instance_dir(out_root: Path | None, pr: dict, child: bool) -> Path:
+    """Where one instance's files go.
+
+    `do_pr`, `recheck` and `mutate_saved` all take the *exact* directory, because a child
+    process is handed one on its own `--out-root` and must not second-guess it. Appending
+    the id there would nest it twice. So the id is appended here, in the parent -- and it
+    has to happen in every branch, not only the one that fans out.
+
+    It did not. A single instance with `--out-root out_x` ran in-process and passed the
+    run root straight through, so the files landed in `out_x/` beside the other
+    instances' directories, and the next single run overwrote them. Two `--out-root` runs
+    of one instance each looked like one run of the second.
+    """
+    return out_root if child else (out_root or OUT) / pr["id"]
 
 
 def field(label: str, text: str) -> None:
@@ -53,12 +70,14 @@ def field(label: str, text: str) -> None:
 
 
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
-              out_dir: Path, features: FeatureSet) -> dict:
+              out_dir: Path, features: FeatureSet, n_mutants: int = 0,
+              model: str | None = None, provider: str | None = None) -> dict:
     from openhands.sdk import Agent, Conversation, Tool
     from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 
     t_start = time.time()
-    llm, model, proxy = llm_config.configure_llm(out_dir / "completions")
+    llm, model, proxy = llm_config.configure_llm(out_dir / "completions",
+                                                 model=model, provider=provider)
     tool_log: list = []
     # Two different questions, kept apart. `verify` and `coverage` need the harness to
     # *hold* the patch, which it always does -- it applies it and reverts it itself. The
@@ -66,9 +85,14 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     # cares about. Conflating them once made `--no-patch` silently remove the feedback
     # loop as well as the input, so a drop in the result could not be attributed to
     # either.
+    # The same `n` the harness will use, so the two halves of the pool are the halves
+    # of one pool: `probe` takes `split_pool(...)[0]`, `measure` takes `[1]`. Passing
+    # different sizes here would draw two pools and the "held out" half could contain
+    # mutants the agent had already been shown.
     names = sandbox_tools.register(box, instance["repo"], tool_log,
                                    patch=instance["patch"], features=features,
-                                   gen_path=test_file)
+                                   gen_path=test_file,
+                                   probe_mutants=(n_mutants or mutants.DEFAULT_MUTANTS))
     agent = Agent(llm=llm, tools=[Tool(name=n) for n in names])
 
     transcript: list[dict] = []
@@ -271,7 +295,8 @@ def mutate_saved(pr: dict, n: int, root: Path | None = None) -> dict:
 def do_pr(pr: dict, max_iterations: int, dry_run: bool,
           features: FeatureSet | None = None, no_compare: bool = False,
           out_root: Path | None = None, label: str = "",
-          n_mutants: int = 0) -> dict:
+          n_mutants: int = 0, model: str | None = None,
+          provider: str | None = None, judge_model: str | None = None) -> dict:
     features = features if features is not None else FeatureSet.of()
     inst = load(pr["id"])
     repo = inst["repo"]
@@ -305,7 +330,13 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
 
     image = E.image_for(pr["id"])
     if not E.have_image(image):
-        field("image", f"pulling {image.split('.')[-1]} (once, 1-5 GB)")
+        # "fetching", not "pulling": the archive is tried first and a load off the disk
+        # is seconds where a pull is hours. Saying "pulling" here sent someone looking
+        # for a stalled download that was never happening.
+        from openhands_f2p import image_cache as _c
+        how = ("loading from the archive" if _c.have_archive(image)
+               else "pulling from the registry (once, 1-5 GB, slow)")
+        field("image", f"{image.split('.')[-1]} -- {how}")
 
     with flow.recording(d, f"{pr['id']}  ({repo})  config={features.slug()}"), \
             E.Sandbox(pr["id"], quiet=True,
@@ -325,7 +356,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               f"{Path(test_file).name}, in a directory the agent establishes "
               f"(we would have used {test_file})")
 
-        run = run_agent(inst, box, test_file, max_iterations, d, features)
+        run = run_agent(inst, box, test_file, max_iterations, d, features, n_mutants,
+                        model=model, provider=provider)
         # Resolved before `audit`, which flags every write that is not the test file:
         # left unresolved, the agent's own chosen path would be reported as a stray
         # write on every run of this configuration.
@@ -355,7 +387,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                                 f"the model spent its whole output budget on reasoning "
                                 f"({starved['reasoning_tokens']} of "
                                 f"{starved['completion_tokens']} tokens) and had none "
-                                f"left to call a tool -- raise LLM_MAX_OUTPUT_TOKENS")
+                                f"left to call a tool -- raise max_output_tokens on this "
+                                f"model's entry in models.json")
         elif code is None and run.get("error"):
             verdict = V.Verdict(pr["id"], "BROKEN",
                                 f"the agent run failed before a test was written: "
@@ -398,7 +431,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
             # belongs on this side of the line with the judge, never before it.
             if n_mutants and verdict.f2p == "YES":
                 mut = mutants.measure(inst, box, code, test_file, n_mutants,
-                                      out_dir=d, quiet=True)
+                                      out_dir=d, quiet=True,
+                                      held_out=("mutation-tool" in features))
                 mutation = mut.as_dict()
                 field("mutants", mutants.line(mutation))
 
@@ -445,7 +479,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
     # answer is recorded beside the verdict, never folded into it.
     if code is not None and not no_compare:
         try:
-            result["concept"] = compare.compare(inst, code)
+            result["concept"] = compare.compare(inst, code, model=judge_model)
             field("concept", compare.line(result["concept"]))
         except Exception as exc:
             result["concept"] = {"verdict": "error", "reasoning": str(exc)[:200]}
@@ -487,11 +521,18 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
 
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The parser, built separately so the documentation can read it.
+
+    `docs.py` used to scrape `add_argument` calls out of this file with a regular
+    expression, which missed every flag the feature and model registries contribute and
+    silently attributed one flag's help to another when a help string was an f-string.
+    A parser is the only honest source for what the parser accepts.
+    """
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("which", nargs="?", default="all",
-                   help="1..23, an instance id, a repository prefix ('django'), "
+                   help="1..26, an instance id, a repository prefix ('django'), "
                         "a tier ('tier5'), or 'all'")
     p.add_argument("--max-iterations", type=int, default=100,
                    help="hard cap on agent steps per PR. Observed use ranges from 12 "
@@ -506,9 +547,9 @@ def main() -> int:
                         f"mutmut and count how many mutants each test kills -- the "
                         f"generated one and the developer's, on the same set. Bare "
                         f"--mutants uses {mutants.DEFAULT_MUTANTS}. Deterministic and "
-                        f"offline; the diffs land in out/<id>/mutations/. 0 is off")
+                        f"offline; the diffs land in <run>/<id>/mutations/. 0 is off")
     p.add_argument("--mutate-saved", action="store_true",
-                   help="measure mutation on the tests already in out/, without "
+                   help="measure mutation on the tests already written, without "
                         "running the agent again. Adds the `mutation` field and "
                         "changes nothing else. Needs --mutants N")
     p.add_argument("--recheck", action="store_true",
@@ -523,13 +564,19 @@ def main() -> int:
                    default=int(os.getenv("F2P_MAX_PARALLEL") or 5),
                    help="how many PRs to run at once (F2P_MAX_PARALLEL, default 5)")
     p.add_argument("--out-root", default=None,
-                   help="write results here instead of out/. One directory per "
-                        "configuration is how a series of runs is kept separable")
+                   help="write results here instead of out/default/. `out/` is a "
+                        "container of run folders -- one per run, e.g. "
+                        "out/out_full_run/ -- which is how a series stays separable")
     p.add_argument("--label", default="",
                    help="a name for this run, recorded in every result. Defaults to "
                         "the configuration, e.g. no-coverage-tool")
     add_arguments(p)
-    args = p.parse_args()
+    models.add_arguments(p)
+    return p
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     features = FeatureSet.from_args(args)
     # Resolved before the early-returning branches below, which all report on a series
@@ -579,8 +626,7 @@ def main() -> int:
         E.reap_orphans(quiet=False)
         if child or len(prs) == 1 or args.parallel <= 1:
             rows = [mutate_saved(pr, args.mutants,
-                                 out_root if child or len(prs) == 1
-                                 else (out_root or OUT) / pr["id"])
+                                 instance_dir(out_root, pr, child))
                     for pr in prs]
         else:
             # A process each, for the same reason the agent gets one: `flow._current` is
@@ -614,7 +660,9 @@ def main() -> int:
 
     if args.recheck:
         E.reap_orphans(quiet=False)
-        rows = [recheck(pr, out_root) for pr in prs]
+        rows = [recheck(pr, instance_dir(out_root, pr,
+                                        bool(os.getenv(CHILD_ENV_FLAG))))
+                for pr in prs]
         yes = sum(1 for r in rows if r.get("f2p") == "YES")
         print(f"\n  {yes}/{len(rows)} still fail-to-pass after re-judging")
         runs.main(out_root or OUT)
@@ -622,16 +670,21 @@ def main() -> int:
 
     if not os.getenv(CHILD_ENV_FLAG):
         if not args.dry_run:
-            refusal = llm_config.gateway_refusal()
-            if refusal:
-                raise SystemExit(f"  {refusal}")
+            # Docker before the gateway: it is the cheaper check, and a missing daemon
+            # fails every instance rather than some of them.
+            for refusal in (E.daemon_refusal(), llm_config.gateway_refusal(args.model)):
+                if refusal:
+                    raise SystemExit(f"  {refusal}")
         E.reap_orphans(quiet=False)      # a killed run leaves its container running
     child = bool(os.getenv(CHILD_ENV_FLAG))
 
     # One PR, or a child doing exactly one: run it here so its output streams.
     if child or len(prs) == 1 or args.dry_run or args.parallel <= 1:
         results = [do_pr(pr, args.max_iterations, args.dry_run, features,
-                         args.no_compare, out_root, args.label, args.mutants)
+                         args.no_compare, instance_dir(out_root, pr, child),
+                         args.label, args.mutants,
+                         model=args.model, provider=args.provider,
+                         judge_model=args.judge_model)
                    for pr in prs]
     else:
         jobs = []
