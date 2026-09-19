@@ -26,6 +26,7 @@ would mean judging a different tree than the one the agent worked in.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import os
 import shutil
@@ -69,9 +70,36 @@ def field(label: str, text: str) -> None:
     print(f"  {label:<9} {text}")
 
 
+def _recap(counts: dict[str, int], tool_log: list) -> str:
+    """What the agent did, in the terms it did it in.
+
+    Only its own actions, which is the cheapest thing on the base-observable side of the
+    line `V.shortfall` draws: the agent is being reminded of its own transcript, not told
+    anything about the fix. It is here because "you stopped" lands differently next to a
+    count -- thirty-one shell commands and no file written is a description of the
+    failure, where "you did not finish" is only an assertion of it.
+    """
+    lines = []
+    if counts:
+        lines.append("* " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+                     + f" -- {sum(counts.values())} actions in total")
+    used: dict[str, int] = {}
+    for e in tool_log:
+        used[e.get("tool") or "?"] = used.get(e.get("tool") or "?", 0) + 1
+    if used:
+        lines.append("* tools: " + ", ".join(f"`{k}` x{v}" for k, v in
+                                             sorted(used.items(), key=lambda kv: -kv[1])))
+    wrote = [e.get("path") for e in tool_log
+             if e.get("tool") == "write_file" and e.get("path")]
+    lines.append("* files written: " + (", ".join(f"`{w}`" for w in dict.fromkeys(wrote))
+                                        if wrote else "**none**"))
+    return "\n".join(lines)
+
+
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
               out_dir: Path, features: FeatureSet, n_mutants: int = 0,
-              model: str | None = None, provider: str | None = None) -> dict:
+              model: str | None = None, provider: str | None = None,
+              second_chance: bool = False) -> dict:
     from openhands.sdk import Agent, Conversation, Tool
     from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 
@@ -170,6 +198,50 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
         status = "ERROR"
         flow.record(flow.AGENT, "run raised", error[:200])
     flow.record(flow.AGENT, "agent finished", status)
+
+    # A second chance, when the run ended with nothing a judge could score and the
+    # reason is one the agent could have seen for itself. `V.shortfall` decides both --
+    # what counts as unfinished and what may be said about it -- and returns None when
+    # there is nothing base-observable to report, which is when this does nothing.
+    retry: dict | None = None
+    # The cap is a fact about the first stop. Counting the continuation's actions into it
+    # would report a run as capped because the two stretches together passed the limit,
+    # when neither did.
+    first_run_actions = sum(counts.values())
+    if second_chance and error is None:
+        left = max_iterations - first_run_actions
+        rel = V.written_test_path(box, tool_log, test_file)
+        gap = V.shortfall(box, instance, rel) if left > 0 else None
+        if left <= 0:
+            flow.record(flow.AGENT, "second chance", "no budget left at the cap")
+        elif gap is None:
+            flow.record(flow.AGENT, "second chance", "not needed")
+        else:
+            reason, say = gap
+            nudge = prompt.followup("second-chance", shortfall=say,
+                                    recap=_recap(counts, tool_log), test_file=rel,
+                                    budget=left, cap=max_iterations)
+            flow.record(flow.AGENT, "second chance", f"{reason}; {left} actions left")
+            field("retry", f"{reason} -- carrying on with {left} of "
+                           f"{max_iterations} actions left")
+            # `run()` restarts its own iteration count from zero, so what is left of the
+            # cap has to be set here. Without this the continuation silently gets a
+            # second full cap, and one flag doubles what a run is allowed to spend.
+            conversation.max_iteration_per_run = left
+            conversation.send_message(nudge)
+            try:
+                conversation.run()
+                status = str(conversation.state.execution_status)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                status = "ERROR"
+                flow.record(flow.AGENT, "retry raised", error[:200])
+            after = sum(counts.values())
+            retry = {"reason": reason, "said": say, "budget": left,
+                     "actions": after - first_run_actions}
+            flow.record(flow.AGENT, "second chance done",
+                        f"{after - first_run_actions} more actions, {status}")
+
     elapsed = time.time() - t_start
     if live:
         print("\r" + " " * 78 + "\r", end="")
@@ -185,7 +257,16 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                    f"{short_status} in {elapsed:.0f}s")
     if error:
         field("", f"error: {error[:120]}")
-    return {"status": status, "error": error, "capped": n_actions >= max_iterations,
+    if sandbox_tools.INVENTED:
+        flow.record(flow.AGENT, "invented parameters",
+                    ", ".join(f"{k} x{v}" for k, v in
+                              sorted(sandbox_tools.INVENTED.items(),
+                                     key=lambda kv: -kv[1])))
+    return {"status": status, "error": error,
+            # One budget covers both stretches, so this is the whole run again -- the
+            # continuation cannot push a run over a cap it shares.
+            "capped": n_actions >= max_iterations,
+            "invented": dict(sandbox_tools.INVENTED), "retry": retry,
             "transcript": transcript,
             "tool_log": tool_log, "model": model, "task": task,
             "actions": sum(1 for r in transcript if "action" in r)}
@@ -296,7 +377,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
           features: FeatureSet | None = None, no_compare: bool = False,
           out_root: Path | None = None, label: str = "",
           n_mutants: int = 0, model: str | None = None,
-          provider: str | None = None, judge_model: str | None = None) -> dict:
+          provider: str | None = None, judge_model: str | None = None,
+          second_chance: bool = False) -> dict:
     features = features if features is not None else FeatureSet.of()
     inst = load(pr["id"])
     repo = inst["repo"]
@@ -357,7 +439,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               f"(we would have used {test_file})")
 
         run = run_agent(inst, box, test_file, max_iterations, d, features, n_mutants,
-                        model=model, provider=provider)
+                        model=model, provider=provider,
+                        second_chance=second_chance)
         # Resolved before `audit`, which flags every write that is not the test file:
         # left unresolved, the agent's own chosen path would be reported as a stray
         # write on every run of this configuration.
@@ -408,6 +491,32 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
             field("test", f"{code.count(chr(10)) + 1} lines written")
             verdict = V.verify(inst, box, generated_test=code, quiet=True,
                                test_path=test_file)
+            # A run stopped at the cap still has its test scored, and the verdict then
+            # reads like a considered judgement -- "passes before the fix too" -- with
+            # nothing to say the agent was cut off mid-revision. `sphinx-10614` recorded
+            # exactly that at 100 actions, having written once and verified once, where
+            # the runs that pass it write three or four times. The verdict stays what the
+            # test earned; the reason says the test may not be finished.
+            # Creating files is allowed; editing one that was already here is not, and
+            # this is the check that lets the first be true safely. A new file is present
+            # in the before run and the after run alike, so it cannot manufacture a flip.
+            # An edited one can -- library source most obviously, but an edited fixture
+            # also risks rejecting the maintainer's test when it is applied later. The
+            # instruction says so; an instruction cannot be what the measurement rests on.
+            if checks["tree_altered"]:
+                verdict = replace(
+                    verdict, f2p="BROKEN",
+                    why=f"the agent changed {len(checks['tree_altered'])} file(s) that "
+                        f"already existed, so the before-the-fix run is not a fact about "
+                        f"this pull request: {', '.join(checks['tree_altered'][:4])}")
+                field("audit", f"VOID -- pre-existing files changed: "
+                               f"{', '.join(checks['tree_altered'][:4])}")
+            if run.get("capped") and verdict.f2p != "YES":
+                verdict = replace(
+                    verdict,
+                    why=f"{verdict.why} -- and the agent was stopped at the "
+                        f"{max_iterations}-action cap, so this may be an unfinished test "
+                        f"rather than a wrong one")
             def tally(o):
                 c = {}
                 for st in o.values():
@@ -465,6 +574,13 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               # and keeping it means a trajectory can still be rebuilt from disk.
               "task": run["task"],
               "actions": run["actions"],
+              # Parameters the model invented and the schema dropped. Before this was
+              # tolerated the same calls were hard errors -- see ToolArgs.
+              "invented_parameters": run.get("invented") or {},
+              # None when the flag was off or nothing base-observable was wrong. Its
+              # presence is what separates a second-chance arm from a control one in a
+              # table, so it is recorded even when the retry changed nothing.
+              "second_chance": run.get("retry"),
               "files_edited_outside_test": checks["files_written_outside_test"],
               # From the tree, not the tool log: this is the one that would catch an
               # agent editing the library with the shell, which is what would make the
@@ -548,6 +664,16 @@ def build_parser() -> argparse.ArgumentParser:
                         f"generated one and the developer's, on the same set. Bare "
                         f"--mutants uses {mutants.DEFAULT_MUTANTS}. Deterministic and "
                         f"offline; the diffs land in <run>/<id>/mutations/. 0 is off")
+    p.add_argument("--second-chance", action="store_true",
+                   help="refuse the first stop. When a run ends with nothing to score "
+                        "for a reason the agent could have seen itself -- no file "
+                        "written, a file that collects nothing, a test that passes on "
+                        "the unfixed code -- say so and let it carry on, once, on "
+                        "whatever is left of --max-iterations. The cap is not raised "
+                        "and not reset, so a run that stopped at 41 of 100 resumes with "
+                        "59 and one that reached the cap gets nothing. Never quotes the "
+                        "run against the fixed code, so the agent still only knows what "
+                        "it could establish at base")
     p.add_argument("--mutate-saved", action="store_true",
                    help="measure mutation on the tests already written, without "
                         "running the agent again. Adds the `mutation` field and "
@@ -684,7 +810,8 @@ def main() -> int:
                          args.no_compare, instance_dir(out_root, pr, child),
                          args.label, args.mutants,
                          model=args.model, provider=args.provider,
-                         judge_model=args.judge_model)
+                         judge_model=args.judge_model,
+                         second_chance=args.second_chance)
                    for pr in prs]
     else:
         jobs = []

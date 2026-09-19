@@ -261,11 +261,24 @@ class Sandbox:
 
     def tree_changes(self) -> list[str]:
         """Paths that differ from the snapshot. Empty when nothing was touched."""
+        return [path for _, path in self.tree_status()]
+
+    def tree_status(self) -> list[tuple[str, str]]:
+        """`(status, path)` per changed path, status as git's two-letter porcelain code.
+
+        The distinction the bare path list threw away. Adding a fixture and editing the
+        library are both "the tree changed", and only the second one voids the
+        measurement: a test cannot be made to flip by a file that did not exist at base,
+        because that file is present in the before run and the after run alike.
+        """
         r = self.exec(f"{self._tree_git()} status --porcelain", timeout=300)
         if r.returncode != 0:
             return []
-        return [line[3:].strip().strip('"') for line in r.output.splitlines()
-                if len(line) > 3]
+        out = []
+        for line in r.output.splitlines():
+            if len(line) > 3:
+                out.append((line[:2].strip() or "?", line[3:].strip().strip('"')))
+        return out
 
     def audit_isolation(self) -> dict:
         """Evidence, gathered from inside, that the box is what we say it is."""

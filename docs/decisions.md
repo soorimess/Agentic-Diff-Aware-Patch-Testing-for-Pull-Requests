@@ -242,6 +242,38 @@ directory the runner never collects from fails for a reason that has nothing to 
 how good the test is, and without the pair on record those two failures are
 indistinguishable in the table.
 
+### "Create only the test file" was the wrong rule
+
+The rule said one file. The reason given for it was narrower than the rule: *do not change
+the library source to make your test pass*. One-file was a proxy, chosen because it is
+trivially checkable, at a time when the audit could not verify anything better -- it asked
+`git status` in a checkout whose `.git` had been deleted, so it always reported clean.
+
+`sphinx-10614` is where the proxy failed. The bug is that inheritance-diagram links are
+wrong **in nested directories**; the base fixture root has no nested directory; and the
+maintainer's own test for the bug touches **six files**, extending an existing root and
+adding a `subdir/`. A test for this cannot be one file.
+
+Two things made the relaxation safe to do rather than merely tempting:
+
+* **The harness never enforced one-file anyway.** It recorded `files_written_outside_test`
+  and no verdict depended on it. On one run the agent built a seven-file fixture root of
+  its own and was not penalised -- it lost on the action cap, mid-iteration. The rule was
+  costing us the contradiction of telling the agent not to do the necessary thing, and
+  buying no safety in return.
+* **`tree_changes` already existed**, comparing the checkout against a pre-agent snapshot
+  in a git dir outside `/testbed`. It threw the status codes away, so added and modified
+  looked alike; keeping them separates the safe case from the dangerous one exactly.
+
+So the rule is now *create freely, edit nothing that exists*, and a run that edits
+something pre-existing is `BROKEN` rather than scored. That is strictly stronger than
+one-file on the thing that matters -- it catches a `sed -i` on library source, which
+one-file only caught by implication -- and permits the fixtures a real regression test
+needs.
+
+What it does not settle: whether `sphinx-10614` now passes. The run that built the fixture
+ran out of budget while iterating, and the run that passed did so without a fixture at all.
+
 ### The audit that could not have caught anything
 
 The measurement rests on the agent not having edited the library: the "before the fix" run
@@ -367,6 +399,182 @@ The five instances it has been run against are all one- and two-line patches, wh
 function is the right answer and the instruction is never exercised. It needs
 `astropy-13398` itself to be worth anything.
 
+### Weak models bypass the tools rather than misuse them
+
+`mutation` looked at first like a tool the agent skips: it went uncalled in every run of
+`sphinx-10614`. Counting properly across the evaluation set shows something wider, and
+strictly ordered by model strength.
+
+| model | calls | `run` share | `verify` + `coverage` + `mutation` |
+|---|---|---|---|
+| `gpt-5.5` | 228 | 65% | **48 (21%)** |
+| `gpt-5-mini` | 318 | 81% | 31 (10%) |
+| `gpt-5-nano` | 340 | 85% | **4 (1%)** |
+| `gpt-oss-20b` | 261 | 92% | **3 (1%)** |
+
+It is not that `mutation` is unreachable. Weak models barely use any purpose-built tool:
+`gpt-5-nano` called `verify` four times across ten runs while issuing 288 shell commands,
+and it ran the test suite **by hand 28 times** against 16 calls to `run_tests`. `gpt-5.5`
+inverts that — 9 by hand against 15 `run_tests` and 22 `verify`.
+
+`coverage` and `mutation` have no shell equivalent the agent knows how to reach for, so
+where `verify` degrades into `pytest` typed by hand, those two degrade into nothing at all.
+
+The consequence for the tooling plan is unwelcome and worth stating before spending on it.
+The models with the most headroom for a tool to help are the ones least likely to invoke
+one, so an A/B of "tools on" against "tools off" at the weak end risks measuring two
+configurations the model treats identically. Making a tool *available* is not the same as
+making it the path of least resistance, and only the second is worth measuring.
+
+### A strict tool schema was measuring itself
+
+`Action` in the SDK sets `extra="forbid"`, so a tool call carrying one unknown key died
+with a pydantic error and the model got no result:
+
+```
+Error validating tool 'sandbox_run': 1 validation error for RunAction
+timeout
+  Extra inputs are not permitted [type=extra_forbidden, input_value=120000, input_type=int]
+```
+
+Three invented names accounted for all of it across the evaluation set -- `timeout` (184
+calls), `commentary` (57), `stdin` (30) -- and the models that invented them were the weak
+ones:
+
+| model | instances affected | worst instance |
+|---|---|---|
+| `gpt-5.5` | 0/10 | — |
+| `gpt-5-mini` | 0/10 | — |
+| `gpt-5-nano` | 1/10 | 30 of 47 calls |
+| `gpt-oss-20b` | 7/10 | **91 of 100 calls** |
+
+`sympy-21612` spent its whole 100-action cap inside the loop: rejection, then an empty
+assistant turn whose recovery plan sat in `reasoning_content` where nothing reads it, then
+OpenHands' generic *"your last response did not include a function call"*, then the same
+malformed call again.
+
+`ToolArgs` now sets `extra="ignore"` and counts what it drops into `INVENTED`, which is
+recorded per run as `invented_parameters`. The emitted JSON schema is byte-identical under
+both settings -- pydantic adds no `additionalProperties` either way -- so the model is told
+exactly what it was told before and this is a validation change, not a prompt change.
+
+**What the fix bought, measured on six of the 26 with gpt-oss-20b.** Zero rejections in
+188 calls, against seven of ten instances affected before. The models still invent the same
+parameters at the same rate -- `timeout` appeared 15 times -- they just no longer lose the
+call for it.
+
+**What it did not buy: a better score.** 1/5 of the instances that reached a verdict. The
+failures are now the behaviour the section above describes, not a bug:
+
+| instance | calls | tools used | outcome |
+|---|---|---|---|
+| `astropy-14995` | 37 | `write_file`, `verify` x4, `run_tests` | **YES** |
+| `pytest-10081` | 39 | `write_file` x3, `run_tests` | NO, test wrong |
+| `sklearn-10908` | 11 | `write_file`, `verify`, `coverage` | BROKEN, edited the tree |
+| `django-13406` | 41 | **`run` x41** | NO, never wrote |
+| `sympy-24562` | 29 | **`run` x29** | NO, never wrote |
+| `xarray-7233` | 8 | **`run` x8** | NO, never wrote |
+
+Three runs spent every action in the shell and wrote nothing. The one that passed is the
+one that wrote early and verified. So removing the schema bug exposed the real constraint
+rather than removing it, and `gpt-oss-20b`'s ceiling is still unmeasured -- what is now
+known is that the earlier 2/10 was partly this config line.
+
+One residual defect, rare but fatal where it lands: three of 188 responses carried Harmony
+channel markup as plain text -- `to=functions.sandbox_run<|constrain|>??` -- instead of a
+parsed tool call. Each was the final turn of its run. `models.json` already warns to check
+native tool calling for this model before a full set; this is that warning coming true.
+
+### A second chance, and the one thing it may not say
+
+`--second-chance` refuses the agent's first stop. When a run ends with nothing a judge
+could score, for a reason the agent could have seen itself, the harness says so and lets
+it carry on -- once, in the same conversation, **on whatever is left of
+`--max-iterations`**. A run that stopped at 41 of 100 resumes with 59; a run that reached
+the cap gets nothing and the flow log says so. The budget is never topped up, so the flag
+changes what the agent is told, not what it is allowed to spend.
+
+It is one continuation, not a loop, and the trigger is the stop itself rather than a timer
+or a tool call. That matters for the models it exists for: gpt-oss mostly does not end by
+calling `finish` at all, it ends by emitting prose with no tool call, and both arrive at
+the same place -- `run()` returns -- so one mechanism covers both.
+
+**Why not have `verify` say it instead.** `verify` already does. It answers *"NOT
+fail-to-pass: the test already passes before the change"* and *"...still fail after the
+change is applied. The test is wrong, not the code."*, and `58-finish.md` already tells
+the agent to call it last. The trouble is that it is opt-in and the agent that needs it
+does not opt in. Across 28 weak-model runs:
+
+| | YES | NO | rate |
+|---|---|---|---|
+| called `verify` | 8 | 2 | **80%** |
+| never called it | 3 | 15 | **17%** |
+
+For gpt-oss the split is absolute -- every YES called `verify`, and all twelve runs that
+never called it failed. `django-13406` spent 41 actions in the shell with the tool
+registered and untouched. A better message does not reach an agent that never asks, which
+is why this is a stop the harness refuses rather than a sentence in a tool's output.
+
+**What may be said.** `V.shortfall` returns a reason only for things the agent could have
+established without leaving base -- there is no file, the file collects nothing, the test
+passes on the unfixed code -- and `None` for everything else. *Your test still fails after
+the fix* can never appear: it exists only in the head run, and quoting it back would have
+the agent fit its test to a diff it was never shown, which is the one thing that would
+stop the test being independent evidence about the pull request.
+
+That is enforced by where the function sits, not by remembering: it runs before
+`verify()`, calls `ensure_base()` first, and never applies the patch. A tree that is not
+at base returns `None` rather than run a test against a state of unknown provenance.
+
+The message also recaps the agent's own action counts, tools and files. That is the
+cheapest thing on the safe side of the line, and "41 shell commands and no file written"
+describes the failure where "you did not finish" only asserts it.
+
+**Measured on twenty runs: the mechanism is right and the effect is small.** Ten instances
+of the 26, run twice on `gpt-5-nano` with only this flag changing, plus ten on
+`gpt-oss-20b`.
+
+| | control | with the flag |
+|---|---|---|
+| `gpt-5-nano` | 5/10 | 5/10 |
+
+The gate fired **once** in the nano pair, and that one converted: `pytest-10081` wrote a
+test that passed at base, was told so, and rewrote it in **two actions of the eighty-two
+it had left**. Every other movement in the table -- two YES going NO, one BROKEN going YES
+-- happened on runs where the gate never fired, which is variance and not this.
+
+**The reachable population is what limits it, and it depends on how the model fails.**
+
+| failure | nano | gpt-oss |
+|---|---|---|
+| wrong test, head-only *(gate forbidden to speak)* | 5 | 2 |
+| wrote nothing *(gate fires)* | 0 | 2 |
+| passes at base *(gate fires)* | 1 | 1 |
+| BROKEN, edited the tree | 3 | 0 |
+
+The two models defeat the flag from opposite sides. `nano` writes a test nearly every
+time and writes the wrong one, which is the head-only failure the boundary forbids acting
+on -- so the gate is silent for four of its five failures. `gpt-oss` stops without writing,
+which the gate catches, but it then answers the message with empty assistant turns: on
+`django-13406` it spent 1227 reasoning tokens working out *"We'll just write file
+tests/test_f2p_django__django_13406.py"* and emitted none of it, and the stuck detector
+ended the run. Its four continuations converted nothing. On `gpt-5.5` and `gpt-5-mini`,
+10/10 on the evaluation set, it would never fire at all.
+
+So it is worth keeping and not worth planning around: free when it does not fire, correct
+when it does, and addressed at a slice of the failures that is small on every model we
+have. Across both pairs the gate fired five times and converted two.
+
+What twenty runs did establish is that it is safe. It declined every head-only failure,
+the budget arithmetic was right every time (97, 97, 95, 94, 82 from a cap of 100), and
+`seaborn-3069`, which used all 100 actions, got `no budget left at the cap` and nothing
+was spent.
+
+**The trap.** `Conversation.run()` resets its iteration counter to zero, so a second
+`run()` inherits a fresh full cap. Left alone, one flag would have doubled what a run may
+spend -- and silently, since both halves report normally. What is left of the cap is
+computed and set on the conversation before the continuation.
+
 ## Structure
 
 ### The module split
@@ -403,10 +611,10 @@ Four models, the same ten instances:
 
 | model | fail-to-pass | issue complete | cost | per instance |
 |---|---|---|---|---|
-| `gpt-5.5` | 10/10 | 7/10 | $7.42 | $0.74 |
-| `gpt-5-mini` | 10/10 | 4/10 | $0.89 | $0.09 |
-| `gpt-5-nano` | 6/10 | 3/10 | $0.34 | $0.03 |
-| `gpt-oss-20b` | 2/10 | 2/10 | $0.24 | $0.02 |
+| `gpt-5.5` | 10/10 | 7/10 | \$7.42 | \$0.74 |
+| `gpt-5-mini` | 10/10 | 4/10 | \$0.89 | \$0.09 |
+| `gpt-5-nano` | 6/10 | 3/10 | \$0.34 | \$0.03 |
+| `gpt-oss-20b` | 2/10 | 2/10 | \$0.24 | \$0.02 |
 
 **The system is not the limiting factor at the top.** gpt-5-mini passes all ten held-out
 instances, and the gap to gpt-5.5 is entirely in `issue coverage` -- whether the test

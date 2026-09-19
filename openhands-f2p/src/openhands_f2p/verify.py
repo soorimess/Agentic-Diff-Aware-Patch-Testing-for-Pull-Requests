@@ -119,6 +119,56 @@ def written_test_path(box: Sandbox, tool_log: list, fallback: str) -> str:
     return fallback
 
 
+def shortfall(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str, str] | None:
+    """What the agent could see for itself about not being finished, or `None`.
+
+    This is the evidence a second chance is allowed to quote back, and the rule that
+    decides what belongs here is the one the whole harness runs on: the agent works at
+    base and has never seen the fix, so it may only be told things it could have
+    established without leaving base. *There is no file.* *Your file collects nothing.*
+    *Your test passes on this code.* Each of those is a command the agent could have run
+    itself, and each is equally correct advice whether or not a judge exists.
+
+    *Your test still fails after the fix* is the one that cannot appear here. It exists
+    only in the head run. Feeding it back would make the agent fit its test to a diff it
+    was never shown, and the test would stop being independent evidence about the pull
+    request -- which is the only thing that makes it worth generating.
+
+    That boundary is also the function's limit: a test that fails at base for the wrong
+    reason looks identical from here to one that fails for the right reason, so this
+    returns `None` for it and the ordinary verdict handles it.
+
+    Returns `(reason, what_to_say)`, the first for the record and the second for the
+    agent. `None` means nothing base-observable is wrong and the run should be scored as
+    it stands.
+    """
+    if not box.read(rel):
+        return ("no_test", f"There is no file at `{rel}`. Nothing was written, so there "
+                           f"is no test to judge.")
+
+    # The agent's own `verify` tool applies the patch and reverts it. If it left the tree
+    # somewhere else, that is a different failure and a worse one -- say nothing and let
+    # the verdict report it, rather than running a test against a tree of unknown state.
+    if box.ensure_base(instance["patch"]) != "base":
+        return None
+
+    r = box.exec(E.test_command(box, [rel]), timeout=3600)
+    outcomes = E.parse_output(r.output)
+    flow.record(flow.VERIFY, "second-chance probe",
+                f"{rel}: " + (", ".join(sorted(set(outcomes.values()))) or "nothing collected"))
+    if not outcomes:
+        return ("collects_nothing",
+                f"`{rel}` exists but running it collects no tests. Either the file has "
+                f"no test function this project's runner recognises, or it fails to "
+                f"import. Run it yourself and read the error.")
+    if all(st == "PASSED" for st in outcomes.values()):
+        return ("passes_at_base",
+                f"Every test in `{rel}` passes on this code. The bug is still present "
+                f"here, so a test that already passes is not testing the change -- "
+                f"whatever it checks was true before the fix as well.")
+    return None
+
+
 def targets_for_gold(box: Sandbox, instance: dict[str, Any]) -> list[str]:
     """What to run when the candidate is the developer's own test.
 

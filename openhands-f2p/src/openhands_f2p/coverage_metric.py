@@ -17,6 +17,7 @@ import shlex
 from typing import TYPE_CHECKING
 
 from openhands_f2p.runners import runner_for, test_command
+from openhands_f2p.statements import statement_start
 from openhands_f2p.sandbox import REPO_DIR
 
 if TYPE_CHECKING:
@@ -284,10 +285,13 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
     # is what actually happened to the tree. The diff header is only a fallback for a
     # file the caller could not read at base -- a file the patch creates, say.
     wanted: dict[str, set[int]] = {}
+    heads: dict[str, str] = {}                     # for mapping a line to its statement
     from_diff = changed_lines(patch)
     for path in patched_source_files(patch):
         base_text = (base_files or {}).get(path)
-        head_text = box.read(path) if base_text is not None else None
+        head_text = box.read(path)
+        if head_text is not None:
+            heads[path] = head_text
         if base_text is not None and head_text is not None:
             lines = added_lines_between(base_text, head_text)
         else:
@@ -318,10 +322,24 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
                     info, matched[path] = v, k
                     break
         info = info or {"executed": set(), "measurable": set()}
+        # A changed line coverage cannot speak about may still belong to a statement it
+        # can. A continuation line is not a statement, so it never appears in
+        # `missing_lines` and appears in `executed_lines` only when it runs -- scoreable
+        # as *hit*, never as *missed*. `sympy-21612` changes exactly one such line and
+        # was reported unmeasurable when the honest answer was 0%. Mapping it onto the
+        # statement it continues asks the question the patch actually raises.
+        elsewhere = {ln: at for ln, at in
+                     statement_start(heads.get(path, ""),
+                                     {ln for ln in lines
+                                      if ln not in info["measurable"]}).items()
+                     if at in info["measurable"]}
+        scored: set[int] = set()
         for ln in sorted(lines):
-            if ln not in info["measurable"]:
-                continue                       # comment, blank or docstring
-            (hit if ln in info["executed"] else missed).append(f"{path}:{ln}")
+            at = ln if ln in info["measurable"] else elsewhere.get(ln)
+            if at is None or at in scored:
+                continue               # a comment or blank, or a statement already counted
+            scored.add(at)
+            (hit if at in info["executed"] else missed).append(f"{path}:{at}")
     total = len(hit) + len(missed)
     if not total:
         # Say which of the two it was. django-16333 reported this with the fix's two

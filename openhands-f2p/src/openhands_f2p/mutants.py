@@ -46,6 +46,7 @@ from openhands_f2p import runners as R
 from openhands_f2p import swebench_env as E
 from openhands_f2p import verify as V
 from openhands_f2p.sandbox import Sandbox
+from openhands_f2p.statements import widen
 
 DEFAULT_MUTANTS = 10
 
@@ -128,8 +129,15 @@ def _candidates(source: str, filename: str, changed: set[int]) -> list[tuple]:
     from mutmut.mutation.file_mutation import create_mutations
 
     _configure_mutmut()
+    # `mutmut` selects by statement, so a patch whose only changed line is the
+    # continuation of a wrapped expression matches nothing and the instance reports "no
+    # mutations on the lines this patch changed" -- the same blind spot that made
+    # coverage call `sympy-21612` unmeasurable. Widening to the statement each changed
+    # line belongs to asks about the expression the patch actually edited. The originals
+    # stay in the set, so nothing that already matched stops matching.
+    wide = widen(source, changed) if changed else changed
     try:
-        module, mutations, _, _ = create_mutations(filename, source, changed or None)
+        module, mutations, _, _ = create_mutations(filename, source, wide or None)
     except ParserSyntaxError:
         # The only failure worth absorbing: a file this libcst cannot parse. Anything
         # else -- a missing config, a changed API -- has to surface, because silently
@@ -148,7 +156,7 @@ def _candidates(source: str, filename: str, changed: set[int]) -> list[tuple]:
         rows_b = mutated.splitlines()
         line = next((i + 1 for i, (a, b) in enumerate(zip(original, rows_b)) if a != b),
                     0)
-        if not line or line not in changed:
+        if not line or line not in wide:
             continue                   # mutmut reformatted something outside the patch
         index = seen_on_line.get(line, 0)
         seen_on_line[line] = index + 1

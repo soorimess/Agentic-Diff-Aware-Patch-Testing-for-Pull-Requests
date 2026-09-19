@@ -85,6 +85,16 @@ uv run python -m openhands_f2p.prompt --repo-search
 `{repo}`, `{test_file}`, `{problem}` are filled in by `prompt.py`. A brace that is meant
 literally must be doubled — `{{` — or formatting will fail.
 
+## `followups/`
+
+A subdirectory, because `pieces()` globs `prompts/*.md` and joins everything it finds into
+the opening prompt. What lives one level down is a message sent as its own turn, later in
+the same conversation, and only in the configurations that ask for one.
+
+| file | job |
+|---|---|
+| `second-chance.md` | refuses the agent's first stop, when the run ended with nothing a judge could score. Sent by `--second-chance`. Says only what the agent could have established at base -- never that the test failed against the fix, which exists only in the head run |
+
 ## A note on what belongs here
 
 Some of these instructions are load-bearing for the *measurement*, not for the model's

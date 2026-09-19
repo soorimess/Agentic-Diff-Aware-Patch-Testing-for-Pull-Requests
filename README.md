@@ -14,6 +14,7 @@ decisions behind them.
 - **Held-out evaluation, four models:** [evaluation/RUNS.md](evaluation/RUNS.md)
 - **Design:** [docs/system-design.md](docs/system-design.md)
 - **Why it is built that way:** [docs/decisions.md](docs/decisions.md) — the measurements, the bugs and the dead ends
+- **What to measure next:** [docs/experiments.md](docs/experiments.md) — queued experiments, with costs and wall clock
 - **Prompt design:** [openhands-f2p/src/openhands_f2p/prompts/README.md](openhands-f2p/src/openhands_f2p/prompts/README.md)
 
 The twenty-six instances in `out/out_full_run/` are the ones every prompt here was written
@@ -154,6 +155,7 @@ root, `openhands-f2p/.venv/bin/python main.py 3` also works.
 | `--out-root DIR` | write results here instead of `out/default/`. `out/` holds one folder per run |
 | `--label NAME` | a name for this run, recorded in every result |
 | `--max-iterations N` | cap on agent steps, default 100. One instance has reached it: `sphinx-7454` spent 91 of its 100 steps in `run`, searching rather than looping |
+| `--second-chance` | refuse the agent's first stop when the run ended with nothing to score for a reason it could have seen itself, and let it carry on once — on what is left of `--max-iterations`, so the arm costs no more budget than its control |
 
 The instances are in `src/openhands_f2p/prs.py`: 26 across 12 repositories, five django
 versions from 3.0 to 5.0, and for every other repository one old and one recent — the

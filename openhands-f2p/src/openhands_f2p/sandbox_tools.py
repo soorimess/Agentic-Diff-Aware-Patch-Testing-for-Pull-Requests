@@ -30,7 +30,7 @@ Three tools, deliberately not more:
 """
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, model_validator
 
 from openhands.sdk.tool import (
     Action,
@@ -53,6 +53,38 @@ TEST_TIMEOUT = 1800      # a test suite, which legitimately can take a while
 # useful part is the head and the tail, so clipping loses little.
 
 
+# Parameter names the models invented and how often, so the next reader can see whether
+# this is still happening. Filled by ToolArgs below; reported at the end of a run.
+INVENTED: dict[str, int] = {}
+
+
+class ToolArgs(Action):
+    """An Action that drops parameters the model invented instead of refusing the call.
+
+    The SDK's `Action` sets `extra="forbid"`, so a call carrying one unknown key dies with
+    a pydantic error and the model gets no result at all. Weaker models guess plausible
+    names -- `timeout` on a shell command, `commentary` beside a write -- and cannot
+    recover: the rejection is answered with an empty assistant turn whose recovery plan
+    sits in `reasoning_content`, where nothing reads it, and the same malformed call comes
+    back. On `sympy-21612` gpt-oss-20b spent 91 of its 100 actions in that loop, which
+    makes its score a measurement of this config line rather than of the model.
+
+    Dropping the extra is safe because the executor only ever reads declared fields. The
+    emitted JSON schema is unchanged -- pydantic does not add `additionalProperties` for
+    either setting -- so the model is told exactly what it was told before.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _count_invented(cls, data):
+        if isinstance(data, dict):
+            for key in data.keys() - cls.model_fields.keys():
+                INVENTED[key] = INVENTED.get(key, 0) + 1
+        return data
+
+
 def _clip(text: str, limit: int = MAX_OUTPUT) -> str:
     if len(text) <= limit:
         return text
@@ -62,7 +94,7 @@ def _clip(text: str, limit: int = MAX_OUTPUT) -> str:
 
 
 # --------------------------------------------------------------------------- run
-class RunAction(Action):
+class RunAction(ToolArgs):
     command: str = Field(description="Shell command to run inside the repository.")
 
 
@@ -106,7 +138,7 @@ class SandboxRunTool(ToolDefinition[RunAction, RunObservation]):
 
 
 # -------------------------------------------------------------------- write_file
-class WriteAction(Action):
+class WriteAction(ToolArgs):
     path: str = Field(description="Path to write, relative to the repository root.")
     content: str = Field(description="Full contents of the file.")
 
@@ -150,7 +182,7 @@ class SandboxWriteTool(ToolDefinition[WriteAction, WriteObservation]):
 
 
 # --------------------------------------------------------------------- run_tests
-class TestAction(Action):
+class TestAction(ToolArgs):
     target: str = Field(
         description="A test file path, or a specific test to run. "
                     "The correct runner for this repository is chosen for you.")
@@ -221,7 +253,7 @@ class SandboxTestTool(ToolDefinition[TestAction, TestObservation]):
 
 
 # ------------------------------------------------------------------- coverage
-class CoverageAction(Action):
+class CoverageAction(ToolArgs):
     target: str = Field(
         description="The test file to measure, same value you would pass to run_tests.")
 
@@ -308,7 +340,7 @@ class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
 
 
 # -------------------------------------------------------------------- mutation
-class MutationAction(Action):
+class MutationAction(ToolArgs):
     target: str = Field(
         description="The test file to try, same value you would pass to run_tests.")
 
@@ -395,7 +427,7 @@ class SandboxMutationTool(ToolDefinition[MutationAction, MutationObservation]):
 
 
 # --------------------------------------------------------------------- verify
-class VerifyAction(Action):
+class VerifyAction(ToolArgs):
     target: str = Field(
         description="The test file to check, same value you would pass to run_tests.")
 
@@ -573,6 +605,9 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     run a test against, and nothing to measure coverage of.
     """
     features = features if features is not None else FeatureSet.of()
+    # One process handles one instance under --parallel, but a serial run reuses this
+    # one, and a count that carried over would be attributed to the wrong instance.
+    INVENTED.clear()
     briefed = "repo-facts" in features
     made = {"run": SandboxRunTool.create(box=box, log=log)[0],
             "write_file": SandboxWriteTool.create(box=box, log=log)[0],

@@ -100,7 +100,8 @@ def _row(pr: dict, root: Path) -> dict:
             "config": _config_of(r),
             "mutation": r.get("mutation") or {},
             "tokens": (r.get("usage") or {}).get("total_tokens") or 0,
-            "cost": (r.get("usage") or {}).get("cost_usd") or 0.0}
+            "cost": (r.get("usage") or {}).get("cost_usd") or 0.0,
+            "second_chance": r.get("second_chance")}
 
 
 def build(root: Path = OUT) -> str:
@@ -131,9 +132,24 @@ def build(root: Path = OUT) -> str:
             f"verdict",
             f"- **{len(covs)}** measured for changed-line coverage; "
             f"median {sorted(covs)[len(covs) // 2]:.0f}%" if covs else "",
-            f"- ${sum(r['cost'] for r in rows):.2f} and "
+            # Escaped: a bare `$` opens LaTeX math in renderers that support it, and a
+            # second `$` later in the line closes it -- the cost line and every figure
+            # after it then render as typeset algebra.
+            f"- \\${sum(r['cost'] for r in rows):.2f} and "
             f"{sum(r['tokens'] for r in rows) / 1e6:.1f}M tokens in total",
             ""]
+
+    # A second chance is not part of the feature configuration, so the `full` line below
+    # says nothing about it -- and two runs that differ only by this are not comparable.
+    # Naming it here is what keeps that visible in the table rather than only in the
+    # per-instance JSON.
+    retried = [r for r in rows if r.get("second_chance")]
+    if retried:
+        why = sorted({r["second_chance"]["reason"] for r in retried})
+        out[-1:] = [f"- **{len(retried)}** of these were sent a second-chance message "
+                    f"after stopping with nothing to score ({', '.join(why)}); the "
+                    f"other {len(rows) - len(retried)} finished or failed for a reason "
+                    f"the agent could not have seen at base", ""]
 
     # The column only exists when something filled it. A `mutants` column of dashes on
     # every row of every table describes nothing and pushes the rest sideways.

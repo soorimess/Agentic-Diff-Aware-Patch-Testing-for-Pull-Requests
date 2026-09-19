@@ -138,6 +138,21 @@ def _check_no_absent_tools(text: str, features: FeatureSet) -> None:
             f"{{?feature}} block in the piece that mentions it.")
 
 
+def followup(name: str, **fields: object) -> str:
+    """A message sent *after* the task, from `prompts/followups/`.
+
+    These live in a subdirectory because `pieces()` globs `prompts/*.md` and joins
+    everything it finds into the opening prompt. A follow-up is not part of that -- it is
+    a separate turn, sent only in the configurations that ask for one -- so putting it
+    one level down is what keeps it out, rather than a name the glob has to remember to
+    skip.
+
+    Same header convention as a piece, and the header is stripped the same way.
+    """
+    body = _parse(PROMPTS / "followups" / f"{name}.md").body
+    return body.strip().format(**fields)
+
+
 def build(*, repo: str, test_file: str, problem: str = "", repo_facts: str = "",
           patch: str = "", features: FeatureSet | None = None,
           skip: object = None) -> str:

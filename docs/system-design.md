@@ -300,10 +300,10 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 728 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
-| `checks.py` | 119 | What the agent actually did, checked rather than assumed. |
+| `agent.py` | 855 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `checks.py` | 131 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 175 | Does the generated test check the same thing the developer's test checks? |
-| `coverage_metric.py` | 398 | Of the lines this pull request changed, how many did the test execute? |
+| `coverage_metric.py` | 416 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
 | `features.py` | 226 | What the agent is given, as one registry that everything else reads. |
@@ -314,19 +314,20 @@ That makes every shared resource a hazard, and two were real:
 | `llm_adapters.py` | 64 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 169 | One place the model connection is configured, shared by every caller. |
 | `models.py` | 280 | Which model answers, and what it needs, read from `models.json`. |
-| `mutants.py` | 504 | Does the test notice when the fix is subtly wrong? |
+| `mutants.py` | 512 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
-| `parallel.py` | 243 | Running several pull requests at once, as separate processes. |
-| `prompt.py` | 209 | Assemble the agent's prompt from the pieces in prompts/. |
+| `parallel.py` | 245 | Running several pull requests at once, as separate processes. |
+| `prompt.py` | 224 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 315 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 274 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
-| `sandbox.py` | 283 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 632 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `runs.py` | 290 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
+| `sandbox.py` | 296 | One container per instance, and the only door into it. |
+| `sandbox_tools.py` | 667 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 304 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 307 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 357 | The F2P decision. One implementation, used by every arm. |
 <!-- /generated:modules -->
 
 ## The agent's tools
@@ -387,6 +388,11 @@ one arm and kept for another.
 | `58-finish.md` | The stop condition, on its own so that changing when the agent stops does not mean editing what it checks. Rewritten twice. The first version ended the sequence |
 <!-- /generated:prompts -->
 
+`prompts/followups/` holds messages sent *after* the task rather than pieces of it, and
+the table above does not list them because `pieces()` globs `prompts/*.md` and joins
+everything it finds into the opening prompt. There is one: `second-chance.md`, sent by
+`--second-chance` when a run stops with nothing a judge could score.
+
 Some of it is load-bearing for the *measurement*: `50-rules.md` forbids editing anything
 but the test file, without which an agent can make any test pass by changing the library
 and the "before" run stops being a fact about the pull request.
@@ -439,11 +445,31 @@ And `reveal_runner` controls whether a tool's *description* names the runner com
 with `_check_no_leak` refusing to register one that does while `repo-facts` is withheld.
 Each of those was a leak or a manufactured failure first ([decisions.md](decisions.md)).
 
+### New files are allowed; edits are not
+
+The agent may create whatever files its test genuinely needs -- a fixture directory, a
+sample package, data to read. It may not modify or delete a file that was already there.
+
+The asymmetry is the whole point, and it is about the measurement rather than about
+tidiness. **A file that did not exist at base is present in the before run and the after
+run alike, so it cannot make a test appear to flip.** A file that did exist and now
+differs can: library source most obviously, and an edited fixture also risks rejecting the
+maintainer's test when that is applied later.
+
+This is enforced, not requested. `tree_status()` separates git's `??` from `M` and `D`,
+and a run that altered anything pre-existing is recorded `BROKEN` with the paths named --
+its before-the-fix run is not a fact about the pull request, whatever the test does.
+Mutation is skipped for it, since there is nothing trustworthy to mutate against.
+
+The rule used to be "create only the test file", which is a blunter proxy for the same
+concern and one that forbids what real tests need: `sphinx-10614`'s bug is about links
+*in nested directories*, the base fixture has no nested directory, and the maintainer's
+own test for it touches six files. See [decisions.md](decisions.md).
+
 ### What the agent changed, verified
 
-The measurement rests on the agent not having edited the library. The tree is compared
-against a snapshot taken before the agent is let in, held in a repository **outside** the
-checkout:
+The tree is compared against a snapshot taken before the agent is let in, held in a
+repository **outside** the checkout:
 
     git --git-dir=/tmp/f2p_tree.git --work-tree=/testbed
 
@@ -532,6 +558,7 @@ uv run openhands-f2p --out-root out/nocov --no-coverage-tool
 | `--dry-run` | show the target path and runner command, make no LLM call |
 | `--no-compare` | skip the concept judgement against the developer's test |
 | `--mutants` | after the verdict, mutate the lines the patch changed with mutmut and count how many mutants each test kills -- the generated one and the developer's, on the same set. Bare --mutants uses 10. Deterministic and offline; the diffs land in <run>/<id>/mutations/. 0 is off |
+| `--second-chance` | refuse the first stop. When a run ends with nothing to score for a reason the agent could have seen itself -- no file written, a file that collects nothing, a test that passes on the unfixed code -- say so and let it carry on, once, on whatever is left of --max-iterations. The cap is not raised and not reset, so a run that stopped at 41 of 100 resumes with 59 and one that reached the cap gets nothing. Never quotes the run against the fixed code, so the agent still only knows what it could establish at base |
 | `--mutate-saved` | measure mutation on the tests already written, without running the agent again. Adds the `mutation` field and changes nothing else. Needs --mutants N |
 | `--recheck` | re-judge the saved tests under the current harness, without calling the model again |
 | `--retry-broken` | run only instances with no result, or whose result is BROKEN. A BROKEN verdict records that the harness or the connection failed and says nothing about the instance, so it is worth retrying; YES and NO are findings and are left alone |
@@ -612,6 +639,24 @@ on instances it was not tuned against.
 and what it says about where a tool can still help are in
 [`evaluation/RUNS.md`](../evaluation/RUNS.md) and [decisions.md](decisions.md).
 
+## A line is not always a statement
+
+Coverage and `mutmut` both work in statements, and a changed line need not be one. A
+continuation -- the second line of a wrapped condition -- is in coverage's
+`executed_lines` when it runs and in neither list when it does not, so it can be scored
+*hit* and never *missed*, and `mutmut` offers nothing on it at all.
+
+`statements.py` maps a line to the innermost statement containing it. Coverage scores the
+statement when the changed line itself is unmeasurable, deduplicated so two continuations
+of one statement count once; `mutants.py` widens the line set it hands `create_mutations`
+the same way. A line that is blank or a bare comment maps to nothing, so a patch touching
+only comments is still correctly reported as having nothing to measure.
+
+Widening applies to continuation lines only: a changed line that is already a statement
+start maps to itself and nothing changes, which is every ordinary patch. Where it does
+apply it widens the question from *this line* to *this statement*, which is the unit the
+tools can actually answer for. See [decisions.md](decisions.md).
+
 ## Not spending a run to discover it will fail
 
 Two checks run once at startup, before any container. `daemon_refusal` runs `docker info`;
@@ -632,20 +677,6 @@ Both failures have happened, and both cost a run to discover before the checks e
   written carelessly would undo it.
 - **Memorisation is not addressed.** `psf/requests` is among the most-copied Python
   repositories on the internet. That can be disclosed, not closed.
-- **A changed line that is a statement continuation is invisible to coverage, and to
-  mutation.** Coverage reports `executed_lines` and `missing_lines`; a continuation line
-  is not a statement, so it never appears in `missing_lines` and appears in `executed_lines`
-  only when it runs. It can therefore be scored as *hit* but never as *missed*.
-  `sympy-21612` changes exactly one such line -- the second line of a wrapped `if` -- and
-  is reported `not measured -- the changed lines are all comments or blanks`, which is
-  false: it is executable code the test did not reach, and the honest reading is 0%, not
-  unmeasurable. It removes a zero from the average rather than recording one. `mutmut`
-  offers nothing on that line for the same reason. One fix covers both: map each changed
-  line to the first line of the statement containing it before filtering.
-- **A truncated run reads as a considered verdict.** Hitting `--max-iterations` with a
-  test already written falls through to normal scoring, so the result says
-  "passes before the fix too" with no sign the agent was cut off mid-iteration. The
-  `capped` flag is computed and stored; it does not reach the `why`.
 - **`BROKEN` conflates the harness failing with the model failing.** It means "the harness
   or connection broke, this says nothing about the instance", and `--retry-broken` treats
   it as retryable. But a model that writes a file which does not import is recorded

@@ -56,14 +56,26 @@ def audit(box: E.Sandbox, tool_log: list, test_file: str) -> dict:
     # This also covers what the tool log cannot. `files_written_outside_test` sees
     # `write_file` calls; an agent editing source with `sed -i` or a shell redirect is
     # invisible to it. The tree is not.
-    touched = [p for p in box.tree_changes() if p != test_file]
+    status = [(code, p) for code, p in box.tree_status() if p != test_file]
+    touched = [p for _, p in status]
+    # Added against modified, because only one of them can void the measurement. A file
+    # that did not exist at base is present in the before run and the after run alike, so
+    # it cannot manufacture a flip; a file that did exist and now differs can, and if it
+    # is library source it makes the before run a fact about something other than the
+    # pull request.
+    added = sorted(p for code, p in status if code in ("??", "A"))
+    altered = sorted(p for code, p in status if code not in ("??", "A"))
     return {"network_attempts": tried_network,
             "files_written_outside_test": wrote_elsewhere,
             "isolation": box.audit_isolation(),
             "tree_changed": touched,
+            "tree_added": added,
+            "tree_altered": altered,
             "vcs": "clean apart from the test" if not touched
-                   else f"{len(touched)} other path(s) changed: "
-                        f"{', '.join(touched[:5])}"[:300]}
+                   else (f"{len(added)} file(s) added"
+                         + (f", {len(altered)} pre-existing file(s) changed: "
+                            f"{', '.join(altered[:5])}" if altered else "")
+                        )[:300]}
 
 
 def budget_exhausted(out_dir: Path) -> dict | None:

@@ -17,11 +17,19 @@ job: The constraints. The first one is load-bearing for the measurement rather t
   It names no metric: preferring a draft you have run to a file you have skimmed is how the
   work is done whether or not anyone is scoring it.
 ---
-Create only `{test_file}`. Do not modify, create or delete any other file.
+Your test goes in `{test_file}`. If it genuinely needs more than that — a fixture
+directory, a sample package to import, data to read — create those files too. Give them
+names of your own rather than reusing an existing fixture's.
 
-In particular, do not change the library source to make your test pass. The test is
-supposed to fail here — that is the entire point — and editing the code under test
-destroys the measurement.
+**Do not modify or delete a file that is already here.** Not the library: the test is
+supposed to fail on this code, that is the entire point, and editing what it tests
+destroys the measurement rather than passing it. And not an existing test or fixture
+either — the maintainer's own test for this bug is applied to this tree later, and a file
+you changed underneath it may no longer accept it.
+
+New files are safe in a way edits are not: a file that did not exist before is there when
+the test runs against the old code and against the fixed code alike, so it cannot make a
+test appear to flip. A file you edited can.
 
 Read the source before you write -- enough to know what to assert, not enough to be
 certain of everything. Then get a test running, and let what it does correct the rest of
