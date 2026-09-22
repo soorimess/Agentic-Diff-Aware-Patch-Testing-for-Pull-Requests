@@ -169,6 +169,95 @@ def shortfall(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str, st
     return None
 
 
+def loop_gap(tool_log: list, instruments: tuple[str, ...],
+             rel: str) -> tuple[str, str] | None:
+    """Whether the finishing loop actually closed, read off the agent's own actions.
+
+    The earlier version of this asked only whether each tool *appeared* in the log, and
+    that was the same Goodhart mistake the prompt rules are written to avoid: it measured
+    the call instead of the answer. Four of five failures in the run that introduced it
+    ended immediately after `verify` reported NOT fail-to-pass -- requirement satisfied,
+    goal unmet -- while `pylint-7277` called `verify` seventeen times and `matplotlib`
+    once. The count carried almost no information about whether the loop had closed.
+
+    So each instrument is judged by what it last said and whether that answer still
+    describes the file on disk:
+
+    `verify`   must have been called, must last have reported fail-to-pass, and nothing
+               may have been written since -- an answer about a file that has been edited
+               is an answer about a file that no longer exists.
+    `coverage` must have been called, and if it last reported under 100% the agent must
+               have edited the test after seeing that. Not a demand for 100%, which is
+               often unreachable: a demand that a shortfall was answered once rather than
+               read and passed over.
+    `mutation` must have been called, and that is all. Survivors are for the agent to
+               weigh -- some are genuinely outside what the change fixes -- and requiring
+               a response would be an instruction to close the list rather than to
+               understand it. Read `astropy-13398` before loosening this: mutation
+               reported 0 of 10 killed, the agent added a second test to answer it, the
+               new test failed on both sides, and a file whose first test flipped
+               correctly scored NO.
+
+    Pure, and reads only the agent's own record, so nothing here can leak the head run.
+    Returns `(reason, what_to_say)` or `None` when the loop is closed.
+    """
+    def last(tool: str) -> tuple[int, dict] | None:
+        found = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool]
+        return found[-1] if found else None
+
+    def wrote_after(i: int) -> bool:
+        return any(e.get("tool") == "write_file" for e in tool_log[i + 1:])
+
+    gaps = []
+    if "verify" in instruments:
+        got = last("verify")
+        if got is None:
+            gaps.append(f"You never called `verify`, so nothing has established the one "
+                        f"property the test must have.")
+        else:
+            i, e = got
+            still = [n for n, st in (e.get("after") or {}).items() if st in BEHAVIOURAL]
+            if not e.get("flipped") or still:
+                said = (f"{len(still)} test(s) still failing after the change"
+                        if still else "nothing flipped")
+                gaps.append(f"The last `verify` said **not fail-to-pass** -- {said}. That "
+                            f"is the answer to the only question that decides this run, "
+                            f"and the test has not changed since. Fix the test and call "
+                            f"`verify` again.")
+            elif wrote_after(i):
+                gaps.append(f"You edited the test after the last `verify`, so the "
+                            f"fail-to-pass result describes a file that no longer exists. "
+                            f"Call `verify` again on what is on disk now.")
+    if "coverage" in instruments:
+        got = last("coverage")
+        if got is None:
+            gaps.append(f"You never called `coverage`, so which lines of the change your "
+                        f"test reaches is unknown.")
+        else:
+            i, e = got
+            cov = e.get("result") or {}
+            if cov.get("measured") and cov.get("percent", 100) < 100 and not wrote_after(i):
+                gaps.append(f"`coverage` last reported {cov['percent']:.0f}% of the "
+                            f"changed lines ({cov['covered']}/"
+                            f"{cov['executable_changed_lines']}) and you changed nothing "
+                            f"after reading it. Work the missed lines: decide for each "
+                            f"whether it is the same behaviour by another route, a "
+                            f"separate case that deserves its own test, or genuinely "
+                            f"outside this test -- then act on that and call `coverage` "
+                            f"again.")
+    if "mutation" in instruments and last("mutation") is None:
+        gaps.append(f"You never called `mutation`. Call it and read the survivors: each "
+                    f"is a wrong version of this change your test cannot tell from the "
+                    f"right one. You are not required to close them -- some are outside "
+                    f"what the pull request fixes -- but you are required to have looked, "
+                    f"because it is the only check that asks whether your assertions "
+                    f"have force.")
+    if not gaps:
+        return None
+    return ("loop_open", f"The finishing loop on `{rel}` is not closed.\n\n"
+                         + "\n\n".join(f"* {g}" for g in gaps))
+
+
 def targets_for_gold(box: Sandbox, instance: dict[str, Any]) -> list[str]:
     """What to run when the candidate is the developer's own test.
 

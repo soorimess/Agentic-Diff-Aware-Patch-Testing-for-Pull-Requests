@@ -14,10 +14,13 @@ passes today and will still pass tomorrow if that branch breaks again. The misse
 are the inputs you did not think of, and the conditions printed above each one say what
 your input has to satisfy to get there.
 
-Work at this one rather than reading it once. Call `coverage`, decide what the missed
-lines are, change the test, call it again — you do not need to re-run the earlier checks
-in between, and you should keep going until what remains is missed for a reason you can
-state.
+**Call `coverage`, and if it comes back under 100%, change the test before you stop.**
+That is the rule, and it is checked: a run that reads a shortfall and does nothing about
+it will be sent back. It is not a demand for 100% — often the remaining lines are
+genuinely outside what this test is for — it is a demand that a shortfall gets answered
+once rather than noted and passed over. Decide what the missed lines are, change the test,
+call `coverage` again; you do not need to re-run the earlier checks in between. Keep going
+until what remains is missed for a reason you can state in a sentence.
 
 A low figure is not a bad mark. It is a description of your test, usually a precise one:
 the change has more than one path through it and you took one. So ask whether the missed

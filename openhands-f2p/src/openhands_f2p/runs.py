@@ -72,8 +72,46 @@ def _ran_at(d: Path, f: Path, r: dict) -> datetime:
 # time a series directory held five of them.
 BLANK = {"f2p": "\u2014", "when": "", "cov": None, "covered": None, "total": None,
          "actions": None, "why": "never run", "judge": "\u2014", "issue": "\u2014",
+         "tools": "\u2014",
          "readable": "\u2014", "uncovered": [], "rechecked": False,
          "config": "\u2014", "tokens": 0, "cost": 0.0, "mutation": {}}
+
+
+def _tools(d: Path) -> str:
+    """Which tools the agent reached for, and how many times each.
+
+    From `tool_log.json` rather than the action count, because the two answer different
+    questions. `actions` says how much the agent did; this says what it did it *with*, and
+    across the model ladder that is the difference that predicts the verdict -- a run that
+    never calls `verify` is a run that never checked the one property it was asked for.
+
+    Ordered by count so the shape reads at a glance: `run x94` beside a single
+    `write_file` is a reading loop, whatever the total says.
+    """
+    f = d / "tool_log.json"
+    if not f.exists():
+        return "\u2014"
+    try:
+        log = json.loads(f.read_text())
+    except (ValueError, OSError):
+        return "\u2014"
+    counts: dict[str, int] = {}
+    reverted = 0
+    for e in log:
+        name = e.get("tool") or "?"
+        # `guard` is the harness undoing an edit to a pre-existing file, not a tool the
+        # agent chose. Counting it here put a call in the column the agent never made and
+        # left the row summing to one more than its own action count. It stays in the
+        # cell, because an agent working against the rules is the most interesting thing
+        # a row can say -- but as an annotation, not an instrument.
+        if name == "guard":
+            reverted += len(e.get("reverted") or []) or 1
+            continue
+        counts[name] = counts.get(name, 0) + 1
+    body = ", ".join(f"`{k}` x{v}" for k, v in
+                     sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))) or "none"
+    return f"{body}  (+{reverted} edit{'s' if reverted > 1 else ''} reverted)" \
+        if reverted else body
 
 
 def _row(pr: dict, root: Path) -> dict:
@@ -89,6 +127,7 @@ def _row(pr: dict, root: Path) -> dict:
             "cov": c.get("percent") if c.get("measured") else None,
             "covered": c.get("covered"), "total": c.get("executable_changed_lines"),
             "actions": r.get("actions"), "why": (r.get("why") or "").strip(),
+            "tools": _tools(d),
             "judge": (r.get("concept") or {}).get("verdict", "—"),
             "issue": ((r.get("concept") or {}).get("issue_coverage")
                       or {}).get("verdict", "—"),
@@ -198,9 +237,9 @@ def build(root: Path = OUT) -> str:
                "The individual diffs are in each instance's `mutations/`.", ""]),
             f"| instance | version | verdict | coverage |"
             f"{' mutants: agent test | mutants: dev test |' if has_mutation else ''}"
-            f" actions | concept | issue | readable | last run |",
+            f" actions | tools used | concept | issue | readable | last run |",
             f"|---|---|---|---|{'---|---|' if has_mutation else ''}"
-            f"---|---|---|---|---|"]
+            f"---|---|---|---|---|---|"]
     for r in rows:
         cov = (f"{r['cov']:.0f}% ({r['covered']}/{r['total']})"
                if r["cov"] is not None else "—")
@@ -217,6 +256,7 @@ def build(root: Path = OUT) -> str:
         out.append(f"| [`{r['id']}`](./{r['id']}/) | {r['version']} | "
                    f"{r['f2p']}{' ¹' if r['rechecked'] else ''} | {cov} |{cell} "
                    f"{r['actions'] if r['actions'] is not None else '—'} | "
+                   f"{r['tools']} | "
                    f"{r['judge']} | {r['issue']} | {r['readable']} | "
                    f"{r['when'] or '—'} |")
     if any(r["rechecked"] for r in rows):

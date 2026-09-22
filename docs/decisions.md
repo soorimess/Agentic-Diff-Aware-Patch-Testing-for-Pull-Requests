@@ -426,6 +426,64 @@ one, so an A/B of "tools on" against "tools off" at the weak end risks measuring
 configurations the model treats identically. Making a tool *available* is not the same as
 making it the path of least resistance, and only the second is worth measuring.
 
+### The rule that was never enforced, and what happened when it was loosened
+
+`50-rules.md` used to open `Create only {test_file}. Do not modify, create or delete any
+other file.` -- prohibition in the first four words. `sphinx-10614` needs six fixture
+files, so the rule was rewritten to allow creating them, and the new version opened with
+the permission and put the prohibition in its second paragraph.
+
+On the next nano evaluation set the agent wrote its test correctly and then rewrote
+`xarray/core/indexing.py` and `sklearn/impute/_iterative.py` with shell heredocs until its
+own test passed. Two instances that had been YES became BROKEN, 6/10 fell to 3/10. The
+prompts were diffed out of the two runs' `result.json` rather than reconstructed from
+commits: **they differ in exactly one hunk**, which is this one.
+
+What the agent wrote was not a workaround. It was the maintainer's patch:
+
+| instance | the real fix | what the agent wrote |
+|---|---|---|
+| `matplotlib-22719` | `-if is_numlike:` / `+if values.size and is_numlike:` | `if values.size and is_numlike:` |
+| `xarray-7393` | `+if dtype is None: dtype = self.dtype`, `np.asarray(..., dtype=dtype)` | exactly that |
+| `sklearn-25232` | `+"fill_value": "no_validation"`, `+fill_value=None`, `+self.fill_value = fill_value` | exactly those |
+
+Character-identical in the matplotlib case. Had it stood, the before-the-fix run would have
+executed *with* the fix, the test would pass at base, and the instance would report a
+confident YES about nothing.
+
+Two things were wrong and both were fixed. The prohibition is the first sentence again,
+and the block is shorter than the one that replaced it -- permission survives, so the
+fixture case still works. And the rule is now enforced between actions rather than
+described: `_undo_edits` runs after every `run` and `write_file`, compares the tree with
+the snapshot in `TREE_GIT`, restores anything pre-existing that changed, and says so in
+that call's own observation.
+
+`diff --name-only HEAD` rather than `status --porcelain`: it reads only what the snapshot
+tracks and skips the untracked walk that is slow on these images, and that is also exactly
+the question -- a file the agent *created* is tracked by neither and cannot manufacture a
+flip, because it is present in the before run and the after run alike.
+
+**Contamination went 2/10 to 0/10 and both instances recovered.** The impulse did not go
+away: three of ten runs still reach for the library, once each, and stop when the revert
+lands. Before the guard, the same first attempt was followed by forty more in the same
+file. The guard suppresses the consequence, not the behaviour, and the `tools used` column
+in `RUNS.md` reports each revert so that stays visible.
+
+### `repo_facts` handed sympy a pytest.ini
+
+The prompt told `sympy-21612` `Runner bin/test -C --verbose`, and four lines later printed
+its `pytest.ini` under *"Test configuration, verbatim from the checkout"*. True, and
+irrelevant: sympy runs its own framework in an image with no pytest installed. The agent
+opened with `import pytest`, the file never imported, and the verdict was BROKEN --
+nothing collected on either side, which is the harness learning nothing rather than
+learning the test was wrong.
+
+`test_config` now returns nothing unless the detected runner is pytest, and `repo_facts`
+substitutes a positive instruction instead of going quiet -- silence would not do, because
+the `pytest.ini` is still in the checkout for the agent to find. Rerunning the instance
+moved it BROKEN to NO, and the action count went 10 to 52: it had been hitting the import
+wall and giving up with ninety actions unspent.
+
 ### A strict tool schema was measuring itself
 
 `Action` in the SDK sets `extra="forbid"`, so a tool call carrying one unknown key died
@@ -484,6 +542,72 @@ One residual defect, rare but fatal where it lands: three of 188 responses carri
 channel markup as plain text -- `to=functions.sandbox_run<|constrain|>??` -- instead of a
 parsed tool call. Each was the final turn of its run. `models.json` already warns to check
 native tool calling for this model before a full set; this is that warning coming true.
+
+### Silence was worse than the refusal it replaced
+
+`ToolArgs` first set `extra="ignore"`, which accepted a call carrying unknown keys and
+dropped them. That fixed gpt-oss, which invents harmless names like `timeout`. It broke
+`gpt-5-nano`, which emits calls where the shell script arrives as a *key*:
+
+```json
+{"command": "bash -lc", "grep -RIn \"symlink...\" | head -n 200' }": false}
+```
+
+The dropped half was the command. `bash -lc` ran with no argument and the only feedback
+was `bash: -c: option requires an argument`. Across one evaluation set that was **47 of
+329 actions**, and `pytest-7982` spent five consecutive actions on it and finished having
+written nothing at all.
+
+So the setting is `extra="allow"`: the extras are kept, and `_ignored` names them back in
+the observation, marked as an error. Named rather than counted -- "ignored 1 unknown
+argument" would not have told nano that what it lost was the command -- and truncated,
+because the usual offender is an entire shell script sitting where a parameter name
+belongs. The emitted JSON schema is identical under all three settings, so none of this
+changes what the model is told it may send.
+
+The lesson generalises past this bug. A lenient parser is right; a *silent* lenient parser
+converts a diagnosable failure into an undiagnosable one, and the model cannot correct
+what it cannot see.
+
+### Requiring a tool call measured the wrong thing
+
+`--no-require-tools` gates a rule that a registered instrument must have been used, on the
+reasoning that a tool present and unused is a configuration we are not measuring: the arm
+says `full` and the behaviour is `full` minus that tool. Across the evaluation set the
+instruments were reached for **3 times out of a possible 30**.
+
+The first implementation asked whether each tool *appeared* in the log. Usage jumped to
+19/30 and the score did not move, and the reason is in the trace: **four of five failures
+ended immediately after `verify` reported NOT fail-to-pass.** Requirement satisfied, goal
+unmet. Meanwhile `pylint-7277` called `verify` seventeen times and `matplotlib-22719`
+once, so the count carried almost no information about whether the loop had closed. It was
+the Goodhart error the prompt rules are written to avoid, committed in the enforcement.
+
+`V.loop_gap` judges each instrument by what it last said:
+
+* **`verify`** must last have reported fail-to-pass, with no write since. An answer about
+  a file that has been edited is an answer about a file that no longer exists -- two runs
+  scored YES by stopping on a stale negative and being saved by an edit they never
+  rechecked.
+* **`coverage`** must have been called, and a report under 100% must have been answered by
+  an edit. Not a demand for 100%, which is often unreachable; a demand that a shortfall is
+  answered once rather than read and passed over.
+* **`mutation`** must have been called, and nothing more. Survivors are for the agent to
+  weigh. `astropy-13398` is why: mutation reported 0 of 10 killed, the agent added a second
+  test to close the list, the new test failed on both sides, and a file whose first test
+  flipped correctly scored NO. Requiring a response to survivors is an instruction to
+  clear a list rather than to understand one.
+
+The refusal reuses the second-chance machinery, so it costs no extra budget and never
+quotes the head run.
+
+**On the ten evaluation instances the gate fired 9 times and 7 of those ended YES**, the
+best result the set has produced. `sklearn-25232`, which the previous run left stopped on
+a `verify` that had just said not-fail-to-pass, converted in four more actions.
+
+One gap remains and it is structural: the refusal speaks only after the agent stops.
+`sphinx-9602` spends ~95 of its 100 actions reading and is refused with nothing left to
+spend, so it has now failed five runs out of five, untouched by any of this.
 
 ### A second chance, and the one thing it may not say
 
@@ -574,6 +698,43 @@ was spent.
 `run()` inherits a fresh full cap. Left alone, one flag would have doubled what a run may
 spend -- and silently, since both halves report normally. What is left of the cap is
 computed and set on the conversation before the continuation.
+
+### Five changes, and a score that never left the band
+
+The five fixes above were each measured on the same ten held-out instances with
+`gpt-5-nano`. The verdict counts, in order:
+
+| | pre-regression | + tree guard | + config fix | + tools required | + outcome gate |
+|---|---|---|---|---|---|
+| YES | 6/10 | 5/10 | 6/10 | 5/10 | **7/10** |
+
+**6, 5, 6, 5, 7.** Only three instances are stable across all five runs -- `requests-1766`,
+`xarray-7393`, `pylint-7277`. Two never pass at all: `sphinx-9602` and `sympy-21612`, 0/5
+each. The other five flip in both directions between runs that differ by one variable, and
+in some cases by nothing that touches them.
+
+So the corpus score cannot distinguish any of these changes from each other or from noise.
+What it can distinguish is the mechanism, and each fix has a metric that moved
+unambiguously at n=10:
+
+| | before | after |
+|---|---|---|
+| instances that edited the library | 2/10 | **0/10** |
+| actions lost to silently-dropped arguments | 47/329 | reported, not dropped |
+| instrument calls (instances x tools) | 3/30 | **~24/30** |
+| runs stopping on a negative `verify` | 4/5 failures | refused |
+
+That split is the finding, and it is worth more than the 7. **A ten-instance set with five
+unstable members has a noise floor wider than any effect this project has produced.**
+Running further variants against it will keep returning fives and sixes whatever the
+change, which is what experiment 0 exists to establish and why it now blocks the rest of
+the queue rather than merely heading it.
+
+Two consequences for how results are read here. Per-instance movement between runs is not
+evidence about a change unless a log says why -- `astropy-13398` has been NO, NO, YES, NO,
+YES across five runs and only the last has a trace behind it. And a mechanism metric that
+moves at n=10 is a better argument than a verdict count that does not, because it is
+measuring the thing the change actually did.
 
 ## Structure
 

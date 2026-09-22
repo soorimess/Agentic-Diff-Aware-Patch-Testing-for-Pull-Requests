@@ -266,12 +266,23 @@ ARGS_HELP = {
 
 
 def test_config(box) -> str:
-    """The project's own pytest configuration, verbatim.
+    """The project's own pytest configuration, verbatim -- when pytest is what runs.
 
     Not summarised. `xfail_strict = true` means an unexpected pass is a failure and
     `filterwarnings = error` means a warning ends the test -- both change what a test has
     to look like here, and both are clearer in the file than in a description of it.
+
+    Withheld when the project ships its own runner, because then the file is not
+    describing what will happen. sympy has a `pytest.ini` and runs `bin/test`, its own
+    framework, in an image with no pytest installed; handing the agent that file under
+    the heading "test configuration, verbatim from the checkout" read as permission to
+    write a pytest test. `sympy-21612` opened with `import pytest`, the module never
+    imported, and the verdict was BROKEN -- nothing collected on either side. The
+    configuration was true and irrelevant, which is the worst thing a fact in a prompt
+    can be.
     """
+    if runner_for(box)["cmd"] != PYTEST:
+        return ""
     out = []
     for name in CONFIG_FILES:
         if not box.exists(name):
@@ -312,4 +323,13 @@ def repo_facts(box, test_file: str) -> str:
     if config:
         lines += ["", "Test configuration, verbatim from the checkout:", ""]
         lines += [f"  {line}" for line in config.splitlines()]
+    elif runner["cmd"] != PYTEST:
+        # Said outright rather than left to be inferred from the runner line above it.
+        # A `pytest.ini` can still be sitting in the checkout for the agent to find, and
+        # the import failure it invites costs the whole run: the file does not import, so
+        # nothing is collected on either side and there is no verdict to read.
+        lines += ["", f"This project does not run pytest -- it runs `{runner['cmd']}`. "
+                      f"Write for that runner: plain `assert`, no `import pytest`, no "
+                      f"fixtures or decorators from it. pytest may not be installed here "
+                      f"at all, and a file that imports it never runs."]
     return "\n".join(lines)

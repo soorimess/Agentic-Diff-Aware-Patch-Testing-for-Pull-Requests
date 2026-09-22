@@ -53,5 +53,26 @@ The last thing you run before finishing should be `verify`: an assertion added t
 anything else can quietly stop the test failing on the old code.
 {/verify-tool}
 
+{?require-tools}
+**These are checked by their answers, not by whether you called them.** Before you can
+stop:
+{?verify-tool}
+* the last `verify` must say fail-to-pass, and you must not have edited the test since —
+  an answer about a file you have changed is an answer about a file that no longer exists;
+{/verify-tool}
+{?coverage-tool}
+* `coverage` must have been called, and if it last reported under 100% you must have
+  changed the test after reading that;
+{/coverage-tool}
+{?mutation-tool}
+* `mutation` must have been called and its survivors read. You need not change anything
+  because of them.
+{/mutation-tool}
+
+Calling a tool once and stopping on a bad answer does not satisfy this. If any of the
+above is open you will be sent back with the reason, so closing it now is the shorter
+path.
+{/require-tools}
+
 You are finished when the checks above have been run against the test as it now stands
 and nothing any of them raised is still unanswered. Say in one sentence what behaviour your test pins down, and stop.

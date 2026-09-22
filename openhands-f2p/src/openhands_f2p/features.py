@@ -89,6 +89,13 @@ FEATURES: tuple[Feature, ...] = (
                              "shown",
             needs=("patch", "verify-tool"), tools=("mutation",),
             aliases=("--no-mutation",)),
+    Feature("require-tools", "stop requiring the agent to have used the tools it was "
+                             "given. With this on -- the default -- a run that finishes "
+                             "without calling a registered instrument is sent back with "
+                             "the names of the ones it skipped, because a tool that is "
+                             "present and unused is a configuration we are not actually "
+                             "measuring",
+            needs=("verify-tool",)),
     Feature("repo-facts", "withhold the briefing on how this project tests: the target "
                           "convention, where a new test file has to live to be "
                           "collected, the neighbouring tests and the test "
@@ -102,6 +109,22 @@ BY_NAME = {f.name: f for f in FEATURES}
 # At least one of these has to survive, or nothing in the prompt says what bug to write
 # a test for.
 DESCRIBES_THE_BUG = ("issue", "patch")
+
+
+def instruments(features: "FeatureSet") -> tuple[str, ...]:
+    """Tools the agent holds in this configuration and is expected to have used.
+
+    Read off the registry rather than listed, so a tool added later is covered without
+    anyone remembering this function. Only tools a feature *owns* count: `run`,
+    `write_file` and `run_tests` exist in every configuration and are means rather than
+    checks, while `verify`, `coverage` and `mutation` each answer a question nothing else
+    answers, which is the whole reason they were built.
+
+    The point of the list is that a registered tool that goes uncalled is not a result
+    about the model. It is a configuration we never actually ran: the arm says `full` and
+    the behaviour is the arm without the tool.
+    """
+    return tuple(t for f in FEATURES if f.name in features for t in f.tools)
 
 
 def flag(name: str) -> str:

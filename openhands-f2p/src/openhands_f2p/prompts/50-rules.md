@@ -2,8 +2,15 @@
 name: rules
 job: The constraints. The first one is load-bearing for the measurement rather than for
   the model -- an agent that edits the library can make any test pass, and then the
-  "before the fix" run is not a fact about the pull request. It is enforced afterwards
-  by hashing the tree, but stating it avoids wasting a run.
+  "before the fix" run is not a fact about the pull request.
+
+  Stating it is not enough and this file has the evidence. An earlier version opened with
+  the permission to create fixture files and put the prohibition in its second paragraph;
+  on the nano evaluation set the agent then rewrote `xarray/core/indexing.py` and
+  `sklearn/impute/_iterative.py` with shell heredocs until its own test passed, and two
+  instances that had been YES became BROKEN. The prohibition comes first again, and it is
+  now also enforced between actions by `_undo_edits`, which reverts the file and says so.
+  A rule a weak model can read past is not a rule.
 
   "Read the source before you write" used to be the whole of the last rule, and on a large
   repository that has no stopping point. `sphinx-10614` followed it to the end of its
@@ -17,19 +24,17 @@ job: The constraints. The first one is load-bearing for the measurement rather t
   It names no metric: preferring a draft you have run to a file you have skimmed is how the
   work is done whether or not anyone is scoring it.
 ---
-Your test goes in `{test_file}`. If it genuinely needs more than that — a fixture
-directory, a sample package to import, data to read — create those files too. Give them
-names of your own rather than reusing an existing fixture's.
+**Do not modify or delete any file that is already here.** Not the library source, not
+an existing test, not an existing fixture. The test is supposed to fail on this code —
+that is the entire point — and editing what it tests destroys the measurement rather than
+passing it. This is checked after every action and any such edit is reverted, so it costs
+you the action and gains you nothing.
 
-**Do not modify or delete a file that is already here.** Not the library: the test is
-supposed to fail on this code, that is the entire point, and editing what it tests
-destroys the measurement rather than passing it. And not an existing test or fixture
-either — the maintainer's own test for this bug is applied to this tree later, and a file
-you changed underneath it may no longer accept it.
-
-New files are safe in a way edits are not: a file that did not exist before is there when
-the test runs against the old code and against the fixed code alike, so it cannot make a
-test appear to flip. A file you edited can.
+Creating files is allowed. Your test goes in `{test_file}`, and if it genuinely needs more
+— a fixture directory, a sample package to import, data to read — create those too, under
+names of your own rather than an existing fixture's. A file that did not exist before is
+present when the test runs against the old code and against the fixed code alike, so it
+cannot make a test appear to flip. A file you edited can, which is the whole difference.
 
 Read the source before you write -- enough to know what to assert, not enough to be
 certain of everything. Then get a test running, and let what it does correct the rest of

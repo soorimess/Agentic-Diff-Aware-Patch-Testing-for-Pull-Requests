@@ -300,13 +300,13 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 855 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 870 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 131 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 175 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 416 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
-| `features.py` | 226 | What the agent is given, as one registry that everything else reads. |
+| `features.py` | 249 | What the agent is given, as one registry that everything else reads. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
 | `image_cache.py` | 238 | Instance images kept on the host disk, so each one is pulled from the registry once. |
 | `images.py` | 333 | Prepared SWE-bench images, and the disk they compete for. |
@@ -317,17 +317,17 @@ That makes every shared resource a hazard, and two were real:
 | `mutants.py` | 512 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
 | `parallel.py` | 245 | Running several pull requests at once, as separate processes. |
-| `prompt.py` | 224 | Assemble the agent's prompt from the pieces in prompts/. |
+| `prompt.py` | 237 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
-| `runners.py` | 315 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 290 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
-| `sandbox.py` | 296 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 667 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `runners.py` | 335 | Three test-runner conventions, and how to read what they print. |
+| `runs.py` | 330 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
+| `sandbox.py` | 326 | One container per instance, and the only door into it. |
+| `sandbox_tools.py` | 733 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 304 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 357 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 446 | The F2P decision. One implementation, used by every arm. |
 <!-- /generated:modules -->
 
 ## The agent's tools
@@ -575,6 +575,7 @@ uv run openhands-f2p --out-root out/nocov --no-coverage-tool
 | `--no-verify-tool` | withhold the `verify` tool, so the agent can watch its test fail on this code but never watch it pass. The harness still decides the verdict either way |
 | `--no-coverage-tool` | withhold the `coverage` tool. The harness still measures changed-line coverage; the agent just cannot see it while it works |
 | `--no-mutation-tool`, `--no-mutation` | withhold the `mutation` tool, which runs the agent's test against small wrong variants of the fix and reports which ones it fails to notice. The harness still measures a mutation score afterwards, on mutants the agent was never shown |
+| `--no-require-tools` | stop requiring the agent to have used the tools it was given. With this on -- the default -- a run that finishes without calling a registered instrument is sent back with the names of the ones it skipped, because a tool that is present and unused is a configuration we are not actually measuring |
 | `--no-repo-facts`, `--repo-search` | withhold the briefing on how this project tests: the target convention, where a new test file has to live to be collected, the neighbouring tests and the test configuration. The agent establishes those itself, and chooses the directory its test goes in |
 
 **which model answers**

@@ -119,10 +119,23 @@ def pieces() -> list[Piece]:
 
 
 def _resolve_blocks(body: str, features: FeatureSet) -> str:
-    """Keep the inside of `{?f}` blocks whose feature is on, drop the rest."""
+    """Keep the inside of `{?f}` blocks whose feature is on, drop the rest.
+
+    Innermost first, repeatedly, because the blocks nest. `58-finish.md` states one
+    condition per instrument inside a single `{?require-tools}` wrapper, and the
+    conjunction is the point -- the coverage line belongs in the prompt only when the
+    requirement is on *and* the tool exists. `BLOCK` is non-greedy, so one pass matches
+    the inner pair and leaves the outer opener stranded for `.format()` to choke on:
+    `KeyError: '?verify-tool'`. Looping until the text stops changing resolves inner
+    pairs first and the wrapper last.
+    """
     def one(m: re.Match) -> str:
         return f"{m.group(2)}\n" if holds(m.group(1), features) else ""
-    return BLOCK.sub(one, body)
+    while True:
+        resolved = BLOCK.sub(one, body)
+        if resolved == body:
+            return resolved
+        body = resolved
 
 
 def _check_no_absent_tools(text: str, features: FeatureSet) -> None:

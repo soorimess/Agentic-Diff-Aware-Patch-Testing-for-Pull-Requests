@@ -42,7 +42,7 @@ from openhands_f2p.checks import audit, budget_exhausted, token_usage
 from openhands_f2p.dataset import load
 from openhands_f2p import image_cache, mutants
 from openhands_f2p import models
-from openhands_f2p.features import FeatureSet, add_arguments
+from openhands_f2p.features import FeatureSet, add_arguments, instruments
 from openhands_f2p.layout import CACHE, OUT, PROJECT_ROOT
 from openhands_f2p.parallel import (CHILD_ENV_FLAG, _child_argv, _needs_retry,
                                     _run_children)
@@ -208,10 +208,25 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     # would report a run as capped because the two stretches together passed the limit,
     # when neither did.
     first_run_actions = sum(counts.values())
-    if second_chance and error is None:
+    if (second_chance or "require-tools" in features) and error is None:
         left = max_iterations - first_run_actions
         rel = V.written_test_path(box, tool_log, test_file)
-        gap = V.shortfall(box, instance, rel) if left > 0 else None
+        # Two independent grounds for refusing the stop, and each has its own flag. They
+        # share one message because sending two would spend two turns saying one thing.
+        gaps: list[tuple[str, str]] = []
+        if left > 0 and second_chance:
+            found = V.shortfall(box, instance, rel)
+            if found:
+                gaps.append(found)
+        if left > 0 and "require-tools" in features:
+            # By what each instrument last *said*, not by whether it appears in the log.
+            # See `V.loop_gap` -- counting calls measured the proxy and let a run stop on
+            # a `verify` that had just reported failure.
+            found = V.loop_gap(tool_log, instruments(features), rel)
+            if found:
+                gaps.append(found)
+        gap = None if not gaps else (
+            "+".join(r for r, _ in gaps), "\n\n".join(say for _, say in gaps))
         if left <= 0:
             flow.record(flow.AGENT, "second chance", "no budget left at the cap")
         elif gap is None:

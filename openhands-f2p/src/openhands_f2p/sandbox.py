@@ -280,6 +280,36 @@ class Sandbox:
                 out.append((line[:2].strip() or "?", line[3:].strip().strip('"')))
         return out
 
+    def altered_paths(self) -> list[str]:
+        """Pre-existing files that differ from the snapshot. New files are not listed.
+
+        `diff --name-only HEAD` rather than `status --porcelain`: it reads only what the
+        snapshot already tracks, and skips the walk over untracked files that makes
+        `status` slow on these images. That is also exactly the question -- a file the
+        agent created is tracked by neither, and cannot make a test flip because it is
+        present in the before run and the after run alike.
+        """
+        r = self.exec(f"{self._tree_git()} diff --name-only HEAD --", timeout=120)
+        if r.returncode != 0:
+            return []
+        return [ln.strip().strip('"') for ln in r.output.splitlines() if ln.strip()]
+
+    def restore(self, paths: list[str]) -> list[str]:
+        """Put `paths` back as the snapshot has them. Returns the ones actually restored.
+
+        The snapshot lives outside the work tree and `.git` was deleted before the agent
+        was let in, so this is a lever the agent cannot reach, disable or notice except
+        through the observation the caller writes.
+        """
+        if not paths:
+            return []
+        quoted = " ".join("'" + p.replace("'", "'\\''") + "'" for p in paths)
+        r = self.exec(f"{self._tree_git()} checkout -- {quoted}", timeout=300)
+        if r.returncode != 0:
+            flow.record(flow.SETUP, "restore failed", r.output.strip()[:160])
+            return []
+        return paths
+
     def audit_isolation(self) -> dict:
         """Evidence, gathered from inside, that the box is what we say it is."""
         # No pipe here on purpose: piping to `tail` made the exit status tail's, so

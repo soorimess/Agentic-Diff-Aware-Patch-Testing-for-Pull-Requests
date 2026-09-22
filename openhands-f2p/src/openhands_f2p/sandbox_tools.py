@@ -30,7 +30,7 @@ Three tools, deliberately not more:
 """
 from __future__ import annotations
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field
 
 from openhands.sdk.tool import (
     Action,
@@ -41,6 +41,7 @@ from openhands.sdk.tool import (
     register_tool,
 )
 
+from openhands_f2p import flow
 from openhands_f2p import swebench_env as E
 from openhands_f2p.features import FeatureSet
 from openhands_f2p.swebench_env import REPO_DIR, Sandbox
@@ -59,7 +60,7 @@ INVENTED: dict[str, int] = {}
 
 
 class ToolArgs(Action):
-    """An Action that drops parameters the model invented instead of refusing the call.
+    """An Action that keeps parameters the model invented instead of refusing the call.
 
     The SDK's `Action` sets `extra="forbid"`, so a call carrying one unknown key dies with
     a pydantic error and the model gets no result at all. Weaker models guess plausible
@@ -69,20 +70,24 @@ class ToolArgs(Action):
     back. On `sympy-21612` gpt-oss-20b spent 91 of its 100 actions in that loop, which
     makes its score a measurement of this config line rather than of the model.
 
-    Dropping the extra is safe because the executor only ever reads declared fields. The
-    emitted JSON schema is unchanged -- pydantic does not add `additionalProperties` for
-    either setting -- so the model is told exactly what it was told before.
+    `extra="allow"` rather than `"ignore"`, and the difference is the whole lesson. Ignore
+    was silent, and silence turned out to be worse than the refusal it replaced: gpt-5-nano
+    emits calls where the shell script arrives as a *key* rather than inside `command` --
+
+        {"command": "bash -lc", "grep -RIn ... | head -n 200' }": false}
+
+    -- so the dropped half was the command, `bash -lc` ran with no argument, and the only
+    feedback was `bash: -c: option requires an argument`. Across one evaluation set that
+    was 47 of 329 actions, and `pytest-7982` spent five consecutive actions on it and
+    finished having written nothing. Keeping the extras lets the executor say what it
+    ignored, which is the difference between a mistake the model can see and one it
+    repeats.
+
+    The emitted JSON schema is unchanged under all three settings -- pydantic adds no
+    `additionalProperties` -- so the model is told exactly what it was told before.
     """
 
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _count_invented(cls, data):
-        if isinstance(data, dict):
-            for key in data.keys() - cls.model_fields.keys():
-                INVENTED[key] = INVENTED.get(key, 0) + 1
-        return data
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 def _clip(text: str, limit: int = MAX_OUTPUT) -> str:
@@ -91,6 +96,59 @@ def _clip(text: str, limit: int = MAX_OUTPUT) -> str:
     half = limit // 2
     return (text[:half] + f"\n\n... [{len(text) - limit} characters omitted] ...\n\n"
             + text[-half:])
+
+
+def _ignored(action, tool: str) -> str:
+    """What to append when a call carried arguments this tool does not have.
+
+    Named rather than counted: "ignored 1 unknown argument" would not have told nano that
+    the thing it lost was the command itself. The keys are truncated because the usual
+    offender is an entire shell script that arrived where a parameter name belongs.
+    """
+    extra = getattr(action, "model_extra", None) or {}
+    if not extra:
+        return ""
+    for key in extra:
+        INVENTED[key] = INVENTED.get(key, 0) + 1
+    shown = ", ".join(f"`{k[:60]}{'...' if len(k) > 60 else ''}`" for k in list(extra)[:3])
+    known = ", ".join(f"`{f}`" for f in type(action).model_fields)
+    return (f"\n\n[harness] Ignored {len(extra)} argument(s) that `{tool}` does not "
+            f"take: {shown}. It accepts only {known}, and everything else was discarded "
+            f"before this ran -- so if the result looks truncated, that is why. Put the "
+            f"whole value inside the argument rather than beside it.")
+
+
+def _undo_edits(box: Sandbox, log: list) -> str:
+    """Put back anything the agent changed that was already here. Returns what to tell it.
+
+    The prompt has always forbidden this and the audit has always caught it afterwards,
+    and neither stopped it: on the nano evaluation set the agent wrote its test correctly
+    and then rewrote `xarray/core/indexing.py` and `sklearn/impute/_iterative.py` with
+    shell heredocs -- `applypatch`, `python - <<PY` -- until its own test passed. Both runs
+    scored BROKEN, which is the right verdict and arrives far too late to help: forty of
+    that run's sixty-five actions went into a file whose every edit was going to be
+    discarded.
+
+    So the tree is repaired between actions instead. A file the agent created is untracked
+    in the snapshot and never appears here, which is the distinction that matters -- a new
+    file is present in the before run and the after run alike and cannot manufacture a
+    flip, while an edited one can.
+
+    Returns "" when nothing was touched, which is the overwhelmingly common case and costs
+    one `git diff --name-only` against a snapshot that lives outside the work tree.
+    """
+    altered = box.altered_paths()
+    if not altered:
+        return ""
+    restored = box.restore(altered)
+    log.append({"tool": "guard", "reverted": restored})
+    flow.record(flow.AGENT, "reverted edit", ", ".join(restored[:4]))
+    shown = ", ".join(f"`{p}`" for p in restored[:4])
+    more = f" (and {len(restored) - 4} more)" if len(restored) > 4 else ""
+    return (f"\n\n[harness] You changed {shown}{more}, which existed before you started, "
+            f"so it has been put back. The test has to fail on this code as it is -- "
+            f"editing what it tests destroys the measurement rather than passing it. "
+            f"Create new files freely; do not edit the ones that were already here.")
 
 
 # --------------------------------------------------------------------------- run
@@ -114,8 +172,11 @@ class RunExecutor(ToolExecutor[RunAction, RunObservation]):
         self.log.append({"tool": "run", "command": action.command,
                          "returncode": r.returncode, "output": r.output[:4000]})
         body = _clip(r.output) or "(no output)"
+        undone = _undo_edits(self.box, self.log)
+        dropped = _ignored(action, "run")
         return RunObservation.from_text(
-            f"exit code {r.returncode}\n{body}", is_error=r.returncode != 0)
+            f"exit code {r.returncode}\n{body}{undone}{dropped}",
+            is_error=r.returncode != 0 or bool(undone) or bool(dropped))
 
 
 class SandboxRunTool(ToolDefinition[RunAction, RunObservation]):
@@ -162,7 +223,11 @@ class WriteExecutor(ToolExecutor[WriteAction, WriteObservation]):
         lines = action.content.count("\n") + 1
         self.log.append({"tool": "write_file", "path": action.path,
                          "lines": lines, "content": action.content[:4000]})
-        return WriteObservation.from_text(f"wrote {action.path} ({lines} lines)")
+        undone = _undo_edits(self.box, self.log)
+        dropped = _ignored(action, "write_file")
+        return WriteObservation.from_text(
+            f"wrote {action.path} ({lines} lines){undone}{dropped}",
+            is_error=bool(undone) or bool(dropped))
 
 
 class SandboxWriteTool(ToolDefinition[WriteAction, WriteObservation]):
@@ -215,9 +280,10 @@ class TestExecutor(ToolExecutor[TestAction, TestObservation]):
         summary = ", ".join(f"{k.split('::')[-1]}: {v}"
                             for k, v in list(outcomes.items())[:12]) or "no tests ran"
         head = f"$ {command}" if self.reveal_runner else f"ran {action.target}"
+        dropped = _ignored(action, "run_tests")
         return TestObservation.from_text(
-            f"{head}\nexit code {r.returncode}\n{summary}\n\n{_clip(r.output)}",
-            is_error=not outcomes)
+            f"{head}\nexit code {r.returncode}\n{summary}\n\n{_clip(r.output)}{dropped}",
+            is_error=not outcomes or bool(dropped))
 
 
 class SandboxTestTool(ToolDefinition[TestAction, TestObservation]):

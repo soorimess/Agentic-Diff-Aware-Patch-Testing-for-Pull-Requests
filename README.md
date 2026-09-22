@@ -156,6 +156,7 @@ root, `openhands-f2p/.venv/bin/python main.py 3` also works.
 | `--label NAME` | a name for this run, recorded in every result |
 | `--max-iterations N` | cap on agent steps, default 100. One instance has reached it: `sphinx-7454` spent 91 of its 100 steps in `run`, searching rather than looping |
 | `--second-chance` | refuse the agent's first stop when the run ended with nothing to score for a reason it could have seen itself, and let it carry on once — on what is left of `--max-iterations`, so the arm costs no more budget than its control |
+| `--no-require-tools` | stop refusing a finish where a registered instrument was never used or last reported failure. On by default: `verify` must last say fail-to-pass with no edit since, `coverage` must have been called and a sub-100% report answered, `mutation` must have been called and read |
 
 The instances are in `src/openhands_f2p/prs.py`: 26 across 12 repositories, five django
 versions from 3.0 to 5.0, and for every other repository one old and one recent — the
