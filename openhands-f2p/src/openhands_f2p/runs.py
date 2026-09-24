@@ -227,6 +227,50 @@ def _second_chance_table(retried: list[dict]) -> list[str]:
     return lines
 
 
+def changed_source_lines(diff: str) -> int:
+    """Lines of Python the patch adds or rewrites, from the diff alone.
+
+    The denominator that does not move. `executable_changed_lines`, which the coverage
+    measurement reports, is `len(hit) + len(missed)` over the files that test's coverage
+    run actually traced -- so it is a property of the test as much as of the patch, and
+    two arms measuring the same instance can disagree about it. `sphinx-7590` came back
+    as 47 lines in one arm and 54 in another. A number that moves with the test cannot be
+    the fixed denominator that makes two arms comparable.
+
+    This one is static: the same for an instance in every arm and every run, because it
+    reads the patch and nothing else. Blanks, comments and docstrings are excluded, none
+    of them being executable.
+
+    It is not the same quantity as `executable_changed_lines` and is not meant to be.
+    Coverage counts statements it could trace; this counts source lines the patch wrote.
+    A ratio built from the two is approximate -- good for comparing arms against a fixed
+    corpus, not for claiming an exact percentage of any one patch.
+    """
+    n, in_py, in_doc = 0, False, False
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            in_py, in_doc = line.rstrip().endswith(".py"), False
+            continue
+        if not in_py or not line.startswith("+") or line.startswith("+++"):
+            continue
+        body = line[1:].strip()
+        if not body:
+            continue
+        quotes = body.count('"""') + body.count("'''")
+        if in_doc:
+            if quotes % 2:
+                in_doc = False
+            continue
+        if body.startswith("#"):
+            continue
+        if body.startswith(('"""', "'''")):
+            if quotes % 2:
+                in_doc = True
+            continue
+        n += 1
+    return n
+
+
 def build(root: Path = OUT) -> str:
     """The table for one series of runs.
 
@@ -257,6 +301,14 @@ def build(root: Path = OUT) -> str:
     # one that answers "how much of the work did we cover".
     hit = sum(r["covered"] for r in measured if r["covered"] is not None)
     lines_changed = sum(r["total"] for r in measured if r["total"] is not None)
+    # Every instance in the set, whether or not a test was ever measured against it. A
+    # pull request nobody covered is a pull request nobody covered, and dropping it from
+    # the denominator is how an arm that produced fewer tests scores better per line.
+    corpus_lines = 0
+    for pr in (present or PRS):
+        fd = root / pr["id"] / "fix.diff"
+        if fd.is_file():
+            corpus_lines += changed_source_lines(fd.read_text(errors="replace"))
     stamps = sorted(r["when"] for r in rows if r["when"])
 
     out = ["# Run status, per pull request", "",
@@ -269,9 +321,13 @@ def build(root: Path = OUT) -> str:
             (f"- **{len(covs)}** measured for changed-line coverage: "
              f"**mean {sum(covs) / len(covs):.0f}%** per test, "
              f"median {sorted(covs)[len(covs) // 2]:.0f}%") if covs else "",
-            (f"- **{100 * hit / lines_changed:.0f}%** of all changed lines covered "
-             f"({hit}/{lines_changed} lines, pooled across every measured test)")
+            (f"- **{100 * hit / lines_changed:.0f}%** of the changed lines those tests "
+             f"were measured against ({hit}/{lines_changed}, pooled)")
             if lines_changed else "",
+            (f"- **{100 * hit / corpus_lines:.0f}%** of every source line all "
+             f"{len(present or PRS)} patches change ({hit}/{corpus_lines}) -- a fixed "
+             f"denominator, so this is the figure that compares across arms")
+            if corpus_lines else "",
             # Escaped: a bare `$` opens LaTeX math in renderers that support it, and a
             # second `$` later in the line closes it -- the cost line and every figure
             # after it then render as typeset algebra.
