@@ -31,7 +31,7 @@ from typing import Any
 
 from openhands_f2p import flow
 from openhands_f2p import swebench_env as E
-from openhands_f2p.swebench_env import Sandbox
+from openhands_f2p.swebench_env import REPO_DIR, Sandbox
 
 # Base-side failures that mean the test reached the behaviour it claims to check.
 # A FAILED is an assertion or a wrong exception; an ERROR from the test body counts too
@@ -88,6 +88,25 @@ def gen_test_path(instance_id: str, box: Sandbox | None = None) -> str:
     return f"{directory}/{name}.py" if directory else f"{name}.py"
 
 
+def _relative(path: str) -> str:
+    """A path as the repository sees it, whatever form the agent wrote it in.
+
+    `lstrip("./")` was doing this, and `lstrip` takes a *set of characters*: given the
+    absolute `/testbed/astropy/tests/x.py` the agent actually used, it removed the
+    leading slash and returned `testbed/astropy/tests/x.py` -- a path relative to the
+    repository that names a directory the repository does not have. The verdict survived
+    it, because the harness resolves its own target, but `shortfall` reads this path off
+    the disk: it would have found nothing there and told the agent its test did not
+    exist, which is both false and the most discouraging thing it could say.
+    """
+    path = path.strip().strip('"').strip("'")
+    if path.startswith(REPO_DIR + "/"):
+        path = path[len(REPO_DIR) + 1:]
+    while path.startswith("./"):
+        path = path[2:]
+    return path.lstrip("/")
+
+
 def written_test_path(box: Sandbox, tool_log: list, fallback: str) -> str:
     """Where the agent's test actually ended up.
 
@@ -109,13 +128,13 @@ def written_test_path(box: Sandbox, tool_log: list, fallback: str) -> str:
              and e.get("path") and Path(e["path"]).name == name]
     for path in reversed(wrote):                    # the last write of it wins
         if box.read(path):
-            return path.lstrip("./")
+            return _relative(path)
     found = box.exec(f"find . -name '{name}' -not -path './.*' 2>/dev/null "
                      f"| head -5").output.split()
     if found:
         # Shallowest, for the same reason `test_directory` prefers it: a project runner
         # that takes a label relative to its own directory cannot resolve a deep one.
-        return min((p.lstrip("./") for p in found), key=lambda p: (p.count("/"), p))
+        return min((_relative(p) for p in found), key=lambda p: (p.count("/"), p))
     return fallback
 
 
@@ -183,13 +202,23 @@ def loop_gap(tool_log: list, instruments: tuple[str, ...],
     So each instrument is judged by what it last said and whether that answer still
     describes the file on disk:
 
+    They are checked **in order**, and only the first open one is reported. Until the
+    test is fail-to-pass the other two are questions about a test that does not exist
+    yet, and asking all three at once told the qwen run to go measure something it had
+    not built -- eight `coverage` and `mutation` calls before `verify` had ever flipped,
+    one of which `mutation` answered with "your test does not pass on the fixed code
+    yet". The tool knew the demand was premature. The demand was made anyway.
+
     `verify`   must have been called, must last have reported fail-to-pass, and nothing
                may have been written since -- an answer about a file that has been edited
-               is an answer about a file that no longer exists.
+               is an answer about a file that no longer exists. While this is open it is
+               the *only* thing said.
     `coverage` must have been called, and if it last reported under 100% the agent must
-               have edited the test after seeing that. Not a demand for 100%, which is
-               often unreachable: a demand that a shortfall was answered once rather than
-               read and passed over.
+               have edited the test after seeing that. 100% is the target and the message
+               says so, because a target is what makes the tool's output actionable --
+               but the demand enforced here is that a shortfall was answered rather than
+               read and passed over, since a line can be genuinely unreachable and an
+               assertion written only to execute one is worth less than saying why.
     `mutation` must have been called, and that is all. Survivors are for the agent to
                weigh -- some are genuinely outside what the change fixes -- and requiring
                a response would be an instruction to close the list rather than to
@@ -208,12 +237,22 @@ def loop_gap(tool_log: list, instruments: tuple[str, ...],
     def wrote_after(i: int) -> bool:
         return any(e.get("tool") == "write_file" for e in tool_log[i + 1:])
 
+    # One obligation at a time, in the order the goal imposes. Until the test is
+    # fail-to-pass there is nothing for `coverage` or `mutation` to be about: coverage
+    # asks how much of the change a working test reaches, and mutation asks what a
+    # working test would notice -- both are questions about a test that has already met
+    # the bar. Asking all three at once is what the qwen run did, and it produced eight
+    # calls to those two tools before `verify` had ever flipped, one of which `mutation`
+    # answered with "your test does not pass on the fixed code yet". The tool said the
+    # demand was premature; the demand was made anyway.
     gaps = []
+    settled = "verify" not in instruments      # nothing to establish if it was withheld
     if "verify" in instruments:
         got = last("verify")
         if got is None:
             gaps.append(f"You never called `verify`, so nothing has established the one "
-                        f"property the test must have.")
+                        f"property the test must have. Write a test, call `verify`, and "
+                        f"keep going until it says fail-to-pass.")
         else:
             i, e = got
             still = [n for n, st in (e.get("after") or {}).items() if st in BEHAVIOURAL]
@@ -222,17 +261,30 @@ def loop_gap(tool_log: list, instruments: tuple[str, ...],
                         if still else "nothing flipped")
                 gaps.append(f"The last `verify` said **not fail-to-pass** -- {said}. That "
                             f"is the answer to the only question that decides this run, "
-                            f"and the test has not changed since. Fix the test and call "
-                            f"`verify` again.")
+                            f"and the test has not changed since. Rewrite the test and "
+                            f"call `verify` again, and keep doing that until it says "
+                            f"fail-to-pass. Nothing else you could do with the remaining "
+                            f"budget counts for anything while this is the answer.")
             elif wrote_after(i):
                 gaps.append(f"You edited the test after the last `verify`, so the "
                             f"fail-to-pass result describes a file that no longer exists. "
                             f"Call `verify` again on what is on disk now.")
+            else:
+                settled = True
+
+    # Below this line every obligation is about a test that already flips. When it does
+    # not, the message stays a single instruction rather than a list of three, two of
+    # which the agent cannot act on yet.
+    if not settled:
+        return ("loop_open", f"The finishing loop on `{rel}` is not closed.\n\n"
+                             + "\n\n".join(f"* {g}" for g in gaps)) if gaps else None
+
     if "coverage" in instruments:
         got = last("coverage")
         if got is None:
-            gaps.append(f"You never called `coverage`, so which lines of the change your "
-                        f"test reaches is unknown.")
+            gaps.append(f"Your test is fail-to-pass. Now call `coverage`: how much of "
+                        f"the change it reaches is the next question, and it is "
+                        f"currently unknown.")
         else:
             i, e = got
             cov = e.get("result") or {}
@@ -240,11 +292,14 @@ def loop_gap(tool_log: list, instruments: tuple[str, ...],
                 gaps.append(f"`coverage` last reported {cov['percent']:.0f}% of the "
                             f"changed lines ({cov['covered']}/"
                             f"{cov['executable_changed_lines']}) and you changed nothing "
-                            f"after reading it. Work the missed lines: decide for each "
-                            f"whether it is the same behaviour by another route, a "
+                            f"after reading it. Aim at 100% and keep calling `coverage` "
+                            f"until you are there or you can say why a line is out of "
+                            f"reach. Work the missed lines one at a time: decide for "
+                            f"each whether it is the same behaviour by another route, a "
                             f"separate case that deserves its own test, or genuinely "
                             f"outside this test -- then act on that and call `coverage` "
-                            f"again.")
+                            f"again. An assertion added only to execute a line is worth "
+                            f"less than an honest reason it stays unreached.")
     if "mutation" in instruments and last("mutation") is None:
         gaps.append(f"You never called `mutation`. Call it and read the survivors: each "
                     f"is a wrong version of this change your test cannot tell from the "

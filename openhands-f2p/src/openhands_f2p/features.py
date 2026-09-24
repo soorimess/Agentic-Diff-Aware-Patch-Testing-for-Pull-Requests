@@ -89,6 +89,12 @@ FEATURES: tuple[Feature, ...] = (
                              "shown",
             needs=("patch", "verify-tool"), tools=("mutation",),
             aliases=("--no-mutation",)),
+    Feature("guard", "stop reverting edits the agent makes to files that were already "
+                     "here. The prohibition stays in the prompt and the audit still "
+                     "reports a dirty tree as BROKEN -- what goes away is the repair "
+                     "between actions, so an agent that applies the fix to the library "
+                     "keeps it. Withhold it to measure how often that happens rather "
+                     "than how often it is caught"),
     Feature("require-tools", "stop requiring the agent to have used the tools it was "
                              "given. With this on -- the default -- a run that finishes "
                              "without calling a registered instrument is sent back with "

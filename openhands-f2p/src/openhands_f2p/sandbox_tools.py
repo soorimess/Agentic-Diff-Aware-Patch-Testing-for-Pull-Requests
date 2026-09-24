@@ -118,7 +118,7 @@ def _ignored(action, tool: str) -> str:
             f"whole value inside the argument rather than beside it.")
 
 
-def _undo_edits(box: Sandbox, log: list) -> str:
+def _undo_edits(box: Sandbox, log: list, on: bool = True) -> str:
     """Put back anything the agent changed that was already here. Returns what to tell it.
 
     The prompt has always forbidden this and the audit has always caught it afterwards,
@@ -137,6 +137,11 @@ def _undo_edits(box: Sandbox, log: list) -> str:
     Returns "" when nothing was touched, which is the overwhelmingly common case and costs
     one `git diff --name-only` against a snapshot that lives outside the work tree.
     """
+    if not on:
+        # `--no-guard`. The prompt still forbids the edit and `audit` still reports a
+        # dirty tree as BROKEN; what is withheld is the repair, so the arm measures how
+        # often the agent reaches for the library rather than how often it is stopped.
+        return ""
     altered = box.altered_paths()
     if not altered:
         return ""
@@ -161,9 +166,10 @@ class RunObservation(Observation):
 
 
 class RunExecutor(ToolExecutor[RunAction, RunObservation]):
-    def __init__(self, box: Sandbox, log: list | None = None):
+    def __init__(self, box: Sandbox, log: list | None = None, guard: bool = True):
         self.box = box
         self.log = log if log is not None else []
+        self.guard = guard
 
     def __call__(self, action: RunAction, conversation=None) -> RunObservation:
         # 120s, not 900. `run` is for reading and searching; nothing legitimate there
@@ -172,7 +178,7 @@ class RunExecutor(ToolExecutor[RunAction, RunObservation]):
         self.log.append({"tool": "run", "command": action.command,
                          "returncode": r.returncode, "output": r.output[:4000]})
         body = _clip(r.output) or "(no output)"
-        undone = _undo_edits(self.box, self.log)
+        undone = _undo_edits(self.box, self.log, self.guard)
         dropped = _ignored(action, "run")
         return RunObservation.from_text(
             f"exit code {r.returncode}\n{body}{undone}{dropped}",
@@ -194,7 +200,7 @@ class SandboxRunTool(ToolDefinition[RunAction, RunObservation]):
             action_type=RunAction,
             observation_type=RunObservation,
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
-            executor=RunExecutor(box, log),
+            executor=RunExecutor(box, log, params.get("guard", True)),
         )]
 
 
@@ -209,9 +215,10 @@ class WriteObservation(Observation):
 
 
 class WriteExecutor(ToolExecutor[WriteAction, WriteObservation]):
-    def __init__(self, box: Sandbox, log: list | None = None):
+    def __init__(self, box: Sandbox, log: list | None = None, guard: bool = True):
         self.box = box
         self.log = log if log is not None else []
+        self.guard = guard
 
     def __call__(self, action: WriteAction, conversation=None) -> WriteObservation:
         try:
@@ -223,7 +230,7 @@ class WriteExecutor(ToolExecutor[WriteAction, WriteObservation]):
         lines = action.content.count("\n") + 1
         self.log.append({"tool": "write_file", "path": action.path,
                          "lines": lines, "content": action.content[:4000]})
-        undone = _undo_edits(self.box, self.log)
+        undone = _undo_edits(self.box, self.log, self.guard)
         dropped = _ignored(action, "write_file")
         return WriteObservation.from_text(
             f"wrote {action.path} ({lines} lines){undone}{dropped}",
@@ -242,7 +249,7 @@ class SandboxWriteTool(ToolDefinition[WriteAction, WriteObservation]):
             action_type=WriteAction,
             observation_type=WriteObservation,
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
-            executor=WriteExecutor(box, log),
+            executor=WriteExecutor(box, log, params.get("guard", True)),
         )]
 
 
@@ -337,10 +344,15 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
     reverted afterwards, so the tree is left where the agent found it.
     """
 
-    def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None):
+    def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
+                 require_tools: bool = False):
         self.box = box
         self.repo = repo
         self.patch = patch
+        # Whether the run will refuse a stop that leaves this unanswered. When it will,
+        # the tool says so itself -- the rule is otherwise only in the prompt the agent
+        # read once at the start and in the refusal it gets after deciding it is done.
+        self.require_tools = require_tools
         self.log = log if log is not None else []
 
     def __call__(self, action: CoverageAction, conversation=None) -> CoverageObservation:
@@ -385,14 +397,24 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         if extra > 0:
             lines.append(f"  ... and {extra} more uncovered changed lines")
         lines += ["Pick inputs that make those conditions true, or add a second case to "
-                  "the same test file. Then measure again."]
+                  "the same test file. Then measure again. 100% is the target."]
+        # The rule, where the shortfall is read. Deliberately paired with the escape
+        # hatch: some changed lines cannot be reached from a test at all, and an
+        # assertion written only to execute one buys a number and costs a reviewer's
+        # trust. Saying why a line is unreachable satisfies this as fully as reaching it.
+        if self.require_tools:
+            lines += ["",
+                      "You cannot finish having read this and changed nothing. Either "
+                      "raise the figure, or be able to say which of these lines is "
+                      "genuinely out of reach from a test and why."]
         return CoverageObservation.from_text("\n".join(lines))
 
 
 class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
-               patch: str = "", log: list | None = None, **params):
+               patch: str = "", log: list | None = None, require_tools: bool = False,
+               **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="coverage",
@@ -401,7 +423,7 @@ class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
             action_type=CoverageAction,
             observation_type=CoverageObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
-            executor=CoverageExecutor(box, repo, patch, log),
+            executor=CoverageExecutor(box, repo, patch, log, require_tools),
         )]
 
 
@@ -517,10 +539,13 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
     """
 
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
-                 reveal_missed: bool = True, point_at_mutation: bool = False):
+                 reveal_missed: bool = True, point_at_mutation: bool = False,
+                 require_tools: bool = False):
         self.box = box
         self.repo = repo
         self.patch = patch
+        # See CoverageExecutor: the obligation is stated where the answer arrives.
+        self.require_tools = require_tools
         self.log = log if log is not None else []
         # Whether `mutation` is registered alongside. Same reasoning as `reveal_missed`
         # one field below, and found the same way: on the first five-instance test of the
@@ -566,8 +591,20 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         self.log.append({"tool": "verify", "target": action.target,
                          "before": base_out, "after": head_out, "flipped": flipped})
 
+        # `inverted` before `still_failing`. A test that passed at base and fails at head
+        # is the closest possible near-miss -- it found the behaviour and asserted the
+        # side of it the change removes -- and the generic branch calls that "still
+        # fail", which is false (it did not fail before) and points at rewriting rather
+        # than at flipping one assertion. django-13279 hit it twice in six verifies.
+        inverted = sorted({n for n, v in base_out.items() if v == "PASSED"}
+                          & {n for n, v in head_out.items() if v in ("FAILED", "ERROR")})
         if not base_out and not head_out:
             head = "NOT fail-to-pass: nothing was collected -- the file does not import."
+        elif inverted:
+            head = (f"NOT fail-to-pass, and backwards: {inverted[:3]} pass on the code as "
+                    f"it is and fail once the change is applied. You have found the right "
+                    f"behaviour and asserted the old side of it. Assert what the change "
+                    f"makes true, not what it replaces.")
         elif still_failing:
             head = (f"NOT fail-to-pass: {still_failing[:3]} still fail after the change "
                     f"is applied. The test is wrong, not the code.")
@@ -577,15 +614,27 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         else:
             head = f"Fail-to-pass: {len(flipped)} test(s) fail before and pass after."
 
+        # The obligation, said where the answer arrives. It used to live only in the
+        # prompt block the agent read once at the start and in the refusal it gets after
+        # deciding it was finished -- neither of which is in front of it at the moment it
+        # reads a failing verdict and chooses what to do next. Four of five failures in
+        # an earlier run stopped on exactly this observation.
+        duty = ("\n\nYou cannot finish while this is the answer. Rewrite the test and "
+                "call `verify` again, as many times as it takes."
+                if self.require_tools and not flipped else "")
+
         # Reported here rather than left for the agent to ask about. The `coverage` tool
         # already offered this, and across twenty-six runs it was called twelve times --
         # every one of them last, with nothing after it, and every one already reaching
         # the whole change. It was a formality, never feedback, because asking was a
         # decision the agent only made once it was confident. This removes the decision.
         #
-        # Lines, not a percentage. A percentage is a score, and a score in front of the
-        # agent is a score to raise; a list of lines it did not reach is a fact about the
-        # code, and the conditions above each one say what the input has to look like.
+        # Lines *and* the percentage. This used to withhold the figure, on the grounds
+        # that a score in front of the agent is a score to raise -- true, and the reason
+        # the guidance beside it still talks about lines and the conditions above them.
+        # But withholding it left the agent no handle on how far from done it was, and
+        # the obligation the run enforces is expressed in that number, so stating the
+        # rule while hiding the measure is the worse of the two failures.
         body = (f"\n\nbefore the change:\n{_clip(before.output, 1800)}"
                 f"\n\nafter the change:\n{_clip(after.output, 1200)}"
                 if base_out or head_out else "")
@@ -596,7 +645,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                "Whether it would notice a fix that is subtly *wrong* is the third, and "
                "nothing above answers it -- `mutation` does."
                if flipped and self.point_at_mutation else "")
-        return VerifyObservation.from_text(head + missed + nxt + body,
+        return VerifyObservation.from_text(head + duty + missed + nxt + body,
                                            is_error=not flipped)
 
     def _reach(self, target: str) -> str:
@@ -622,7 +671,11 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             return "\n\nIt runs every line this pull request changed."
         total = cov["executable_changed_lines"]
         head = (f"\n\nIt runs {cov['covered']} of the {total} lines this pull request "
-                f"changed; {missed} never execute.")
+                f"changed -- {cov['percent']:.0f}% -- and {missed} never execute. "
+                f"100% is the target."
+                + (" You cannot finish having read a shortfall and left it alone: "
+                   "either raise it, or establish that a line cannot be reached."
+                   if self.require_tools else ""))
         where = (" Call `coverage` on this file to see which they are, the code on each "
                  "one and the conditions above it."
                  if self.reveal_missed else
@@ -641,7 +694,7 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, reveal_missed: bool = True,
-               point_at_mutation: bool = False, **params):
+               point_at_mutation: bool = False, require_tools: bool = False, **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="verify",
@@ -652,7 +705,7 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
             observation_type=VerifyObservation,
             annotations=ToolAnnotations(readOnlyHint=False),
             executor=VerifyExecutor(box, repo, patch, log, reveal_missed,
-                                    point_at_mutation),
+                                    point_at_mutation, require_tools),
         )]
 
 
@@ -675,8 +728,10 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     # one, and a count that carried over would be attributed to the wrong instance.
     INVENTED.clear()
     briefed = "repo-facts" in features
-    made = {"run": SandboxRunTool.create(box=box, log=log)[0],
-            "write_file": SandboxWriteTool.create(box=box, log=log)[0],
+    guard = "guard" in features
+    require_tools = "require-tools" in features
+    made = {"run": SandboxRunTool.create(box=box, log=log, guard=guard)[0],
+            "write_file": SandboxWriteTool.create(box=box, log=log, guard=guard)[0],
             "run_tests": SandboxTestTool.create(box=box, repo=repo, log=log,
                                                 reveal_runner=briefed)[0]}
     for n, tool in made.items():
@@ -691,12 +746,14 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
         made["verify"] = SandboxVerifyTool.create(
             box=box, repo=repo, patch=patch, log=log,
             reveal_missed=("coverage-tool" in features),
-            point_at_mutation=("mutation-tool" in features))[0]
+            point_at_mutation=("mutation-tool" in features),
+            require_tools=require_tools)[0]
         register_tool("verify", made["verify"])
         names.append("verify")
         if "coverage-tool" in features:
             made["coverage"] = SandboxCoverageTool.create(
-                box=box, repo=repo, patch=patch, log=log)[0]
+                box=box, repo=repo, patch=patch, log=log,
+                require_tools=require_tools)[0]
             register_tool("coverage", made["coverage"])
             names.append("coverage")
         # Beside `coverage` and for the same reason: it reports on the lines the change

@@ -8,6 +8,7 @@ client's.
 """
 from __future__ import annotations
 
+import copy
 import os
 import time
 from pathlib import Path
@@ -116,6 +117,17 @@ def configure_llm(completions_dir: Path | None = None,
 
     want_native = profile.setting("native_tool_calling")
     extra = {} if want_native is None else {"native_tool_calling": want_native}
+    # Straight into the request body, untouched by litellm. The LiteLLM proxy forwards
+    # fields it does not recognise, so this is how a model reaches past the gateway to
+    # the thing behind it -- OpenRouter's `provider` routing, in the one case that needs
+    # it. Nothing is sent for a profile that does not ask.
+    # Deep, not `dict(...)`. The interesting value here is nested -- `{"provider":
+    # {"ignore": [...]}}` -- and a shallow copy hands every LLM built from this profile
+    # the *same* inner dict as the registry holds. Anything that then edits it in place
+    # edits the registry, so the next model to be configured inherits it. That is the
+    # one way a per-model setting could reach a model it was never meant for.
+    if profile.extra_body:
+        extra["litellm_extra_body"] = copy.deepcopy(profile.extra_body)
     # An explicit model wins, then the registry's default. The judge passes one so that
     # the step which decides whether two tests mean the same thing is not done by the
     # same model that wrote one of them -- and it is a single call per instance, so a
@@ -136,7 +148,8 @@ def configure_llm(completions_dir: Path | None = None,
                   if completions_dir else {})
     # The class, not just the parameters: a gateway that puts the tool call in a choice
     # other than the first needs a different reader, and no value can express that.
-    LLM = llm_class(profile.picks_first_choice)
+    LLM = llm_class(profile.picks_first_choice,
+                    profile.salvages_xml_tool_calls)
     return LLM(usage_id=usage_id, model=model,
                base_url=prov.base_url(),
                api_key=SecretStr(key), api_mode=api_mode,

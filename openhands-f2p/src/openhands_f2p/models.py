@@ -122,6 +122,25 @@ class ModelProfile:
     """False for a model whose gateway returns the tool call somewhere other than
     `choices[0]`. Documentation, not yet behaviour -- see the module docstring."""
 
+    salvages_xml_tool_calls: bool = False
+    """True for a model that sometimes writes `<function=...>` into the message body
+    instead of sending a tool call. `llm_adapters` then parses it back out. qwen3-coder
+    does this on every provider that serves it, so a run without this reads as a model
+    that cannot call tools rather than one whose reply was not converted."""
+
+    extra_body: dict | None = None
+    """Body fields added to every request, for a gateway that reads something outside
+    the OpenAI schema. The LiteLLM proxy forwards unknown fields upstream unchanged,
+    which is what makes this reach OpenRouter at all -- verified by sending
+    `provider.ignore` and watching the `provider` in the reply change.
+
+    This is how a model gets routed away from a bad upstream. `qwen3-coder-30b` is
+    served by four of them and they do not behave the same: SiliconFlow returns a
+    proper `tool_calls` array, Alibaba writes Qwen's `<function=...>` XML into the
+    content instead, and Novita does that too except that the content usually arrives
+    empty -- 113 of 244 replies in the first evaluation, each one billed. A model whose
+    default route is broken is not a measurement of the model."""
+
     note: str = ""
 
     def setting(self, name: str):

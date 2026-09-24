@@ -608,7 +608,15 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
     # The concept check goes here and nowhere earlier: it is the only step that reads
     # the developer's test, so it must not run until the F2P verdict is settled. Its
     # answer is recorded beside the verdict, never folded into it.
-    if code is not None and not no_compare:
+    #
+    # And only on a test that flipped, which is the rule coverage and the mutants have
+    # always followed and this one did not. Asking whether a test checks the same
+    # behaviour as the developer's presumes it checks the behaviour the change makes;
+    # of the four NOs in the qwen evaluation every one was "passes before the fix too",
+    # and the judge dutifully graded all four on concept, issue and readability. Those
+    # are quality answers about something that has not met the bar quality is measured
+    # against -- and they cost a call on the most expensive model in the registry.
+    if code is not None and not no_compare and verdict.f2p == "YES":
         try:
             result["concept"] = compare.compare(inst, code, model=judge_model)
             field("concept", compare.line(result["concept"]))

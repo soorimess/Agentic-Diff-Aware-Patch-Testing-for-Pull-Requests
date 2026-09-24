@@ -74,7 +74,8 @@ BLANK = {"f2p": "\u2014", "when": "", "cov": None, "covered": None, "total": Non
          "actions": None, "why": "never run", "judge": "\u2014", "issue": "\u2014",
          "tools": "\u2014",
          "readable": "\u2014", "uncovered": [], "rechecked": False,
-         "config": "\u2014", "tokens": 0, "cost": 0.0, "mutation": {}}
+         "config": "\u2014", "tokens": 0, "cost": 0.0, "mutation": {},
+         "lost": (0, 0)}
 
 
 def _tools(d: Path) -> str:
@@ -114,6 +115,32 @@ def _tools(d: Path) -> str:
         if reverted else body
 
 
+def _lost_turns(d: Path) -> tuple[int, int]:
+    """Model replies that carried nothing at all, over replies made.
+
+    A reply with no content and no tool call is a turn the agent did not get. OpenHands
+    reads one as the conversation ending, so a model that produces them often cannot
+    finish however capable it is -- `qwen3-coder-30b` returned an empty message object on
+    113 of 232 calls, 182 completion tokens billed and nothing delivered, and scored 4/10
+    while writing 100% coverage on every test it did complete. Without this column that
+    reads as a weak model rather than a broken transport.
+
+    Returns `(0, 0)` when `completions/` is absent -- it is git-ignored, so a table built
+    from a cloned run folder simply omits the column rather than claiming zero.
+    """
+    empty = total = 0
+    for f in (d / "completions").glob("*.json"):
+        try:
+            c = json.loads(f.read_text())
+        except (ValueError, OSError):
+            continue
+        total += 1
+        m = (((c.get("response") or {}).get("choices") or [{}])[0].get("message") or {})
+        if not m.get("tool_calls") and not (m.get("content") or "").strip():
+            empty += 1
+    return empty, total
+
+
 def _row(pr: dict, root: Path) -> dict:
     d = root / pr["id"]
     f = d / "result.json"
@@ -140,7 +167,8 @@ def _row(pr: dict, root: Path) -> dict:
             "mutation": r.get("mutation") or {},
             "tokens": (r.get("usage") or {}).get("total_tokens") or 0,
             "cost": (r.get("usage") or {}).get("cost_usd") or 0.0,
-            "second_chance": r.get("second_chance")}
+            "second_chance": r.get("second_chance"),
+            "lost": _lost_turns(d)}
 
 
 def build(root: Path = OUT) -> str:
@@ -182,6 +210,15 @@ def build(root: Path = OUT) -> str:
     # says nothing about it -- and two runs that differ only by this are not comparable.
     # Naming it here is what keeps that visible in the table rather than only in the
     # per-instance JSON.
+    lost = sum(r["lost"][0] for r in rows)
+    calls = sum(r["lost"][1] for r in rows)
+    if calls and lost:
+        out[-1:] = [f"- **{lost} of {calls}** model replies arrived empty -- no text and no "
+                    f"tool call, and three of those in a row trip OpenHands' stuck "
+                    f"detector, which ends the run. A run losing turns at that rate is "
+                    f"bounded by its transport rather than by the model, and the verdicts "
+                    f"below should be read with that in mind", ""]
+
     retried = [r for r in rows if r.get("second_chance")]
     if retried:
         why = sorted({r["second_chance"]["reason"] for r in retried})

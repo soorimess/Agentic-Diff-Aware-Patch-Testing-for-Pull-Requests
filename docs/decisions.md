@@ -694,6 +694,42 @@ the budget arithmetic was right every time (97, 97, 95, 94, 82 from a cap of 100
 `seaborn-3069`, which used all 100 actions, got `no budget left at the cap` and nothing
 was spent.
 
+**Measured again on qwen3-coder, and the same shape holds at a larger scale of firing.**
+Ten evaluation instances, control against the flag, nothing else changed:
+
+| | control | with the flag |
+|---|---|---|
+| `qwen3-coder-30b` | 5/10 | 6/10 |
+
+This is the first pair where the gate fired on most of the set -- **seven of ten runs
+refused**, four of them carrying a reason only this flag adds (`passes_at_base` three
+times, `collects_nothing` once). Every refused run acted on the message, spending 1 to 12
+further actions and never zero. One NO became a YES. One NO became a BROKEN: `django-13279`
+was told `collects_nothing`, which was true, spent eight more actions and finished with a
+file that still collected nothing. Correct diagnosis, worse outcome.
+
+Two things that pair settles which the earlier twenty could not.
+
+**Budget is not what limits it.** The smallest remaining budget was 66 actions and the
+largest continuation spent 12. Nothing failed for want of room, which removes the first
+explanation for the five that did not convert.
+
+**What it cannot fix is the common failure.** Three of the five persistent NOs were told
+`passes_at_base` -- the test runs, collects, and passes on unfixed code. They were told
+exactly what was wrong, had 67 to 71 actions in hand, and still could not write a test that
+distinguishes the two versions. That is a capability limit, and no message closes it. The
+boundary that forbids quoting the head run is not what is holding this back; the model is.
+
+And the flag is free: the arm ran 32 *fewer* actions than its control and cost four cents
+less. The per-instance tables are in
+[the comparison](../evaluation/qwen3coder-comparison/second-chance.md).
+
+One caution attached to all three pairs. A single repeat of ten instances cannot separate 5
+from 6 -- the same corpus has returned 4, 5 and 6 across recent configurations, and in this
+pair the judge moved `xarray-7393` from `partial` to `complete` on an instance that was
+never refused and never otherwise changed. That is the size of the noise, and it is the
+size of the reported effect.
+
 **The trap.** `Conversation.run()` resets its iteration counter to zero, so a second
 `run()` inherits a fresh full cap. Left alone, one flag would have doubled what a run may
 spend -- and silently, since both halves report normally. What is left of the cap is
@@ -793,3 +829,124 @@ quality.** Six of gpt-oss-20b's eight failures are *wrote no test at all* -- it 
 and stops, once after a single action. gpt-5-nano writes real tests, and five of its six
 passes are at 100% coverage. That distinction decides which rung is usable for measuring
 tooling: a tool that reports on a test can only help a model that writes one.
+
+---
+
+## Reaching the model through the gateway
+
+Three things a run needed that no value in `models.json` could express, and one that a
+value could once the field existed.
+
+**The reply shape is not configuration.** `llm_adapters.py` already existed because
+gpt-5.5 answers a tool-calling request with two choices and puts the call in the second.
+qwen3-coder added a second case of the same kind: it sometimes writes Qwen's own syntax
+into the message body and sends no `tool_calls` at all --
+
+    finish_reason: stop
+    content: "I'll start by exploring.\n\n<function=run>\n<parameter=command>\n
+              find /testbed -name '*.py'\n</parameter>\n</function>\n</tool_call>"
+
+-- and OpenHands reads a reply with no tool call as the agent finishing. `sympy-21612`
+ended that way at action zero; `pylint-7277` hit it once in twenty-nine calls and survived
+only because it happened mid-run. The model did everything right except the serialisation,
+so the reply is repaired rather than the protocol changed: `salvages_xml_tool_calls` on the
+profile, parsed back into real tool calls by a mixin. Emulated tool calling would have
+changed every call to work around a fault in a few.
+
+The two adaptations compose through mixins rather than four enumerated classes, because
+they are independent and a model could need both.
+
+**Which upstream serves a model is part of the experiment.** The gateway is a LiteLLM
+proxy in front of OpenRouter, and it forwards body fields it does not recognise -- verified
+by sending `provider.ignore` and watching the `provider` in the reply change. That made
+`extra_body` worth a registry field: a per-model dict, deep-copied at construction, that
+reaches past the gateway to whatever is behind it.
+
+It was needed immediately. qwen3-coder defaulted to an upstream that returned messages with
+no `content` key and no `tool_calls` key while billing 45 to 1000 completion tokens -- 113
+of 244 replies in the first evaluation. Excluding it took the empty-reply count to zero
+across 358 calls and turned a run that read as a model unable to call tools into one that
+scored 5/10.
+
+**But excluding one upstream is not pinning one.** The exclusion left three, and OpenRouter
+chose between them per request. Two runs of the same configuration then landed on different
+upstreams, and the second scored 8/10 at five times the cost. It was nearly written down as
+the effect of the flag it was testing; what gave it away was that two of its three gains had
+`second_chance: None` recorded against them -- the flag had not fired on the instances
+credited to it.
+
+So the field now names exactly one upstream and forbids fallback. **A configuration that
+can be served by more than one provider is not a configuration**, and nothing in a result
+says which one answered unless someone reads `provider` out of `completions/`.
+
+Two measurements worth keeping from that accident. Prompt caching bought nothing: 91% of
+prompt tokens came back marked cached and the bill was exactly the full list price for all
+of them. And the price difference between upstreams is 4x on prompt and 5x on completion
+for identical weights, the only declared difference being quantization.
+
+---
+
+## One obligation at a time
+
+`require-tools` asked for three things at once: `verify` must last say fail-to-pass,
+`coverage` must have been called, `mutation` must have been called. All three appeared in
+the same refusal whatever state the run was in.
+
+Two of them are questions about a test that already flips. Coverage asks how much of the
+change a working test reaches; mutation asks what a working test would notice. Asked of a
+test that does not flip, they are questions about something that does not exist yet -- and
+the run showed exactly that: eight `coverage` and `mutation` calls before `verify` had ever
+flipped, one of which `mutation` answered with *your test does not pass on the fixed code
+yet*. The tool said the demand was premature. The demand was made anyway.
+
+So they are checked in order now, and while the first is open it is the only thing said.
+The agent gets one instruction it can act on instead of three, two of which it cannot.
+
+The same ordering settles what runs after the agent stops. Coverage and the mutants were
+already measured only on a test that flipped; the judge was not. Of the four NOs in the
+qwen evaluation every one was *passes before the fix too*, and the judge graded all four on
+concept, issue coverage and readability -- quality answers about something that has not met
+the bar quality is measured against, at the price of the largest model in the registry. It
+is gated on the verdict now, like everything else beside it.
+
+**Where the rule is stated changed too.** It lived in the prompt block read once at the
+start and in the refusal delivered after the agent had decided it was done -- neither of
+them in front of it at the moment it reads a failing verdict and chooses what to do next.
+The tools now carry it: a failing `verify` says *you cannot finish while this is the
+answer*, and a coverage shortfall says the same, both only when `require-tools` is on, so
+withholding the rule still withholds the enforcement.
+
+`verify` also states the percentage again. It was withheld deliberately -- a score in front
+of the agent is a score to raise -- and that was half right. Without it the agent had no
+handle on how far from done it was while being told a rule expressed in exactly that
+number. The figure is back, paired with the missed lines and their guard conditions, and
+with the one sentence that keeps it honest: an assertion added only to execute a line is
+worth less than an honest reason the line stays unreached.
+
+**One branch was answering the wrong question.** A test that passes at base and fails at
+head fell into the *still fail after the change* message, which is false -- it did not fail
+before -- and points at rewriting rather than at inverting one assertion. It is the closest
+near-miss the harness can see: the agent found the right behaviour and asserted the side of
+it the change removes. It has its own branch now, ahead of the general one.
+
+---
+
+## `lstrip` takes a set of characters
+
+`written_test_path` ended with `path.lstrip("./")`. Given the absolute
+`/testbed/astropy/tests/x.py` the agent actually wrote, that returned
+`testbed/astropy/tests/x.py` -- a repository-relative path naming a directory the
+repository does not have.
+
+Invisible for as long as nothing read it. The harness resolves its own target, so verdicts
+were unaffected and the bug sat in the second-chance message as a path nobody checked.
+`--second-chance` is what made it matter: `shortfall` reads that path off the disk, would
+have found nothing, and would have told the agent `no_test` -- that its test did not exist
+-- after it had written one six times. The most discouraging thing the harness can say, and
+false.
+
+`_relative()` strips the repository prefix as a prefix. The `passes_at_base` and
+`collects_nothing` reasons appearing in
+[the second-chance comparison](../evaluation/qwen3coder-comparison/second-chance.md) are the
+first time those branches have been observed firing; before the fix every recorded reason
+was `loop_open`.

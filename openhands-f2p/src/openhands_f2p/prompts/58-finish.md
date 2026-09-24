@@ -54,19 +54,24 @@ anything else can quietly stop the test failing on the old code.
 {/verify-tool}
 
 {?require-tools}
-**These are checked by their answers, not by whether you called them.** Before you can
-stop:
+**These are checked by their answers, not by whether you called them, and they are
+checked in this order.** Each one is a question about a test that has already answered
+the one above it, so work them in sequence rather than in parallel. Before you can stop:
 {?verify-tool}
-* the last `verify` must say fail-to-pass, and you must not have edited the test since —
-  an answer about a file you have changed is an answer about a file that no longer exists;
+1. the last `verify` must say fail-to-pass, and you must not have edited the test since —
+   an answer about a file you have changed is an answer about a file that no longer
+   exists. Until it does say so, this is the only thing worth spending an action on:
+   rewrite the test and call `verify` again, as many times as it takes;
 {/verify-tool}
 {?coverage-tool}
-* `coverage` must have been called, and if it last reported under 100% you must have
-  changed the test after reading that;
+2. then `coverage`, with 100% of the changed lines as the target. If it reports less you
+   must have acted on that — either raised it, or established that a line cannot be
+   reached from a test. An assertion added only to execute a line is worth less than an
+   honest reason the line stays unreached;
 {/coverage-tool}
 {?mutation-tool}
-* `mutation` must have been called and its survivors read. You need not change anything
-  because of them.
+3. then `mutation`, called and its survivors read. You need not change anything because
+   of them.
 {/mutation-tool}
 
 Calling a tool once and stopping on a bad answer does not satisfy this. If any of the
