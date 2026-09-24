@@ -171,6 +171,26 @@ def _row(pr: dict, root: Path) -> dict:
             "lost": _lost_turns(d)}
 
 
+def _brief(why: str | None) -> str:
+    """One readable clause for a row that never reached a verdict.
+
+    What failed is data; the transcript of how is not. A Docker registry refusal arrives
+    as three hundred characters of image reference and HTTP detail, and four of them
+    turned the bottom of this table into a wall of URLs that said one thing: the pull was
+    rate-limited. The cause survives, the transport does not.
+    """
+    if not why:
+        return "never run"
+    lowered = why.lower()
+    for needle, said in (("429", "image pull refused by the registry (rate limited)"),
+                         ("failed to resolve reference", "image not available to pull"),
+                         ("no space left", "out of disk")):
+        if needle in lowered:
+            return said
+    why = " ".join(why.split())
+    return why if len(why) <= 120 else why[:117] + "..."
+
+
 def build(root: Path = OUT) -> str:
     """The table for one series of runs.
 
@@ -190,7 +210,6 @@ def build(root: Path = OUT) -> str:
     stamps = sorted(r["when"] for r in rows if r["when"])
 
     out = ["# Run status, per pull request", "",
-           f"Generated from `result.json` by `python -m openhands_f2p.runs`. "
            f"Last run in this table: {stamps[-1] if stamps else 'none'}.", ""]
 
     out += [f"- **{len(rows)}** instances across "
@@ -317,26 +336,8 @@ def build(root: Path = OUT) -> str:
     if unresolved:
         out += ["", "## Without a verdict", ""]
         for r in unresolved:
-            out.append(f"- **{r['id']}** — {r['why'] or 'never run'}")
+            out.append(f"- **{r['id']}** — {_brief(r['why'])}")
 
-    out += ["", "## What is in each directory", "",
-            "| file | what it holds |", "|---|---|",
-            "| `result.json` | the verdict, the coverage, token usage, the audit |",
-            "| `flow.log` | every step in order: container, commands, both test runs, "
-            "verdict |",
-            "| `flow.jsonl` | the same, one JSON object per step |",
-            "| `trajectory.json` | the agent's events, for the OpenHands visualizer |",
-            "| `tool_log.json` | one entry per tool call, as it reached the container |",
-            "| `test_f2p_*.py` | the test the agent wrote |",
-            "| `before_fix.log`, `after_fix.log` | the two runs the verdict is read from |",
-            "| `fix.diff` | the pull request's change, which the agent is shown |",
-            "| `developer_test.diff` | the maintainer's test, which it is **not** |",
-            "| `pr.json` | the full SWE-bench row |",
-            "| `child.log` | the child process's stdout, under `--parallel` |", "",
-            "`completions/` (raw prompt and response bytes per model call) is written "
-            "on every run and git-ignored, being the largest thing a run produces. It "
-            "is the only place the exact bytes sent to the model can be read back; the "
-            "trajectory records the parsed events, which is a summary of them.", ""]
     return "\n".join(line for line in out if line is not None) + "\n"
 
 

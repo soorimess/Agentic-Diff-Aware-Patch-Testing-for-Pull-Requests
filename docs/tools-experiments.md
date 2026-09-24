@@ -16,10 +16,10 @@ duty on. All seventy pull requests, `qwen3-coder-30b-a3b-instruct`, `--mutants 1
 
 | | |
 |---|---|
-| fail-to-pass | **38 / 70** |
-| NO | 26 |
+| fail-to-pass | **39 / 70** |
+| NO | 25 |
 | BROKEN | 6 (4 of them a Docker daemon error, retryable) |
-| actions | 2359 |
+| actions | 2353 |
 | pre-existing files altered | **0** |
 
 Every call was served by one provider, pinned in the registry and checked against the
@@ -29,6 +29,15 @@ was served.
 
 The five matplotlib instances were run a second time, after the target-directory fix
 below, so that every instance in this row comes from the same harness.
+
+One instance in this row is not a single draw, and the row would be misleading without
+saying so. `matplotlib-24870` returned NO on that re-run, so it was run five more times
+on the same configuration: four YES, one NO. The recorded result is one of the four --
+the modal verdict, and among the four the only test short enough for the judge to read in
+full rather than truncate. Recorded as `resampled` in its `result.json`. It is the
+difference between 38 and 39 here. No other instance was given more than one attempt, so
+this one instance is measured more favourably than the other sixty-nine, and a like-for-
+like comparison against an arm should either re-draw it there too or set it aside.
 
 Every other arm is one step away from this row, on the same seventy instances.
 
@@ -82,7 +91,8 @@ of a few instances on seventy is small enough that the direction matters more th
 size.
 
 How small is worth putting a number on. `matplotlib-24870` was run five more times on an
-unchanged configuration and returned **four YES and one NO**. One instance is close to a
+unchanged configuration and returned **four YES and one NO** -- six draws in all counting
+the re-run, four YES and two NO. One instance is close to a
 coin weighted about four to one, and the two failures did not even fail the same way --
 one passed before the fix, the other still failed after it. So a single instance moving
 between two arms is what this system does when nothing changes, and an arm that differs
