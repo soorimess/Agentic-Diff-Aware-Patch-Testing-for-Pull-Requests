@@ -302,7 +302,7 @@ That makes every shared resource a hazard, and two were real:
 |---|---|---|
 | `agent.py` | 925 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 131 | What the agent actually did, checked rather than assumed. |
-| `compare.py` | 180 | Does the generated test check the same thing the developer's test checks? |
+| `compare.py` | 207 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 416 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |

@@ -71,13 +71,14 @@ Answer with JSON only, no prose around it, in exactly this shape:
   "issue_coverage": {
     "verdict": "complete" | "partial" | "misses_the_point",
     "behaviours_in_pr": ["one line per distinct behaviour the pull request settles"],
-    "covered": ["those the generated test reaches"],
+    "covered": [{"behaviour": "...", "assertion": "the exact line from the generated test that checks it"}],
     "uncovered": ["those it does not, or empty"]
   },
   "readability": {
     "verdict": "good" | "acceptable" | "poor",
     "strengths": "one sentence, or 'none'",
-    "problems": ["specific, quotable: a bad name, a vacuous assertion, unexplained setup"]
+    "problems": ["specific, quotable: a bad name, a vacuous assertion, unexplained setup"],
+    "nothing_to_raise": "only when problems is empty: what you checked and found clean"
   },
   "confidence": "high" | "medium" | "low",
   "reasoning": "two sentences at most"
@@ -91,7 +92,27 @@ same commits.
 Be a strict reviewer on questions 2 and 3 and a fair one on question 1. Do not soften
 "partial" to "complete" because the test passes, and do not call a test "good" because it
 works -- these three answers are read separately and a uniformly generous one is worth
-nothing."""
+nothing.
+
+Two rules make that concrete rather than a wish.
+
+**A behaviour is covered only if you can quote the assertion that checks it.** Every entry
+in `covered` carries the exact line from the generated test that pins that behaviour. If
+there is no such line -- the test reaches the code path but never asserts the outcome, or
+asserts something weaker, such as that the result is not None or that the output is no
+longer the symbolic form -- then the behaviour is uncovered and belongs in `uncovered`. A
+test that exercises the fix without asserting what it should now produce has not covered
+it.
+
+**An empty `problems` list needs saying so.** If you raise nothing, fill
+`nothing_to_raise` with what you actually checked -- names, assertions, setup, convention
+-- and found clean. A verdict of good with an empty list and no account of what was
+examined is not an answer.
+
+One thing is never a defect: a long generated test may reach you elided. Judge what you
+were given, and do not report truncation, an unterminated string at the end of the
+excerpt, or a missing closing bracket as a fault in the test.
+"""
 
 
 USER = """Bug report
@@ -154,10 +175,16 @@ def compare(instance: dict[str, Any], generated: str,
         usage_id="f2p-compare", completions_dir=completions_dir,
         model=model or M.DEFAULT_JUDGE, timeout=M.DEFAULT_JUDGE_TIMEOUT)
     user = USER.format(
-        problem=instance["problem_statement"].strip()[:3000],
-        patch=instance["patch"][:3000],
-        developer_test=added_lines(instance["test_patch"])[:3000],
-        generated=generated[:3000])
+        # 12000 for the generated test, not 3000. At 3000 one test in four arrived cut
+        # off mid-file and the judge marked it down for exactly that -- "truncated at
+        # `Test that even wi`, leaving an unterminated docstring and a syntactically
+        # invalid test file" was written about a test that ran and passed. The readability
+        # answer was measuring our own truncation. The rest are raised more modestly: only
+        # one developer test in seventy exceeded 3000 characters.
+        problem=instance["problem_statement"].strip()[:4000],
+        patch=instance["patch"][:6000],
+        developer_test=added_lines(instance["test_patch"])[:8000],
+        generated=generated[:12000])
     resp = llm.completion([
         Message(role="system", content=[TextContent(text=SYSTEM)]),
         Message(role="user", content=[TextContent(text=user)]),
