@@ -319,7 +319,7 @@ That makes every shared resource a hazard, and two were real:
 | `parallel.py` | 245 | Running several pull requests at once, as separate processes. |
 | `prompt.py` | 237 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
-| `runners.py` | 335 | Three test-runner conventions, and how to read what they print. |
+| `runners.py` | 350 | Three test-runner conventions, and how to read what they print. |
 | `runs.py` | 367 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 326 | One container per instance, and the only door into it. |
 | `sandbox_tools.py` | 790 | OpenHands tools whose executors run inside the SWE-bench container. |

@@ -104,11 +104,20 @@ def detect_runner(box) -> dict[str, str]:
 def test_directory(box) -> str:
     """Where a new test file goes so that this project's runner will collect it.
 
-    The shallowest directory named `tests`, `testing` or `test`, and among equals the one
-    holding the most test files. Shallowest rather than biggest because django's runner
-    takes a label relative to `tests/` and its deepest test directories hold far more
-    files -- `tests/forms_tests/tests` has ten where `tests/` has one, and putting the
-    file in the former asks the runner for a label it will not resolve.
+    The shallowest directory named `tests`, `testing` or `test` that actually holds test
+    files, and among equals the one holding the most. Shallowest rather than biggest
+    because django's runner takes a label relative to `tests/` and its deepest test
+    directories hold far more files -- `tests/forms_tests/tests` has ten where `tests/`
+    has one, and putting the file in the former asks the runner for a label it will not
+    resolve.
+
+    *That actually holds test files* is load-bearing, and was learned from matplotlib.
+    The name filter matches `requirements/testing`, which is a directory of pip
+    requirement `.txt` files and contains no test at all; at depth one it beat the real
+    `lib/matplotlib/tests` at depth two, and every matplotlib instance was told to put
+    its test where nothing would collect it. Emptiness is checked before depth, so a
+    directory that already holds tests is ranked exactly as it was before -- this
+    changes the answer only where the previous winner held none.
 
     Returns "" when the project keeps tests at the root, as requests did in 2013.
     """
@@ -117,7 +126,11 @@ def test_directory(box) -> str:
         "-not -path '*/node_modules/*' -not -path './.*' 2>/dev/null | head -40").output
     best, best_key = "", None
     for line in found.split():
-        d = line.lstrip("./")
+        # Not `lstrip("./")`: that takes a *set of characters*, so a path whose first
+        # component begins with a dot loses letters from it rather than losing the
+        # prefix. The same mistake turned `/testbed/x` into `testbed/x` elsewhere.
+        d = line[2:] if line.startswith("./") else line
+        d = d.rstrip("/")
         if not d:
             continue
         n = box.exec(f"ls -1 {d}/test_*.py {d}/*_test.py 2>/dev/null | wc -l").output.strip()
@@ -125,7 +138,9 @@ def test_directory(box) -> str:
             count = int(n)
         except ValueError:
             count = 0
-        key = (d.count("/"), -count)
+        # Empty first: a directory matching the name but holding no test is not a test
+        # directory, however shallow it is.
+        key = (count == 0, d.count("/"), -count)
         if best_key is None or key < best_key:
             best, best_key = d, key
     return best

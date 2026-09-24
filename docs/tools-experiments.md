@@ -16,11 +16,19 @@ duty on. All seventy pull requests, `qwen3-coder-30b-a3b-instruct`, `--mutants 1
 
 | | |
 |---|---|
-| fail-to-pass | **39 / 70** |
-| NO | 25 |
+| fail-to-pass | **38 / 70** |
+| NO | 26 |
 | BROKEN | 6 (4 of them a Docker daemon error, retryable) |
-| actions | 2344 |
+| actions | 2359 |
 | pre-existing files altered | **0** |
+
+Every call was served by one provider, pinned in the registry and checked against the
+completions afterwards rather than assumed: 2478 of 2478 from SiliconFlow. The provider
+is held constant for the whole series, so no arm differs from another by where the model
+was served.
+
+The five matplotlib instances were run a second time, after the target-directory fix
+below, so that every instance in this row comes from the same harness.
 
 Every other arm is one step away from this row, on the same seventy instances.
 
@@ -75,10 +83,13 @@ size.
 
 ## Gates
 
-**Arm 5 is blocked on a bug.** The target-directory heuristic prefers `requirements/testing`
-over `lib/matplotlib/tests`, so the briefing that arm 5 withholds is itself wrong on the
-five matplotlib instances. Until that is fixed, arm 5 measures our defect rather than the
-briefing. Fix first, then run.
+**Arm 5 was blocked on a bug, now fixed.** The target-directory heuristic preferred
+`requirements/testing` over `lib/matplotlib/tests` -- the decoy matches on name and holds
+no test at all -- so the briefing arm 5 withholds was itself wrong on the five matplotlib
+instances. Fixed, and those five were re-run so the base row is uniform. One of them,
+`matplotlib-24870`, went YES to NO on the re-run: a test in the real test directory picks
+up that directory's conftest, and the earlier YES may have been an artefact of running
+outside it. One instance cannot separate that from run-to-run variation.
 
 **Arm 9 runs only with arm 10.** On its own it produces a row nobody can interpret.
 
