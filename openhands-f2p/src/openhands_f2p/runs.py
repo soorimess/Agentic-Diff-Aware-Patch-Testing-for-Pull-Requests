@@ -191,6 +191,42 @@ def _brief(why: str | None) -> str:
     return why if len(why) <= 120 else why[:117] + "..."
 
 
+def _second_chance_table(retried: list[dict]) -> list[str]:
+    """Which refusals converted, split by what the agent was told.
+
+    Worth its own table because the totals mislead. `loop_open` is not this flag's --
+    it belongs to `require-tools`, which is on by default and fires whether or not a
+    second chance was offered, so counting its conversions as the flag's work credits it
+    with runs it did not cause. `passes_at_base` and `collects_nothing` are the two
+    reasons `--second-chance` adds, and they are the only rows that answer whether it
+    earned its place.
+    """
+    OWN = ("passes_at_base", "collects_nothing")
+    by_reason: dict[str, list[dict]] = {}
+    for r in retried:
+        by_reason.setdefault(r["second_chance"]["reason"], []).append(r)
+
+    lines = ["", "### What the refused runs did next", "",
+             "`loop_open` belongs to `require-tools` and fires with or without "
+             "`--second-chance`; the rows marked *added by the flag* are the ones this "
+             "flag is answerable for.", "",
+             "| told | runs | ended YES | ended NO | ended BROKEN | |",
+             "|---|---|---|---|---|---|"]
+    for reason in sorted(by_reason):
+        rs = by_reason[reason]
+        tally = {v: sum(1 for r in rs if r["f2p"] == v) for v in ("YES", "NO", "BROKEN")}
+        own = "**added by the flag**" if any(k in reason for k in OWN) else "from `require-tools`"
+        lines.append(f"| `{reason}` | {len(rs)} | {tally['YES']} | {tally['NO']} | "
+                     f"{tally['BROKEN']} | {own} |")
+    flag_rows = [r for r in retried
+                 if any(k in r["second_chance"]["reason"] for k in OWN)]
+    flag_yes = sum(1 for r in flag_rows if r["f2p"] == "YES")
+    if flag_rows:
+        lines += ["", f"Of the **{len(flag_rows)}** refused for a reason the flag itself "
+                      f"adds, **{flag_yes}** ended fail-to-pass.", ""]
+    return lines
+
+
 def build(root: Path = OUT) -> str:
     """The table for one series of runs.
 
@@ -240,11 +276,12 @@ def build(root: Path = OUT) -> str:
 
     retried = [r for r in rows if r.get("second_chance")]
     if retried:
-        why = sorted({r["second_chance"]["reason"] for r in retried})
+        won = [r for r in retried if r["f2p"] == "YES"]
         out[-1:] = [f"- **{len(retried)}** of these were sent a second-chance message "
-                    f"after stopping with nothing to score ({', '.join(why)}); the "
-                    f"other {len(rows) - len(retried)} finished or failed for a reason "
-                    f"the agent could not have seen at base", ""]
+                    f"after stopping with nothing to score, and **{len(won)}** of them "
+                    f"ended fail-to-pass; the other {len(rows) - len(retried)} finished "
+                    f"or failed for a reason the agent could not have seen at base", ""]
+        out += _second_chance_table(retried)
 
     # The column only exists when something filled it. A `mutants` column of dashes on
     # every row of every table describes nothing and pushes the rest sideways.
