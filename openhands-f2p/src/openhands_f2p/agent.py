@@ -722,6 +722,37 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _write_summary(path: Path, results: list[dict]) -> None:
+    """The series summary, merged with what is already on disk rather than replacing it.
+
+    `RUNS.md` is rebuilt from every result in the directory, so a run over a subset
+    leaves it whole. This file was written from one invocation's results alone, and the
+    difference cost the seventy-instance summary: re-running five matplotlib instances
+    into the same root replaced seventy entries with five, in a file sitting at the
+    series root where it reads as the whole series. Nothing warned, because writing it
+    is correct for the run that just happened -- it is only wrong about the series.
+
+    Merged by instance, so the two artefacts at the root agree. This run's entry wins
+    for an instance it touched; every other instance keeps the entry it had.
+    """
+    def key(r: dict) -> str:
+        return r.get("id") or r.get("instance_id") or ""
+
+    merged: dict[str, dict] = {}
+    if path.is_file():
+        try:
+            for previous in json.loads(path.read_text()):
+                merged[key(previous)] = previous
+        except (ValueError, TypeError):
+            # Unreadable or not a list. This run's results are a worse summary than a
+            # complete one and a better summary than none, so it is written anyway.
+            merged = {}
+    # Insertion order: instances already here keep their place and are updated where
+    # this run touched them, and anything new lands at the end.
+    merged.update({key(r): r for r in results})
+    path.write_text(json.dumps(list(merged.values()), indent=2))
+
+
 def main() -> int:
     args = build_parser().parse_args()
 
@@ -854,7 +885,7 @@ def main() -> int:
         yes = sum(r.get("f2p") == "YES" for r in results)
         print(f"\n{yes}/{len(results)} generated tests are fail-to-pass")
         (out_root or OUT).mkdir(parents=True, exist_ok=True)
-        ((out_root or OUT) / "agent_summary.json").write_text(json.dumps(results, indent=2))
+        _write_summary((out_root or OUT) / "agent_summary.json", results)
 
     # RUNS.md is the index a reader opens first, so it is rewritten from the results on
     # disk at the end of every run rather than maintained by hand. Two exclusions. A

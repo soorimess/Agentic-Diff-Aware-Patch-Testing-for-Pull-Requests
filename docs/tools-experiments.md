@@ -81,6 +81,13 @@ which went NO to YES -- rather than the two totals, which throw that away. A dif
 of a few instances on seventy is small enough that the direction matters more than the
 size.
 
+How small is worth putting a number on. `matplotlib-24870` was run five more times on an
+unchanged configuration and returned **four YES and one NO**. One instance is close to a
+coin weighted about four to one, and the two failures did not even fail the same way --
+one passed before the fix, the other still failed after it. So a single instance moving
+between two arms is what this system does when nothing changes, and an arm that differs
+from the base by one or two instances has not been shown to differ at all.
+
 ## Gates
 
 **Arm 5 was blocked on a bug, now fixed.** The target-directory heuristic preferred
