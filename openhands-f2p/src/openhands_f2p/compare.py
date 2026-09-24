@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from openhands_f2p import llm_config
@@ -136,7 +137,8 @@ def _parse(text: str) -> dict[str, Any]:
 
 
 def compare(instance: dict[str, Any], generated: str,
-            quiet: bool = False, model: str | None = None) -> dict[str, Any]:
+            quiet: bool = False, model: str | None = None,
+            completions_dir: "Path | None" = None) -> dict[str, Any]:
     """Judge one generated test against the developer's. Never call before scoring."""
     from openhands.sdk.llm import Message, TextContent
 
@@ -145,8 +147,11 @@ def compare(instance: dict[str, Any], generated: str,
     # Deliberately a stronger model than the agent's. This call has to read two tests
     # and decide whether they check the same thing -- a judgement, not a search -- and
     # it happens once per instance rather than thirty times.
+    # `completions_dir`, so the judge's own tokens are on disk like the agent's.
+    # Without it the judge was the one call in a run that cost money and left no
+    # record, and every per-run cost we reported was the agent's alone.
     llm, model, _ = llm_config.configure_llm(
-        usage_id="f2p-compare",
+        usage_id="f2p-compare", completions_dir=completions_dir,
         model=model or M.DEFAULT_JUDGE, timeout=M.DEFAULT_JUDGE_TIMEOUT)
     user = USER.format(
         problem=instance["problem_statement"].strip()[:3000],

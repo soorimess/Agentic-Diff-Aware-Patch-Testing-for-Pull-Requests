@@ -628,8 +628,15 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
     # against -- and they cost a call on the most expensive model in the registry.
     if code is not None and not no_compare and verdict.f2p == "YES":
         try:
-            result["concept"] = compare.compare(inst, code, model=judge_model)
+            result["concept"] = compare.compare(
+                inst, code, model=judge_model,
+                completions_dir=d / "judge" / "completions")
             field("concept", compare.line(result["concept"]))
+            # Counted after the fact, because `usage` above is read off the
+            # agent's completions before this call has happened. Kept as its own
+            # field rather than folded in: the judge is one call on a different
+            # model, and a run's cost is easier to read when the two are separate.
+            result["judge_usage"] = token_usage(d / "judge")
         except Exception as exc:
             result["concept"] = {"verdict": "error", "reasoning": str(exc)[:200]}
             field("concept", f"comparison failed: {str(exc)[:70]}")
