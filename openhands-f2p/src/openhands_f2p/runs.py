@@ -242,7 +242,21 @@ def build(root: Path = OUT) -> str:
     rows = [_row(pr, root) for pr in (present or PRS)]
     decided = [r for r in rows if r["f2p"] in ("YES", "NO")]
     yes = [r for r in rows if r["f2p"] == "YES"]
-    covs = [r["cov"] for r in rows if r["cov"] is not None]
+    # Fail-to-pass only. Coverage is measured during `verify`, before a run can be voided
+    # for editing the tree, so a voided run reaches this table carrying a figure -- and a
+    # number taken off a tree the agent altered is not a fact about the pull request. It is
+    # also what the note under the table already claims, which was true until --no-guard
+    # produced the first run that was measured and then thrown out.
+    measured = [r for r in rows if r["cov"] is not None and r["f2p"] == "YES"]
+    covs = [r["cov"] for r in measured]
+    # Two averages, because they answer different questions and a patch of two
+    # lines and a patch of forty are not the same evidence. The mean weights each
+    # test equally and says how the typical generated test did. The pooled figure
+    # weights each changed line equally -- every line this set of pull requests
+    # touched, against the ones some generated test actually executed -- and is the
+    # one that answers "how much of the work did we cover".
+    hit = sum(r["covered"] for r in measured if r["covered"] is not None)
+    lines_changed = sum(r["total"] for r in measured if r["total"] is not None)
     stamps = sorted(r["when"] for r in rows if r["when"])
 
     out = ["# Run status, per pull request", "",
@@ -252,8 +266,12 @@ def build(root: Path = OUT) -> str:
             f"**{len({r['id'].split('__')[0] for r in rows})}** repositories",
             f"- **{len(yes)}/{len(decided)}** fail-to-pass, of those that reached a "
             f"verdict",
-            f"- **{len(covs)}** measured for changed-line coverage; "
-            f"median {sorted(covs)[len(covs) // 2]:.0f}%" if covs else "",
+            (f"- **{len(covs)}** measured for changed-line coverage: "
+             f"**mean {sum(covs) / len(covs):.0f}%** per test, "
+             f"median {sorted(covs)[len(covs) // 2]:.0f}%") if covs else "",
+            (f"- **{100 * hit / lines_changed:.0f}%** of all changed lines covered "
+             f"({hit}/{lines_changed} lines, pooled across every measured test)")
+            if lines_changed else "",
             # Escaped: a bare `$` opens LaTeX math in renderers that support it, and a
             # second `$` later in the line closes it -- the cost line and every figure
             # after it then render as typeset algebra.
