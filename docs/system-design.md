@@ -300,7 +300,7 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 907 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 918 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 131 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 175 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 416 | Of the lines this pull request changed, how many did the test execute? |

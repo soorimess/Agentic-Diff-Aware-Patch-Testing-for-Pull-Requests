@@ -511,20 +511,6 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
             # exactly that at 100 actions, having written once and verified once, where
             # the runs that pass it write three or four times. The verdict stays what the
             # test earned; the reason says the test may not be finished.
-            # Creating files is allowed; editing one that was already here is not, and
-            # this is the check that lets the first be true safely. A new file is present
-            # in the before run and the after run alike, so it cannot manufacture a flip.
-            # An edited one can -- library source most obviously, but an edited fixture
-            # also risks rejecting the maintainer's test when it is applied later. The
-            # instruction says so; an instruction cannot be what the measurement rests on.
-            if checks["tree_altered"]:
-                verdict = replace(
-                    verdict, f2p="BROKEN",
-                    why=f"the agent changed {len(checks['tree_altered'])} file(s) that "
-                        f"already existed, so the before-the-fix run is not a fact about "
-                        f"this pull request: {', '.join(checks['tree_altered'][:4])}")
-                field("audit", f"VOID -- pre-existing files changed: "
-                               f"{', '.join(checks['tree_altered'][:4])}")
             if run.get("capped") and verdict.f2p != "YES":
                 verdict = replace(
                     verdict,
@@ -552,12 +538,37 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
             # the verdict, because a test that does not flip cannot be asked what it
             # would notice about a wrong fix. And it reads the developer's test, so it
             # belongs on this side of the line with the judge, never before it.
-            if n_mutants and verdict.f2p == "YES":
+            # `not tree_altered` because the void below will overturn this verdict
+            # anyway, and mutation is twenty test-suite runs spent on a result that
+            # is about to stop existing.
+            if n_mutants and verdict.f2p == "YES" and not checks["tree_altered"]:
                 mut = mutants.measure(inst, box, code, test_file, n_mutants,
                                       out_dir=d, quiet=True,
                                       held_out=("mutation-tool" in features))
                 mutation = mut.as_dict()
                 field("mutants", mutants.line(mutation))
+
+        # Creating files is allowed; editing one that was already here is not, and this
+        # is the check that lets the first be true safely. A new file is present in the
+        # before run and the after run alike, so it cannot manufacture a flip. An edited
+        # one can -- library source most obviously, but an edited fixture also risks
+        # rejecting the maintainer's test when it is applied later. The instruction says
+        # so; an instruction cannot be what the measurement rests on.
+        #
+        # Out here rather than beside the verify call, where it used to sit: that branch
+        # runs only when a test was written, so an agent that wrote none and patched the
+        # library instead fell through to an ordinary NO and the audit missed exactly the
+        # case it exists to catch. `scikit-learn-10297` did that under --no-guard -- it
+        # edited sklearn/linear_model/ridge.py, wrote no test, and was recorded as a
+        # plain failure. The tree is the tree whether or not a test came out of the run.
+        if checks["tree_altered"]:
+            verdict = replace(
+                verdict, f2p="BROKEN",
+                why=f"the agent changed {len(checks['tree_altered'])} file(s) that "
+                    f"already existed, so the before-the-fix run is not a fact about "
+                    f"this pull request: {', '.join(checks['tree_altered'][:4])}")
+            field("audit", f"VOID -- pre-existing files changed: "
+                           f"{', '.join(checks['tree_altered'][:4])}")
 
     iso = checks["isolation"]
     field("audit", f"network {checks['network_attempts'] or 'none'}, "
