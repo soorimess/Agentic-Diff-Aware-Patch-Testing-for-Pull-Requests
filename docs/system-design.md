@@ -300,7 +300,7 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 878 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 876 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 131 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 175 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 416 | Of the lines this pull request changed, how many did the test execute? |
@@ -308,8 +308,8 @@ That makes every shared resource a hazard, and two were real:
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
 | `features.py` | 255 | What the agent is given, as one registry that everything else reads. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
-| `image_cache.py` | 238 | Instance images kept on the host disk, so each one is pulled from the registry once. |
-| `images.py` | 333 | Prepared SWE-bench images, and the disk they compete for. |
+| `image_cache.py` | 278 | Instance images kept on the host disk, so each one is pulled from the registry once. |
+| `images.py` | 404 | Prepared SWE-bench images, and the disk they compete for. |
 | `layout.py` | 29 | Where the project is on disk, and the environment it runs with. |
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 182 | One place the model connection is configured, shared by every caller. |

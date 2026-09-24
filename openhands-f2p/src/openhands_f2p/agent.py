@@ -381,8 +381,7 @@ def mutate_saved(pr: dict, n: int, root: Path | None = None) -> dict:
     rj.write_text(json.dumps(r, indent=2))
     if not os.getenv("F2P_KEEP_IMAGES"):
         try:
-            if image_cache.save(image, quiet=True):
-                image_cache.drop_image(image, quiet=True)
+            image_cache.release(image, quiet=True)
         except Exception:
             pass
     return {"id": pr["id"], "mutation": score.as_dict()}
@@ -633,8 +632,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
     # worse than the disk.
     if not os.getenv("F2P_KEEP_IMAGES"):
         try:
-            if image_cache.save(image, quiet=True):
-                image_cache.drop_image(image, quiet=True)
+            image_cache.release(image, quiet=True)
         except Exception as exc:          # never fail a finished run over housekeeping
             field("images", f"could not archive: {type(exc).__name__}: {exc}")
 

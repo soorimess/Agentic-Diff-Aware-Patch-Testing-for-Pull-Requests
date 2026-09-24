@@ -44,6 +44,17 @@ CACHE_DIR = Path(os.getenv("F2P_IMAGE_CACHE") or PROJECT_ROOT / "image-cache")
 # smallest of these images compresses to about 300 MB.
 MIN_PLAUSIBLE_BYTES = 50_000_000
 
+# Whether to keep archives at all. The cache exists because a pull on the laptop link was
+# measured at 0.3 MB/s -- three hours for one image -- so paying gzip once beat paying the
+# download repeatedly. On the server that trade reverses: a pull there is 30 seconds and a
+# load is 27, so the archives buy no time and spend 88 GB of a 146 GB disk, which is the
+# only thing stopping a wide run from holding its images.
+#
+# `F2P_NO_ARCHIVE=1` turns them off. Nothing is written, nothing is read, and an image is
+# dropped when its run is done on the strength of being cheap to fetch again rather than
+# on the strength of a verified archive.
+ARCHIVING = (os.getenv("F2P_NO_ARCHIVE") or "").strip().lower() not in ("1", "true", "yes", "on")
+
 
 def archive_for(image: str) -> Path:
     """One file per image, named after it. `/` and `:` are not filename characters."""
@@ -52,6 +63,8 @@ def archive_for(image: str) -> Path:
 
 
 def have_archive(image: str) -> bool:
+    if not ARCHIVING:
+        return False
     p = archive_for(image)
     return p.exists() and p.stat().st_size >= MIN_PLAUSIBLE_BYTES
 
@@ -92,6 +105,8 @@ def save(image: str, quiet: bool = False) -> Path | None:
     Writes to a `.part` file and renames on success, so an interrupted save cannot leave
     something that `have_archive` would later accept and `docker load` would choke on.
     """
+    if not ARCHIVING:
+        return None
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     final = archive_for(image)
     if have_archive(image):
@@ -159,6 +174,31 @@ def drop_image(image: str, quiet: bool = False) -> bool:
         print(f"  dropped Docker's copy of {image.split('.')[-1]}" if ok else
               f"  could not drop {image}: {(r.stderr or '').strip()[:120]}")
     return ok
+
+
+def release(image: str, quiet: bool = True) -> bool:
+    """Give back the disk this image is holding, once its run is finished with it.
+
+    Archiving on, this is the old pair: archive, verify, then drop Docker's copy -- the
+    archive is the durable copy and nothing is deleted before it is known good.
+
+    Archiving off, there is no archive to verify and none is wanted, so the image is
+    simply removed. That is safe for exactly the reason the archives were dropped: the
+    registry is thirty seconds away. It still refuses an image a live run has claimed,
+    which is the guard that matters under `--parallel`.
+    """
+    from openhands_f2p import images as I
+    if not ARCHIVING:
+        if not I.have_image(image):
+            return True
+        if image in I.claimed_images():
+            return False
+        _sh(f"docker rmi '{image}'", timeout=900)
+        ok = not I.have_image(image)
+        if ok and not quiet:
+            print(f"  dropped {image.split('.')[-1]} (not archiving)")
+        return ok
+    return bool(save(image, quiet=quiet)) and drop_image(image, quiet=quiet)
 
 
 def stored() -> list[tuple[str, int]]:

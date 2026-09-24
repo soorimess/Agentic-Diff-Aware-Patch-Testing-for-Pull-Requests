@@ -237,6 +237,75 @@ DEFAULT_IMAGE_HEADROOM_GB = 14.0
 
 PULL_LOCK = Path("/tmp/f2p-pull.lock")
 
+# How many pulls may run at once. One by default, which is the behaviour every earlier
+# measurement was taken with and the right one on a slow link: two workers sharing 0.8
+# MB/s each miss their timeout where run in sequence the first would have finished.
+#
+# That reasoning is about the link, not about pulling, so it is a setting rather than a
+# law. On the server the prefetch sustained 320 MB/s across eight concurrent streams --
+# 40 MB/s each, no starvation -- and there a single lock turns thirty workers into a
+# queue thirty deep for no reason. `F2P_PULL_CONCURRENCY=6` opens six slots.
+PULL_SLOTS = max(1, int(os.getenv("F2P_PULL_CONCURRENCY") or 1))
+
+
+@contextlib.contextmanager
+def _pull_slot():
+    """Hold one of `PULL_SLOTS` slots, waiting for one if they are all taken.
+
+    A file per slot, tried without blocking in turn; if none is free we block on the
+    first, which is as fair as this needs to be. Each is released when the process
+    exits however it exits, so a killed worker cannot leave a slot held.
+    """
+    handles = []
+    try:
+        for i in range(PULL_SLOTS):
+            fh = Path(f"/tmp/f2p-pull-{i}.lock").open("w")
+            handles.append(fh)
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                continue
+            yield
+            return
+        fcntl.flock(handles[0], fcntl.LOCK_EX)      # all busy: wait for the first
+        yield
+    finally:
+        for fh in handles:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fh, fcntl.LOCK_UN)
+                fh.close()
+LOAD_LOCK = Path("/tmp/f2p-load.lock")
+
+
+def make_room(keep: str, need_gb: float, quiet: bool = True) -> float | None:
+    """Reclaim disk until `need_gb` is free, or return what is free if it cannot be.
+
+    Split out of `_pull_locked` because loading an archive needs exactly the same
+    headroom as pulling does and had none. `pull_image` tries the archive *before* the
+    pull lock, deliberately -- a local load has no business queueing behind somebody
+    else's download -- and that branch never asked whether the image would fit.
+
+    It did not matter while runs were small. It matters at `--parallel 20` on a disk
+    holding 93 GB of archives: twenty workers each loading a 5 GB image want 98 GB and
+    have 53, and the failure is `no space left on device` somewhere in the middle of a
+    four-hour run rather than a worker waiting its turn.
+
+    Eviction is nearly free here, which is what makes this cheap to call: every image
+    the run has finished with is already archived, so `evict_one_image` finds `save`
+    already done and only has to `docker rmi`.
+    """
+    free = vm_free_gb()
+    if free is None or free >= need_gb:
+        return free
+    reap_orphans()
+    _run(["docker", "builder", "prune", "-af"], timeout=900)
+    free = vm_free_gb()
+    while free is not None and free < need_gb and evict_one_image(keep):
+        free = vm_free_gb()
+    return free
+
+
+
 
 def pull_image(image: str, quiet: bool = False,
                need_gb: float = DEFAULT_IMAGE_HEADROOM_GB) -> None:
@@ -259,14 +328,24 @@ def pull_image(image: str, quiet: bool = False,
     # the lock, and one instance with no archive pulling at 0.3 MB/s held seven that had
     # archives -- twenty-five seconds of work each -- waiting on it for hours.
     from openhands_f2p import image_cache
-    if image_cache.have_archive(image) and image_cache.load(image, quiet=quiet):
-        return
-    with PULL_LOCK.open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            _pull_locked(image, quiet, need_gb)
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+    if image_cache.have_archive(image):
+        # Under its own lock, not the pull lock: the check and the load have to be one
+        # step or two workers both see room for the last image, and a load is seconds
+        # where a pull is hours, so queueing behind another *load* costs nothing.
+        with LOAD_LOCK.open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                free = make_room(image, need_gb, quiet)
+                if free is None or free >= need_gb:
+                    if image_cache.load(image, quiet=quiet):
+                        return
+                elif not quiet:
+                    print(f"  {free:.0f} GB free and this image needs about "
+                          f"{need_gb:.0f}; falling through to the pull path")
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+    with _pull_slot():
+        _pull_locked(image, quiet, need_gb)
 
 
 def _pull_locked(image: str, quiet: bool, need_gb: float) -> None:
@@ -277,15 +356,7 @@ def _pull_locked(image: str, quiet: bool, need_gb: float) -> None:
     from openhands_f2p import image_cache
     if image_cache.have_archive(image) and image_cache.load(image, quiet=quiet):
         return
-    free = vm_free_gb()
-    if free is not None and free < need_gb:
-        # Reclaim what is definitely safe before giving up: build cache is cache by
-        # definition, and stopped containers of ours are finished work.
-        reap_orphans()
-        _run(["docker", "builder", "prune", "-af"], timeout=900)
-        free = vm_free_gb()
-    while free is not None and free < need_gb and evict_one_image(image):
-        free = vm_free_gb()
+    free = make_room(image, need_gb)
     if free is not None and free < need_gb:
         raise SystemExit(
             f"the Docker VM has only {free:.1f} GB free and this image needs about "
