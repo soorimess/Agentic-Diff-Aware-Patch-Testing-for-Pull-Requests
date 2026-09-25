@@ -90,6 +90,35 @@ class ToolArgs(Action):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+class _Shown(ToolExecutor):
+    """Keep, on the tool's log entry, the exact text the model was handed back.
+
+    The log held structured results and `trajectory.py` re-rendered them in its own
+    words, so the audit file drifted from what the agent read: coverage came out as
+    "66.7% of changed lines executed" in the trajectory while the model saw lines and no
+    number, and `mutation` came out empty. Recording the observation itself leaves
+    nothing to re-render. Wraps every executor; changes nothing the model receives.
+    """
+
+    def __init__(self, inner: ToolExecutor, tool: str):
+        self.inner, self.tool = inner, tool
+
+    def __call__(self, action, conversation=None):
+        log = self.inner.log
+        n = len(log)
+        obs = self.inner(action, conversation)
+        # The entry for this call, not the last one: a `guard` revert is appended after it.
+        for entry in reversed(log[n:]):
+            if entry.get("tool") == self.tool:
+                entry["shown"] = obs.text
+                entry["shown_as_error"] = bool(obs.is_error)
+                break
+        return obs
+
+    def close(self) -> None:
+        self.inner.close()
+
+
 def _clip(text: str, limit: int = MAX_OUTPUT) -> str:
     if len(text) <= limit:
         return text
@@ -200,7 +229,7 @@ class SandboxRunTool(ToolDefinition[RunAction, RunObservation]):
             action_type=RunAction,
             observation_type=RunObservation,
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
-            executor=RunExecutor(box, log, params.get("guard", True)),
+            executor=_Shown(RunExecutor(box, log, params.get("guard", True)), "run"),
         )]
 
 
@@ -249,7 +278,7 @@ class SandboxWriteTool(ToolDefinition[WriteAction, WriteObservation]):
             action_type=WriteAction,
             observation_type=WriteObservation,
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
-            executor=WriteExecutor(box, log, params.get("guard", True)),
+            executor=_Shown(WriteExecutor(box, log, params.get("guard", True)), "write_file"),
         )]
 
 
@@ -320,7 +349,8 @@ class SandboxTestTool(ToolDefinition[TestAction, TestObservation]):
             action_type=TestAction,
             observation_type=TestObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
-            executor=TestExecutor(box, repo, log, reveal_runner=reveal_runner),
+            executor=_Shown(TestExecutor(box, repo, log, reveal_runner=reveal_runner),
+                                  "run_tests"),
         )]
 
 
@@ -425,7 +455,8 @@ class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
             action_type=CoverageAction,
             observation_type=CoverageObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
-            executor=CoverageExecutor(box, repo, patch, log, require_tools),
+            executor=_Shown(CoverageExecutor(box, repo, patch, log, require_tools),
+                                  "coverage"),
         )]
 
 
@@ -512,7 +543,7 @@ class SandboxMutationTool(ToolDefinition[MutationAction, MutationObservation]):
             action_type=MutationAction,
             observation_type=MutationObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
-            executor=MutationExecutor(box, repo, patch, log, n=n),
+            executor=_Shown(MutationExecutor(box, repo, patch, log, n=n), "mutation"),
         )]
 
 
@@ -723,8 +754,8 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
             action_type=VerifyAction,
             observation_type=VerifyObservation,
             annotations=ToolAnnotations(readOnlyHint=False),
-            executor=VerifyExecutor(box, repo, patch, log, reveal_missed,
-                                    point_at_mutation, require_tools),
+            executor=_Shown(VerifyExecutor(box, repo, patch, log, reveal_missed,
+                                           point_at_mutation, require_tools), "verify"),
         )]
 
 

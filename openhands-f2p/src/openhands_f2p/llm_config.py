@@ -69,7 +69,8 @@ def configure_llm(completions_dir: Path | None = None,
                   model: str | None = None,
                   timeout: int | None = None,
                   num_retries: int | None = None,
-                  provider: str | None = None):
+                  provider: str | None = None,
+                  temperature: float | None = None):
     """Build the LLM without putting the proxy into the environment.
 
     litellm is given an explicit httpx client instead, so HTTP_PROXY and friends stay
@@ -128,6 +129,10 @@ def configure_llm(completions_dir: Path | None = None,
     # one way a per-model setting could reach a model it was never meant for.
     if profile.extra_body:
         extra["litellm_extra_body"] = copy.deepcopy(profile.extra_body)
+    # Only when asked. Passing None is the SDK's own default and sends nothing, but not
+    # passing it at all keeps an unset run byte-for-byte the call every earlier run made.
+    if temperature is not None:
+        extra["temperature"] = temperature
     # An explicit model wins, then the registry's default. The judge passes one so that
     # the step which decides whether two tests mean the same thing is not done by the
     # same model that wrote one of them -- and it is a single call per instance, so a

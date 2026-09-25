@@ -306,6 +306,17 @@ a field with a real default can never fall through to a fallback; `None` is how 
 says *this one has no opinion*. And `describe()` prints resolved values with a star on
 the ones the file actually names.
 
+### Temperature
+
+`--temperature` sets the agent's sampling temperature (0 to 2; anything else is refused,
+not clamped). Unset, nothing is sent and the provider picks -- which is what every run
+before the flag did, and the request stays byte-for-byte what it was: the value is not
+passed to the SDK at all rather than passed as `None`. It is the agent's only; the judge
+keeps its own settings. `parallel.py` forwards it tested against `None`, because `0.0`
+is a real temperature and the truthiness test used for `--model` would drop it. What is
+recorded in `result.json` as `temperature` is read back from the configured LLM, not
+from the flag; results from before the flag have no such field.
+
 ### What a profile cannot fix
 
 `gpt-5.5` through the LiteLLM gateway puts a text preamble in `choices[0]` and the tool
@@ -332,7 +343,7 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1052 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1072 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 156 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 286 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 416 | Of the lines this pull request changed, how many did the test execute? |
@@ -344,21 +355,21 @@ That makes every shared resource a hazard, and two were real:
 | `images.py` | 404 | Prepared SWE-bench images, and the disk they compete for. |
 | `layout.py` | 29 | Where the project is on disk, and the environment it runs with. |
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
-| `llm_config.py` | 182 | One place the model connection is configured, shared by every caller. |
-| `models.py` | 315 | Which model answers, and what it needs, read from `models.json`. |
+| `llm_config.py` | 187 | One place the model connection is configured, shared by every caller. |
+| `models.py` | 332 | Which model answers, and what it needs, read from `models.json`. |
 | `mutants.py` | 512 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
-| `parallel.py` | 245 | Running several pull requests at once, as separate processes. |
+| `parallel.py` | 250 | Running several pull requests at once, as separate processes. |
 | `prompt.py` | 237 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 380 | Three test-runner conventions, and how to read what they print. |
 | `runs.py` | 498 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 326 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 809 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sandbox_tools.py` | 840 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
-| `trajectory.py` | 322 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
+| `trajectory.py` | 359 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
 | `verify.py` | 563 | The F2P decision. One implementation, used by every arm. |
 <!-- /generated:modules -->
 
@@ -656,6 +667,7 @@ uv run openhands-f2p --out-root out/nocov --no-coverage-tool
 |---|---|
 | `--model` | the agent's model (default: gpt-5-mini, from the registry). Profiled: gpt-5-mini, gpt-5.5, gpt-5-nano, gpt-oss-20b, qwen3-coder-30b-a3b-instruct, qwen3-14b, llama-3.1-8b-instruct, gpt-5.6-luna |
 | `--judge-model` | the model that compares the generated test with the developer's (default: gpt-5.6-luna, from the registry) |
+| `--temperature` | the agent's sampling temperature, 0 to 2. Unset (the default) sends none and the provider picks -- which is what every run before this flag did. Applies to the agent only; the judge is not affected |
 | `--provider` | override the profile's provider, for reaching the same model id through a different gateway. Choices: `litellm-proxy`, `openai`, `anthropic`. |
 <!-- /generated:cli -->
 
@@ -671,6 +683,14 @@ Evaluation runs live apart, under `evaluation/out_<model>/`.
 
 `tool_log.json` records what the executor *did*; `trajectory.json` records what the model
 *asked for*. When they disagree, the disagreement is the finding.
+
+Each tool-log entry also keeps `shown`: the exact text the model was handed back, and
+`shown_as_error`. The trajectory uses it. Before, the trajectory re-rendered structured
+results in its own words and drifted from what the agent read -- coverage appeared as a
+percentage the agent was never shown, `mutation` appeared empty, a `guard` revert was
+drawn as an empty shell command, and the reasoning attached to each call slipped by one
+after every `think`, `finish` or unparsed call. Thoughts are now paired per tool, and a
+re-rendering for runs that predate `shown` says that it is one.
 
 `out/` is committed, so paths from the developer's machine are scrubbed on the way out.
 No credential has reached it — the SDK's completion logger does not record request

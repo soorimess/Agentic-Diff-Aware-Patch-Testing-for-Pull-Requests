@@ -67,6 +67,11 @@ def _child_argv(pr_id: str, args, features: FeatureSet, out_root: Path,
         value = getattr(args, flag, None)
         if value:
             argv += [f"--{flag.replace('_', '-')}", str(value)]
+    # Tested against None, not for truth: 0.0 is a real temperature, and the loop above
+    # would drop it -- the children would sample at the provider's default while the
+    # parent recorded 0.
+    if getattr(args, "temperature", None) is not None:
+        argv += ["--temperature", repr(args.temperature)]
     if getattr(args, "mutate_saved", False):
         argv.append("--mutate-saved")
     argv += child_flags(features)

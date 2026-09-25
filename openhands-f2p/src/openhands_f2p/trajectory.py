@@ -88,6 +88,13 @@ def _as_markdown(task: str) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+# Tool-call names as the model sends them -> the name in the tool log. Only the real
+# tools: a call to an invented name (`sandbox_run_tests`, `sandbox_finish`) never ran.
+_CALL_NAMES = {"sandbox_run": "run", "sandbox_write": "write_file",
+               "sandbox_test": "run_tests", "sandbox_verify": "verify",
+               "sandbox_coverage": "coverage", "sandbox_mutation": "mutation"}
+
+
 def _describe(tool: str, entry: dict) -> str:
     """Readable body for the tools whose result is structured rather than shell output."""
     if tool == "repo_info":      # historical: runs before the sub-agent was removed
@@ -107,10 +114,20 @@ def _describe(tool: str, entry: dict) -> str:
                 if flipped else "NOT fail-to-pass")
         return (f"{head}\n\nbefore the change: {entry.get('before')}"
                 f"\nafter the change:  {entry.get('after')}")
+    if tool == "mutation":
+        if entry.get("error") or not entry.get("total"):
+            return f"no mutants run: {entry.get('error') or entry.get('why', '')}"
+        lines = [f"killed {entry.get('killed')} of {entry.get('total')} mutants"]
+        lines += [f"  survived: {m}" for m in entry.get("survived") or []]
+        return "\n".join(lines)
     res = entry.get("result") or {}
     if not res.get("measured"):
         return f"not measured: {res.get('reason', '')}"
-    lines = [f"{res['percent']}% of changed lines executed "
+    # Re-rendered, not what the agent saw -- since the coverage tool stopped showing a
+    # figure, the model got the missed lines only. Marked so nobody reads the number as
+    # something the agent was told.
+    lines = [f"[re-rendered from the log; the agent saw only the missed lines] "
+             f"{res['percent']}% of changed lines executed "
              f"({res['covered']}/{res['executable_changed_lines']})"]
     for item in res.get("missed_source") or []:
         lines += ["", f"  missed {item['ref']}"]
@@ -141,9 +158,14 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
     # completion that carried the tool call -- "I'll open numbers.py to inspect
     # Rational.__new__" -- and dropping it left the visualizer showing what happened with
     # no trace of the reasoning that led there. Completion logs are named with a
-    # timestamp, so sorting them puts them in call order, and the Nth call that produced
-    # a tool_call belongs to the Nth entry in the tool log.
-    thoughts: list[str] = []
+    # timestamp, so sorting them puts them in call order.
+    #
+    # Paired per tool, in order: the Nth `sandbox_verify` call is the Nth `verify` entry.
+    # Pairing the Nth call of any kind with the Nth log entry, as this did first, drifted
+    # after every `think`, `finish` or unparsed call (a tool call with no log entry) and
+    # every `guard` revert (a log entry with no tool call), so a thought sat on the wrong
+    # action for the rest of the run.
+    thoughts: dict[str, list[str]] = {}
     for cf in sorted((out_dir / "completions").glob("*.json")):
         try:
             j = json.loads(cf.read_text())
@@ -152,8 +174,10 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
         msg = ((j.get("response") or {}).get("choices") or [{}])[0].get("message") or {}
         if not msg.get("tool_calls"):
             continue
-        for _ in msg["tool_calls"]:
-            thoughts.append((msg.get("content") or "").strip())
+        for call in msg["tool_calls"]:
+            tool = _CALL_NAMES.get((call.get("function") or {}).get("name", ""))
+            if tool:
+                thoughts.setdefault(tool, []).append((msg.get("content") or "").strip())
     repo = (load("pr.json", {}) or {}).get("repo", "")
 
     # flow.jsonl carries wall-clock offsets; without it everything lands on one second,
@@ -201,39 +225,52 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
              "args": {"content": msg.get("text", ""), "images_urls": []}}, offset)
 
     # --- the agent's tool calls ---------------------------------------------
+    used: dict[str, int] = {}
+    k = 0                                  # tool calls so far; `i` also counts reverts
     for i, entry in enumerate(tool_log):
-        offset = offsets[i] if i < len(offsets) else float(i)
+        offset = offsets[k] if k < len(offsets) else float(k)
         for msg in injected:
             if msg.get("at_tool") == i:
                 say(msg, offset)
         tool = entry.get("tool")
+        if tool == "guard":
+            # The harness undoing an edit to a file that existed at base -- ours, not a
+            # call the agent made, so it is not drawn as one.
+            add({"source": "environment", "key": "guard: reverted",
+                 "value": ", ".join(entry.get("reverted") or []),
+                 "message": ", ".join(entry.get("reverted") or [])}, offset + 0.05)
+            continue
+        k += 1
+        mine = thoughts.get(tool, [])
+        why = mine[used.get(tool, 0)] if used.get(tool, 0) < len(mine) else ""
+        used[tool] = used.get(tool, 0) + 1
 
         if tool == "write_file":
             content = entry.get("content", "")
             aid = add({"source": "agent", "action": "edit",
                        "message": f"write {entry.get('path')}",
                        "args": {"path": entry.get("path", ""), "old_content": "",
-                                "new_content": content,
-                                "thought": thoughts[i] if i < len(thoughts) else ""}},
+                                "new_content": content, "thought": why}},
                       offset)
             add({"source": "agent", "observation": "edit", "cause": aid,
-                 "message": f"wrote {entry.get('path')}",
+                 "message": entry.get("shown") or f"wrote {entry.get('path')}",
                  "content": content,
                  "extras": {"path": entry.get("path", ""),
                             "lines": entry.get("lines")}}, offset + 0.1)
             continue
 
-        why = thoughts[i] if i < len(thoughts) else ""
-
         # verify and coverage carry no `command` key, so before this they all
         # fell through to the shell branch and rendered as empty terminal boxes -- an
         # action with no command and no output. Each gets the shape that says what it is.
-        if tool in ("repo_info", "verify", "coverage"):
+        if tool in ("repo_info", "verify", "coverage", "mutation"):
             label = {"repo_info": "look up this project's test conventions",
                      "verify": f"check fail-to-pass for {entry.get('target', '')}",
-                     "coverage": f"measure changed-line coverage of "
-                                 f"{entry.get('target', '')}"}[tool]
-            body = _describe(tool, entry)
+                     "coverage": f"list the changed lines "
+                                 f"{entry.get('target', '')} never runs",
+                     "mutation": f"mutation-test {entry.get('target', '')}"}[tool]
+            # What the model was actually handed, when the run recorded it. Older runs
+            # did not, and get a re-rendering from the structured result instead.
+            body = entry.get("shown") or _describe(tool, entry)
             aid = add({"source": "agent", "action": "run", "message": label,
                        "args": {"command": f"[{tool}] {label}",
                                 "is_confirmed": "confirmed", "thought": why}}, offset)
@@ -256,7 +293,7 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
                             "thought": thought}}, offset)
         add({"source": "agent", "observation": "run", "cause": aid,
              "message": f"exit {entry.get('returncode')}",
-             "content": entry.get("output", ""),
+             "content": entry.get("shown") or entry.get("output", ""),
              "extras": {"command": command, "command_id": aid,
                         "exit_code": entry.get("returncode", 0),
                         "metadata": {"tool": tool,

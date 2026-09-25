@@ -259,6 +259,18 @@ def profile_for(model: str) -> ModelProfile:
     return MODELS[-1]
 
 
+def _temperature(text: str) -> float:
+    """A temperature, or a refusal -- never a silently clamped value."""
+    import argparse
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if not 0.0 <= value <= 2.0:
+        raise argparse.ArgumentTypeError(f"{value} is outside 0 to 2")
+    return value
+
+
 def add_arguments(parser: object) -> None:
     """`--model`, `--judge-model` and `--provider`, from the registry, so a profile added
     to the JSON is selectable without touching this file."""
@@ -274,6 +286,11 @@ def add_arguments(parser: object) -> None:
     group.add_argument("--judge-model", default=None,
                        help=f"the model that compares the generated test with the "
                             f"developer's (default: {DEFAULT_JUDGE}, from the registry)")
+    group.add_argument("--temperature", type=_temperature, default=None,
+                       help="the agent's sampling temperature, 0 to 2. Unset (the "
+                            "default) sends none and the provider picks -- which is what "
+                            "every run before this flag did. Applies to the agent only; "
+                            "the judge is not affected")
     group.add_argument("--provider", default=None, choices=tuple(BY_PROVIDER),
                        help="override the profile's provider, for reaching the same "
                             "model id through a different gateway")

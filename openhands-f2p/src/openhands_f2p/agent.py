@@ -126,13 +126,17 @@ MAX_PASSES_AT_BASE_ROUNDS = 2
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
               out_dir: Path, features: FeatureSet, n_mutants: int = 0,
               model: str | None = None, provider: str | None = None,
-              second_chance: bool = False) -> dict:
+              second_chance: bool = False, temperature: float | None = None) -> dict:
     from openhands.sdk import Agent, Conversation, Tool
     from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 
     t_start = time.time()
     llm, model, proxy = llm_config.configure_llm(out_dir / "completions",
-                                                 model=model, provider=provider)
+                                                 model=model, provider=provider,
+                                                 temperature=temperature)
+    # Read back from the LLM that will make the calls, not from the flag: what is
+    # recorded is what was configured.
+    temperature = llm.temperature
     tool_log: list = []
     # Two different questions, kept apart. `verify` and `coverage` need the harness to
     # *hold* the patch, which it always does -- it applies it and reverts it itself. The
@@ -158,11 +162,22 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
         row = {"kind": type(event).__name__,
                "at": datetime.now(timezone.utc).isoformat()}
         if isinstance(event, ActionEvent):
-            row["action"] = type(event.action).__name__
-            row["detail"] = str(event.action)[:2500]
+            if event.action is None:
+                # The SDK could not turn the tool call into an action (bad arguments, an
+                # unknown tool) and answers it with an error. It still costs an action.
+                # Logged as "NoneType None" before, and shown to the model under that
+                # name in its own tally when a stop was refused.
+                row["action"] = "unparsed call"
+                row["detail"] = (f"{event.tool_name}: "
+                                 f"{getattr(event.tool_call, 'arguments', '')}")[:2500]
+            else:
+                row["action"] = type(event.action).__name__
+                row["detail"] = str(event.action)[:2500]
             short = {"RunAction": "run", "WriteAction": "write",
                      "TestAction": "test", "FinishAction": "finish",
-                     "ThinkAction": "think"}.get(row["action"], row["action"])
+                     "ThinkAction": "think", "VerifyAction": "verify",
+                     "CoverageAction": "coverage", "MutationAction": "mutation",
+                     }.get(row["action"], row["action"])
             counts[short] = counts.get(short, 0) + 1
             n = sum(counts.values())
             if live:
@@ -172,7 +187,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                       f"({', '.join(f'{v} {k}' for k, v in counts.items())})"
                       f"{' ' * 12}", end="", flush=True)
             flow.record(flow.AGENT, row["action"],
-                        str(event.action).replace("\n", " ")[:110])
+                        row["detail"].replace("\n", " ")[:110])
         elif isinstance(event, (ObservationEvent, MessageEvent)):
             row["detail"] = str(getattr(event, "observation", None)
                                 or getattr(event, "llm_message", event))[:2500]
@@ -391,7 +406,8 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             "invented": dict(sandbox_tools.INVENTED), "retry": retry,
             "injected": injected,
             "transcript": transcript,
-            "tool_log": tool_log, "model": model, "task": task,
+            "tool_log": tool_log, "model": model, "temperature": temperature,
+            "task": task,
             "actions": sum(1 for r in transcript if "action" in r)}
 
 
@@ -500,7 +516,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
           out_root: Path | None = None, label: str = "",
           n_mutants: int = 0, model: str | None = None,
           provider: str | None = None, judge_model: str | None = None,
-          second_chance: bool = False) -> dict:
+          second_chance: bool = False, temperature: float | None = None) -> dict:
     features = features if features is not None else FeatureSet.of()
     inst = load(pr["id"])
     repo = inst["repo"]
@@ -562,7 +578,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
 
         run = run_agent(inst, box, test_file, max_iterations, d, features, n_mutants,
                         model=model, provider=provider,
-                        second_chance=second_chance)
+                        second_chance=second_chance, temperature=temperature)
         # Resolved before `audit`, which flags every write that is not the test file:
         # left unresolved, the agent's own chosen path would be reported as a stray
         # write on every run of this configuration.
@@ -703,6 +719,9 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               "test_path_default": default_path,
               "usage": usage,
               "model": run["model"], "agent_status": run["status"],
+              # None: no temperature was sent and the provider chose -- every run
+              # before `--temperature` existed. Absent from those results entirely.
+              "temperature": run.get("temperature"),
               "agent_error": flow.scrub(run.get("error") or "") or None,
               # The prompt lives here rather than in its own task.txt: it is one field,
               # and keeping it means a trajectory can still be rebuilt from disk.
@@ -1008,7 +1027,8 @@ def main() -> int:
                          args.label, args.mutants,
                          model=args.model, provider=args.provider,
                          judge_model=args.judge_model,
-                         second_chance=args.second_chance)
+                         second_chance=args.second_chance,
+                         temperature=args.temperature)
                    for pr in prs]
     else:
         jobs = []
