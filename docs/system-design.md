@@ -227,11 +227,24 @@ One call per instance to a stronger model that wrote none of these tests, after 
 verdict is settled. It answers three questions and they are kept apart, because a test can
 be about the right behaviour and still be unreadable, or read well and miss half the bug.
 
-| field | question |
-|---|---|
-| `verdict` | same / narrower / broader / different — is it about the same behaviour as the maintainer's test |
-| `issue_coverage` | does it reach every behaviour the pull request settles, with the ones it misses named |
-| `readability` | would it pass review — names, whether assertions state an expectation, whether a reader can tell what is pinned |
+Each is a **level from 1 to 5**, and each level has one label:
+
+| scale | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| concept — the same behaviour as the maintainer's test? | different | tangential | narrower | close | equivalent |
+| issue coverage — every behaviour the pull request settles? | none | minor only | main only | nearly complete | complete |
+| readability — would it pass review in this project? | reject | poor | acceptable | good | exemplary |
+
+The model writes only the number. The label is looked up in `compare.SCALES`, so it cannot
+be spelled two ways or drift from the definition the model was given, and reports print
+both -- `narrower (3)` -- under a legend generated from the same table. The stored shape
+keeps a `verdict` word where every earlier reader looked for one and adds `level` beside
+it, plus `"scale": 5`; a missing or out-of-range level makes the whole answer `unparsed`
+rather than guessed. The three-category judge (`same / narrower / broader / different`,
+`complete / partial / misses_the_point`, `good / acceptable / poor`) was replaced on
+2026-09-25 because its concept answer was not ordinal -- `narrower` and `broader` are
+different directions, not better and worse -- and three coarse bins could not show a
+movement smaller than a whole category.
 
 `issue_coverage` is judged against the **issue and the fix**, not against the maintainer's
 test: that test is evidence of what mattered, not the definition of it, so a test covering
@@ -321,7 +334,7 @@ That makes every shared resource a hazard, and two were real:
 |---|---|---|
 | `agent.py` | 1019 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 156 | What the agent actually did, checked rather than assumed. |
-| `compare.py` | 207 | Does the generated test check the same thing the developer's test checks? |
+| `compare.py` | 280 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 416 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
@@ -339,7 +352,7 @@ That makes every shared resource a hazard, and two were real:
 | `prompt.py` | 237 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 375 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 479 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
+| `runs.py` | 498 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 326 | One container per instance, and the only door into it. |
 | `sandbox_tools.py` | 809 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `statements.py` | 89 | Which statement a line belongs to. |

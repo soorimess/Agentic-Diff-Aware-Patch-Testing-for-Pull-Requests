@@ -18,6 +18,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from openhands_f2p.compare import SCALE_VERSION, SCALES, shown
 from openhands_f2p.layout import OUT
 from openhands_f2p.prs import PRS
 
@@ -155,11 +156,11 @@ def _row(pr: dict, root: Path) -> dict:
             "covered": c.get("covered"), "total": c.get("executable_changed_lines"),
             "actions": r.get("actions"), "why": (r.get("why") or "").strip(),
             "tools": _tools(d),
-            "judge": (r.get("concept") or {}).get("verdict", "—"),
-            "issue": ((r.get("concept") or {}).get("issue_coverage")
-                      or {}).get("verdict", "—"),
-            "readable": ((r.get("concept") or {}).get("readability")
-                         or {}).get("verdict", "—"),
+            # `narrower (3)` on the five-level judge, the bare word on the old one.
+            "judge": shown(r.get("concept")),
+            "issue": shown((r.get("concept") or {}).get("issue_coverage")),
+            "readable": shown((r.get("concept") or {}).get("readability")),
+            "five_level": bool((r.get("concept") or {}).get("scale") == SCALE_VERSION),
             "uncovered": ((r.get("concept") or {}).get("issue_coverage")
                           or {}).get("uncovered") or [],
             "rechecked": bool(r.get("rechecked")),
@@ -169,6 +170,23 @@ def _row(pr: dict, root: Path) -> dict:
             "cost": (r.get("usage") or {}).get("cost_usd") or 0.0,
             "second_chance": r.get("second_chance"),
             "lost": _lost_turns(d)}
+
+
+def _judge_legend() -> list[str]:
+    """What each judge number means, above the table that uses them.
+
+    Printed from `compare.SCALES` rather than written here, so the legend is the same
+    table the labels were looked up in and cannot describe a scale the judge was not
+    given.
+    """
+    names = {"concept": "concept -- same behaviour as the maintainer's test?",
+             "issue": "issue -- every behaviour the pull request settles?",
+             "readable": "readable -- would it pass review?"}
+    out = ["The three judge columns are levels from 1 (worst) to 5 (best), printed as "
+           "`label (level)`:", "", "| scale | 1 | 2 | 3 | 4 | 5 |", "|---|---|---|---|---|---|"]
+    for key, scale in SCALES.items():
+        out.append(f"| {names[key]} | " + " | ".join(scale[n] for n in range(1, 6)) + " |")
+    return out + [""]
 
 
 def _brief(why: str | None) -> str:
@@ -402,6 +420,7 @@ def build(root: Path = OUT) -> str:
                "agent's does not is a gap, and one neither kills is probably "
                "behaviourally equivalent to the fix and says nothing about either test. "
                "The individual diffs are in each instance's `mutations/`.", ""]),
+            *(_judge_legend() if any(r["five_level"] for r in rows) else []),
             f"| instance | version | verdict | coverage |"
             f"{' mutants: agent test | mutants: dev test |' if has_mutation else ''}"
             f" actions | tools used | concept | issue | readable | last run |",

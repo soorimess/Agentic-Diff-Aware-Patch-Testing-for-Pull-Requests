@@ -60,22 +60,55 @@ whether setup is minimal and relevant, and whether it follows the conventions vi
 the maintainer's test. Ignore formatting and line length. An assertion with no message
 where the failure is self-explanatory is fine; a bare `assert result` is not.
 
-Answer with JSON only, no prose around it, in exactly this shape:
+Answer each question with a **level from 1 to 5**, using the definitions below exactly.
+Levels are ordinal: pick the highest one whose whole description is true, not the one
+nearest an overall impression.
+
+**1. Concept -- is it about the same behaviour as the maintainer's test?**
+- 5 `equivalent` -- the same observable behaviour, checked as fully as the maintainer's
+  test does, or more.
+- 4 `close` -- the same behaviour, missing only a minor case the maintainer's test checks.
+- 3 `narrower` -- the same behaviour, but a clearly smaller part of what the maintainer's
+  test checks.
+- 2 `tangential` -- near the behaviour but not it: the same function exercised for another
+  property, the reported symptom rather than the contract the fix implements, or a
+  neighbouring behaviour that changes in the same commit.
+- 1 `different` -- another behaviour altogether, even if it would pass and fail at the same
+  commits.
+
+**2. Issue coverage -- does it cover every behaviour the pull request settles?**
+- 5 `complete` -- every distinct behaviour the pull request settles has an assertion.
+- 4 `nearly complete` -- all but one minor behaviour: an edge case, or one of two symmetric
+  places the same fix was applied.
+- 3 `main only` -- the main behaviour is covered, and at least one other substantial
+  behaviour the pull request settles is not.
+- 2 `minor only` -- only a secondary behaviour is covered; the main one is not.
+- 1 `none` -- none of the behaviours the pull request settles has an assertion.
+
+**3. Readability -- would you accept it in review in this project?**
+- 5 `exemplary` -- would pass review as it stands, and reads like the project's own tests.
+- 4 `good` -- would pass with a nit or two.
+- 3 `acceptable` -- would pass after small requested changes.
+- 2 `poor` -- needs substantial rework before review would accept it.
+- 1 `reject` -- misleading, vacuous or unreadable; review would turn it away.
+
+Answer with JSON only, no prose around it, in exactly this shape. Give the number only;
+the labels above are for you to read, not to write:
 
 {
-  "verdict": "same" | "narrower" | "broader" | "different",
+  "concept_level": 1 | 2 | 3 | 4 | 5,
   "generated_asserts": "one sentence: what the generated test actually checks",
   "developer_asserts": "one sentence: what the developer's test actually checks",
   "shared": "the behaviour both reach, or 'none'",
   "missed": "what the developer's test covers that the generated one does not, or 'nothing'",
   "issue_coverage": {
-    "verdict": "complete" | "partial" | "misses_the_point",
+    "level": 1 | 2 | 3 | 4 | 5,
     "behaviours_in_pr": ["one line per distinct behaviour the pull request settles"],
     "covered": [{"behaviour": "...", "assertion": "the exact line from the generated test that checks it"}],
     "uncovered": ["those it does not, or empty"]
   },
   "readability": {
-    "verdict": "good" | "acceptable" | "poor",
+    "level": 1 | 2 | 3 | 4 | 5,
     "strengths": "one sentence, or 'none'",
     "problems": ["specific, quotable: a bad name, a vacuous assertion, unexplained setup"],
     "nothing_to_raise": "only when problems is empty: what you checked and found clean"
@@ -84,15 +117,9 @@ Answer with JSON only, no prose around it, in exactly this shape:
   "reasoning": "two sentences at most"
 }
 
-Use "narrower" when the generated test checks a real subset of the developer's -- the
-right behaviour, fewer cases. Use "broader" when it checks that and more. Use
-"different" when it is about another behaviour, even if it would pass and fail at the
-same commits.
-
-Be a strict reviewer on questions 2 and 3 and a fair one on question 1. Do not soften
-"partial" to "complete" because the test passes, and do not call a test "good" because it
-works -- these three answers are read separately and a uniformly generous one is worth
-nothing.
+Be a strict reviewer on questions 2 and 3 and a fair one on question 1. Do not raise issue
+coverage because the test passes, and do not raise readability because it works -- these
+three answers are read separately and a uniformly generous one is worth nothing.
 
 Two rules make that concrete rather than a wish.
 
@@ -106,8 +133,8 @@ it.
 
 **An empty `problems` list needs saying so.** If you raise nothing, fill
 `nothing_to_raise` with what you actually checked -- names, assertions, setup, convention
--- and found clean. A verdict of good with an empty list and no account of what was
-examined is not an answer.
+-- and found clean. A readability of 4 or 5 with an empty list and no account of
+what was examined is not an answer.
 
 One thing is never a defect: a long generated test may reach you elided. Judge what you
 were given, and do not report truncation, an unterminated string at the end of the
@@ -151,10 +178,57 @@ def _parse(text: str) -> dict[str, Any]:
     if start >= 0 and end > start:
         raw = raw[start:end + 1]
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
+        return _levels(json.loads(raw))
+    except (json.JSONDecodeError, ValueError, TypeError, AttributeError, KeyError):
         return {"verdict": "unparsed", "reasoning": text[:400],
                 "confidence": "low"}
+
+
+# The three scales. The model writes only the number; the label is looked up here, so
+# a label can never be spelled two ways or drift from its definition in SYSTEM. Kept in
+# the order the prompt defines them, and read by the reports for their legend.
+SCALES: dict[str, dict[int, str]] = {
+    "concept":  {1: "different", 2: "tangential", 3: "narrower", 4: "close",
+                 5: "equivalent"},
+    "issue":    {1: "none", 2: "minor only", 3: "main only", 4: "nearly complete",
+                 5: "complete"},
+    "readable": {1: "reject", 2: "poor", 3: "acceptable", 4: "good", 5: "exemplary"},
+}
+SCALE_VERSION = 5
+
+
+def _level(value: Any) -> int:
+    n = int(value)
+    if n not in range(1, 6):
+        raise ValueError(f"level {value!r} is outside 1..5")
+    return n
+
+
+def _levels(out: dict[str, Any]) -> dict[str, Any]:
+    """Attach the label for every level, in the fields existing readers already read.
+
+    `verdict` stays the concept label and each sub-block keeps a `verdict` label, so
+    everything that consumed the three-category judge still finds a word where it
+    looked for one; the number sits beside it as `level`. A level that is missing or out
+    of range is not guessed at -- the whole answer becomes `unparsed`.
+    """
+    c = _level(out.pop("concept_level"))
+    out["level"], out["verdict"] = c, SCALES["concept"][c]
+    for key, scale in (("issue_coverage", "issue"), ("readability", "readable")):
+        block = out.get(key) or {}
+        n = _level(block.get("level"))
+        block["level"], block["verdict"] = n, SCALES[scale][n]
+        out[key] = block
+    out["scale"] = SCALE_VERSION
+    return out
+
+
+def shown(block: dict[str, Any] | None, key: str = "verdict") -> str:
+    """How a judge answer is printed: `narrower (3)`. Older three-category answers,
+    which carry no level, print as the bare word they always were."""
+    block = block or {}
+    label = block.get(key, "—")
+    return f"{label} ({block['level']})" if block.get("level") else str(label)
 
 
 def compare(instance: dict[str, Any], generated: str,
@@ -199,9 +273,8 @@ def compare(instance: dict[str, Any], generated: str,
 def line(result: dict[str, Any]) -> str:
     """One terminal line. All three answers, because reading only the first is how a
     test that is 'same' and unreadable and half-complete looks like a success."""
-    cov = (result.get("issue_coverage") or {}).get("verdict", "?")
-    read = (result.get("readability") or {}).get("verdict", "?")
     uncovered = (result.get("issue_coverage") or {}).get("uncovered") or []
     tail = f"  misses: {uncovered[0][:52]}" if uncovered else ""
-    return (f"{result.get('verdict', '?')} | issue {cov} | readable {read} "
+    return (f"concept {shown(result)} | issue {shown(result.get('issue_coverage'))} | "
+            f"readable {shown(result.get('readability'))} "
             f"({result.get('confidence', '?')} conf){tail}")
