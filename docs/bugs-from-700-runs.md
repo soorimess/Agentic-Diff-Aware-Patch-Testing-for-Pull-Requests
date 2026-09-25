@@ -106,6 +106,25 @@ at ..._3069.py"*. Correct, but it looked like the agent wrote nothing. (An earli
 called this a substantive NO; it was not.) **Fix:** the message names the test files it did
 write.
 
+## Found while testing the new system
+
+A 26-instance run of the new system (`experiments-tests/new-system-26`) checked every fix
+above against what the model actually received. All held. It surfaced two more:
+
+- **django's summary line parsed as a test.** `FAILED (errors=1)` fits the pytest
+  short-summary pattern, so the agent read `['test_x', '(errors=1)'] still fail after the
+  change`. Verdict-neutral -- it only appears beside a real failure -- but misleading.
+  Fixed: no test id starts with a parenthesis.
+- **The judge's trailing comma.** `matplotlib-13989` came back complete (concept 5,
+  issue 5) with `"reasoning": "...",` as its last line and was recorded as `unparsed`.
+  Fixed: a trailing comma is tolerated, only after a strict parse fails.
+
+And one behaviour, not a bug: under repeated refusal the model's policy is **write →
+verify → finish** every round. It reads `verify`'s "NOT fail-to-pass ... you cannot
+finish" and finishes anyway; the loop turns that into up to five attempts instead of one.
+`django-13406` recovered this way (YES after five refusals); `django-11119` and
+`pylint-4970` exhausted the cap still passing at base.
+
 ## Not changed yet, on purpose
 
 - **Sampling is unset.** No `temperature`, `top_p` or `seed` anywhere; four identical

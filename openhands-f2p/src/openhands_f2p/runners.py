@@ -204,7 +204,7 @@ def parse_output(output: str) -> dict[str, str]:
     """Per-test outcome, whatever runner produced the output.
 
     Every pattern is tried on every line rather than choosing one by project. The three
-    formats are distinctive enough that they do not collide -- pytest prints a node id
+    formats are distinctive enough that they barely collide -- pytest prints a node id
     containing `::`, django prints `name ... ok`, sympy prints a bare function name and a
     single-letter status -- and trying all of them removes the need to know which runner
     ran before the output can be read.
@@ -223,7 +223,12 @@ def parse_output(output: str) -> dict[str, str]:
         # and the escape sequences sit *inside* the node id, not just around it.
         line = ANSI.sub("", raw).strip()
         m = PYTEST_LINE.match(line)
-        if m:
+        # django's closing summary, `FAILED (errors=1)`, fits the pytest short-summary
+        # pattern too, and was being read as a failing test named "(errors=1)". It never
+        # changed a verdict -- it only appears beside a real failure -- but it reached the
+        # agent as one of the tests that "still fail after the change". No test id starts
+        # with a parenthesis.
+        if m and not m.group(2).startswith("("):
             out[m.group(2)] = _NORMAL.get(m.group(1), m.group(1))
             continue
         m = PYTEST_VERBOSE.match(line)

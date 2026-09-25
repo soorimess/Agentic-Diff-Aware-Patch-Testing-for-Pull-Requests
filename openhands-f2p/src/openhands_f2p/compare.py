@@ -160,6 +160,11 @@ The generated test
 """
 
 FENCE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.S)
+# A comma before a closing brace or bracket. Strict JSON rejects it, and the judge writes
+# it now and then: matplotlib-13989 came back complete -- concept 5, issue 5 -- with
+# `"reasoning": "...",` as its last line, and was recorded as unparsed. Tried only after
+# the strict parse fails, so a well-formed answer is never rewritten.
+TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 
 
 def added_lines(diff: str) -> str:
@@ -177,11 +182,12 @@ def _parse(text: str) -> dict[str, Any]:
     start, end = raw.find("{"), raw.rfind("}")
     if start >= 0 and end > start:
         raw = raw[start:end + 1]
-    try:
-        return _levels(json.loads(raw))
-    except (json.JSONDecodeError, ValueError, TypeError, AttributeError, KeyError):
-        return {"verdict": "unparsed", "reasoning": text[:400],
-                "confidence": "low"}
+    for candidate in (raw, TRAILING_COMMA.sub(r"\1", raw)):
+        try:
+            return _levels(json.loads(candidate))
+        except (json.JSONDecodeError, ValueError, TypeError, AttributeError, KeyError):
+            continue
+    return {"verdict": "unparsed", "reasoning": text[:400], "confidence": "low"}
 
 
 # The three scales. The model writes only the number; the label is looked up here, so
