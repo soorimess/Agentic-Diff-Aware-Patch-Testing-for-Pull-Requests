@@ -42,6 +42,7 @@ from openhands_f2p.checks import audit, budget_exhausted, token_usage
 from openhands_f2p.dataset import load
 from openhands_f2p import image_cache, mutants
 from openhands_f2p import models
+from openhands_f2p import models as M
 from openhands_f2p.features import FeatureSet, add_arguments, instruments
 from openhands_f2p.layout import CACHE, OUT, PROJECT_ROOT
 from openhands_f2p.parallel import (CHILD_ENV_FLAG, _child_argv, _needs_retry,
@@ -773,6 +774,19 @@ def _write_summary(path: Path, results: list[dict]) -> None:
 
 def main() -> int:
     args = build_parser().parse_args()
+
+    # Which model runs is never implicit. The registry has a `default_model`, so an
+    # invocation that omitted --model used to start cleanly on whatever that happened
+    # to be -- gpt-5-mini -- while the arm it was being compared against had run on
+    # qwen3-coder-30b. Twenty-two of twenty-three failures converted and read as
+    # variance until the model field in result.json was checked. A run is a
+    # measurement against a named configuration; naming the model is part of stating
+    # what was measured, so leaving it out is an error rather than a default.
+    if not getattr(args, "model", None) and not args.dry_run:
+        raise SystemExit(
+            "  --model is required. There is no fallback for which model runs.\n"
+            f"  The registry's default_model is {M.DEFAULT_MODEL!r}, but a default is "
+            "not a decision -- name the model this run is measuring.")
 
     features = FeatureSet.from_args(args)
     # Resolved before the early-returning branches below, which all report on a series

@@ -21,7 +21,12 @@ Three things this module owes the file, because a JSON registry has no compiler 
   checked against the dataclass and an unknown one names itself and the entry it is in.
 * **A missing or broken file says where it looked.** Not a `FileNotFoundError` from three
   frames down.
-* **Precedence runs CLI flag, registry, `FALLBACK_LLM_*`, built-in.** The registry sits
+* **Which model runs has no fallback at all.** `--model`, else `default_model` in the
+  registry, else the run stops. It never resolves through an environment variable and
+  never lands on a literal default: a run that silently swapped the model for a stronger
+  one produced a result that looked like a finding.
+* **Precedence runs CLI flag, registry, `FALLBACK_LLM_*`, built-in** for everything else
+  -- timeouts, retries, token ceilings, API mode. The registry sits
   above the environment on purpose: a variable is global and a profile is per-model, so
   when the variable won, `LLM_TIMEOUT=600` in a `.env` silently overrode the 900 that
   `gpt-5.5` asks for and no profile could be trusted to mean anything. The `FALLBACK_`
@@ -210,11 +215,22 @@ def _load() -> tuple[dict, tuple[Provider, ...], tuple[ModelProfile, ...],
             raise SystemExit(
                 f"  {REGISTRY}: model {m.match!r} names provider {m.provider!r}, which "
                 f"is not defined. Defined: {', '.join(sorted(names))}")
+    # No fallback on *which model runs*. A missing default used to resolve through
+    # FALLBACK_LLM_MODEL and then to a literal "gpt-5-mini", so a run that forgot
+    # --model produced a clean-looking result on a different model than the arm it
+    # was being compared against. That happened, cost a run, and read as variance.
+    # Everything below is a hard error instead; the numeric settings keep their
+    # FALLBACK_ defaults, because those fill in unspecified knobs rather than
+    # substituting one model for another.
+    if not raw.get("default_model"):
+        raise SystemExit(f"  {REGISTRY}: 'default_model' is required. "
+                         f"There is no fallback for which model runs -- name it here "
+                         f"or pass --model.")
+    if not raw.get("default_judge"):
+        raise SystemExit(f"  {REGISTRY}: 'default_judge' is required. "
+                         f"There is no fallback for which judge runs.")
     return (raw, provs, profs,
-            raw.get("default_model") or os.getenv("FALLBACK_LLM_MODEL") or "gpt-5-mini",
-            raw.get("default_judge") or os.getenv("FALLBACK_LLM_JUDGE_MODEL")
-            or "gpt-5.5",
-            _judge_timeout(raw))
+            raw["default_model"], raw["default_judge"], _judge_timeout(raw))
 
 
 def _judge_timeout(raw: dict) -> int:
