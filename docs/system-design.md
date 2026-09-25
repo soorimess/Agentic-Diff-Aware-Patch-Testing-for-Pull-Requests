@@ -332,9 +332,9 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1019 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1052 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 156 | What the agent actually did, checked rather than assumed. |
-| `compare.py` | 280 | Does the generated test check the same thing the developer's test checks? |
+| `compare.py` | 286 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 416 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
@@ -351,7 +351,7 @@ That makes every shared resource a hazard, and two were real:
 | `parallel.py` | 245 | Running several pull requests at once, as separate processes. |
 | `prompt.py` | 237 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
-| `runners.py` | 375 | Three test-runner conventions, and how to read what they print. |
+| `runners.py` | 380 | Three test-runner conventions, and how to read what they print. |
 | `runs.py` | 498 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 326 | One container per instance, and the only door into it. |
 | `sandbox_tools.py` | 809 | OpenHands tools whose executors run inside the SWE-bench container. |
@@ -359,7 +359,7 @@ That makes every shared resource a hazard, and two were real:
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 322 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 501 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 563 | The F2P decision. One implementation, used by every arm. |
 <!-- /generated:modules -->
 
 ## The agent's tools
@@ -406,6 +406,24 @@ row. Until 2026-09-25 this happened once: 162 of 630 runs with a verify tool end
 edit they never verified, 144 of them after the single refusal had fired. Every refusal is
 written to `injected_messages.json` and appears in `trajectory.json` at the point it
 arrived; the export used to show the opening task alone.
+
+Three rules shape it, all from the first run of the loop (`experiments-tests/new-system-26`),
+where the model's pattern under refusal was *write → verify → finish* every round:
+
+- **A test that passes at base is told which mistake it is making.** "Passes on this code"
+  has two causes that need opposite corrections: the test never executes the changed lines
+  (move the input), or it executes them and asserts something true on both sides (change
+  the assertion). The refusal says which, from the changed-line coverage at head. Only when
+  the agent holds `coverage`, which reports exactly this, so the refusal adds nothing the
+  agent could not ask for itself.
+- **`passes_at_base` is refused at most twice in a row.** Seven of eight runs that reached it
+  stayed for all five rounds; the one that recovered left after the first.
+- **A test that already flips gets one reminder.** Refusals over an unanswered `coverage` or
+  `mutation` cannot change its verdict, and two tests were refused five times each while
+  already passing.
+
+Replayed over that run's recorded refusals, the last two rules drop 25 of 55 rounds without
+losing any of the three conversions.
 
 ### `mutation`
 

@@ -188,6 +188,68 @@ def shortfall(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str, st
     return None
 
 
+def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
+    """For a test that passes at base: which of the two very different mistakes is it?
+
+    "Your test passes on this code" was the whole refusal, and it was the one that almost
+    never worked: 156 refusals for it across the ten arms converted 3%, and on the new
+    system seven of eight runs stuck on it spent all five rounds there. The agent rewrote
+    every time -- it did not know which way it was wrong. There are two ways:
+
+      it never executes the changed lines   the input is aimed at the wrong code
+      it executes them and still passes     the input is right, the assertion checks
+                                            something true on both sides of the change
+
+    Those call for opposite corrections, and nothing in the old message told them apart.
+
+    Only called when the agent holds `coverage`, which reports exactly this fact -- so the
+    refusal tells it nothing it could not have asked for, and the base-only boundary that
+    `shortfall` keeps is not crossed by what the agent learns, only by where it reads it.
+    Measured with the patch applied, as the tool does, and always reverted.
+    """
+    patch = instance["patch"]
+    if box.ensure_base(patch) != "base":
+        return ""
+    box.apply_patch(patch)
+    try:
+        cov = E.changed_line_coverage(box, [rel], patch)
+    except Exception:                                           # noqa: BLE001
+        cov = {}
+    finally:
+        box.apply_patch(patch, revert=True)
+    # A test that never imports the changed file leaves no entry for it in the coverage
+    # report, and the metric calls that unmeasurable -- right for a score, wrong here: it
+    # is the plainest case of not reaching the change. django-16333's first live refusal
+    # went out with no diagnosis for exactly this reason.
+    if not cov.get("measured") and cov.get("reason") != "the changed file was never imported by this test":
+        return ""
+    flow.record(flow.VERIFY, "second-chance reach",
+                f"{rel}: runs {cov.get('covered', 0)} of the changed lines"
+                + ("" if cov.get("measured") else " (changed file never imported)"))
+    if not cov.get("covered"):
+        return ("\n\n**It does not reach the change.** Running it executes none of the "
+                "lines this pull request changes, so whatever it asserts is about code the "
+                "fix does not touch. Keep the idea and move the input: call the code the "
+                "change modifies, with an input that sends execution through the changed "
+                "lines. `coverage` shows which they are and the conditions above each.")
+    return ("\n\n**It does reach the change, and still passes before the fix.** It runs "
+            "lines this pull request changes, so the input is aimed at the right code -- "
+            "the assertion is what is wrong: it checks something that is true both before "
+            "and after the change. Keep the input. Work out what the changed lines compute "
+            "differently, and assert that value or behaviour instead.")
+
+
+def verify_settled(tool_log: list) -> bool:
+    """Whether the test is fail-to-pass by the agent's own last `verify`, unchanged since."""
+    found = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == "verify"]
+    if not found:
+        return False
+    i, e = found[-1]
+    still = [n for n, st in (e.get("after") or {}).items() if st in BEHAVIOURAL]
+    wrote = any(x.get("tool") == "write_file" for x in tool_log[i + 1:])
+    return bool(e.get("flipped")) and not still and not wrote
+
+
 def loop_gap(tool_log: list, instruments: tuple[str, ...],
              rel: str) -> tuple[str, str] | None:
     """Whether the finishing loop actually closed, read off the agent's own actions.

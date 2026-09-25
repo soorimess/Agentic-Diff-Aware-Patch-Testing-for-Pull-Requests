@@ -125,6 +125,25 @@ finish" and finishes anyway; the loop turns that into up to five attempts instea
 `django-13406` recovered this way (YES after five refusals); `django-11119` and
 `pylint-4970` exhausted the cap still passing at base.
 
+That behaviour led to three more rules on the refusal loop (see "Refusing a stop" in
+`docs/system-design.md`):
+
+- A `passes_at_base` refusal now says **which** mistake it is, measured the way the
+  `coverage` tool measures it (only when the agent holds that tool): the test never runs
+  the changed lines (move the input), or it runs them and still passes (keep the input,
+  change the assertion). The old message could not tell these apart, and the agent
+  rewrote blindly every round.
+- `passes_at_base` is refused at most two rounds running; a test that already flips is
+  reminded of an open coverage/mutation duty at most once. Replayed on the 26-PR run,
+  these drop 25 of 55 rounds and lose none of its three conversions.
+
+The live check (`experiments-tests/diag-smoke`) showed both diagnoses reaching the model
+and the two-round stop firing. It also caught one gap: a test that never imports the
+changed file leaves no entry in the coverage report, the metric calls that
+*unmeasurable*, and the first refusal went out with no diagnosis at all -- the plainest
+case of not reaching the change. The diagnosis now reads that reason as "runs none of
+the changed lines". The published coverage metric is unchanged.
+
 ## Not changed yet, on purpose
 
 - **Sampling is unset.** No `temperature`, `top_p` or `seed` anywhere; four identical

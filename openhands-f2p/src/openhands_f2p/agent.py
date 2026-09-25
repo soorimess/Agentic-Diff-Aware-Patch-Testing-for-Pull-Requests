@@ -116,6 +116,11 @@ def _elsewhere(run: dict, test_file: str) -> str:
 # number of times the same kind of message is appended to the context, and a run still
 # open after five refusals has usually stopped moving.
 MAX_REFUSALS = 5
+# `passes_at_base` refused at most this many rounds in a row. On the new system's first
+# run seven of eight instances that reached it stayed there for all five rounds; the one
+# that recovered left it after the first. A third identical refusal has not converted
+# anything, in either system.
+MAX_PASSES_AT_BASE_ROUNDS = 2
 
 
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
@@ -291,6 +296,34 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 break
 
             reason, say = gap
+            # A test that already flips, refused only because `coverage` or `mutation`
+            # has not been answered. One reminder is worth sending; after that the
+            # refusals cannot change the verdict and only spend tokens -- xarray-7233 and
+            # scikit-learn-10908 were refused five times each while already passing.
+            settled = V.verify_settled(tool_log)
+            if settled and reason == "loop_open" and any(r.get("settled") for r in rounds):
+                flow.record(flow.AGENT, "second chance",
+                            "test already fail-to-pass; its one reminder about the "
+                            "remaining checks was given; not refusing again")
+                break
+            streak = 0
+            for r in reversed(rounds):
+                if "passes_at_base" not in r["reason"]:
+                    break
+                streak += 1
+            if "passes_at_base" in reason and streak >= MAX_PASSES_AT_BASE_ROUNDS:
+                flow.record(flow.AGENT, "second chance",
+                            f"passes at base after {streak} refusals running; "
+                            f"not refusing again")
+                break
+            # Which of the two mistakes a passing-at-base test is making. Only with the
+            # coverage tool registered: see `V.reach_diagnosis`.
+            if "passes_at_base" in reason and "coverage-tool" in features:
+                diag = V.reach_diagnosis(box, instance, rel)
+                if diag:
+                    marker = "whatever it checks was true before the fix as well."
+                    say = (say.replace(marker, marker + diag, 1) if marker in say
+                           else say + diag)
             nudge = prompt.followup("second-chance", shortfall=say,
                                     recap=_recap(counts, tool_log), test_file=rel,
                                     budget=left, cap=max_iterations)
@@ -318,7 +351,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 flow.record(flow.AGENT, "retry raised", error[:200])
             after = sum(counts.values())
             rounds.append({"reason": reason, "said": say, "budget": left,
-                           "actions": after - before})
+                           "actions": after - before, "settled": settled})
             flow.record(flow.AGENT, "second chance done",
                         f"round {len(rounds)}: {after - before} more actions, {status}")
             if error:
