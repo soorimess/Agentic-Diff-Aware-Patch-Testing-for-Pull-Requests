@@ -1,0 +1,314 @@
+[
+  {
+    "tool": "run",
+    "command": "find . -name \"*.py\" -path \"*/tests/*\" | head -10",
+    "returncode": 0,
+    "output": "./tests/timezones/admin.py\n./tests/timezones/forms.py\n./tests/timezones/models.py\n./tests/timezones/__init__.py\n./tests/timezones/urls.py\n./tests/timezones/tests.py\n./tests/aggregation_regress/models.py\n./tests/aggregation_regress/__init__.py\n./tests/aggregation_regress/tests.py\n./tests/null_fk_ordering/models.py\n"
+  },
+  {
+    "tool": "run",
+    "command": "find . -name \"query.py\" -type f",
+    "returncode": 0,
+    "output": "./django/db/models/sql/query.py\n./django/db/models/query.py\n"
+  },
+  {
+    "tool": "run",
+    "command": "grep -n \"def bulk_update\" ./django/db/models/query.py",
+    "returncode": 0,
+    "output": "527:    def bulk_update(self, objs, fields, batch_size=None):\n"
+  },
+  {
+    "tool": "run",
+    "command": "sed -n '527,580p' ./django/db/models/query.py",
+    "returncode": 0,
+    "output": "    def bulk_update(self, objs, fields, batch_size=None):\n        \"\"\"\n        Update the given fields in each of the given objects in the database.\n        \"\"\"\n        if batch_size is not None and batch_size < 0:\n            raise ValueError('Batch size must be a positive integer.')\n        if not fields:\n            raise ValueError('Field names must be given to bulk_update().')\n        objs = tuple(objs)\n        if any(obj.pk is None for obj in objs):\n            raise ValueError('All bulk_update() objects must have a primary key set.')\n        fields = [self.model._meta.get_field(name) for name in fields]\n        if any(not f.concrete or f.many_to_many for f in fields):\n            raise ValueError('bulk_update() can only be used with concrete fields.')\n        if any(f.primary_key for f in fields):\n            raise ValueError('bulk_update() cannot be used with primary key fields.')\n        if not objs:\n            return\n        # PK is used twice in the resulting update query, once in the filter\n        # and once in the WHEN. Each field will also have one CAST.\n        max_batch_size = connections[self.db].ops.bulk_batch_size(['pk', 'pk'] + fields, objs)\n        batch_size = min(batch_size, max_batch_size) if batch_size else max_batch_size\n        requires_casting = connections[self.db].features.requires_casted_case_in_updates\n        batches = (objs[i:i + batch_size] for i in range(0, len(objs), batch_size))\n        updates = []\n        for batch_objs in batches:\n            update_kwargs = {}\n            for field in fields:\n                when_statements = []\n                for obj in batch_objs:\n                    attr = getattr(obj, field.attname)\n                    if not isinstance(attr, Expression):\n                        attr = Value(attr, output_field=field)\n                    when_statements.append(When(pk=obj.pk, then=attr))\n                case_statement = Case(*when_statements, output_field=field)\n                if requires_casting:\n                    case_statement = Cast(case_statement, output_field=field)\n                update_kwargs[field.attname] = case_statement\n            updates.append(([obj.pk for obj in batch_objs], update_kwargs))\n        with transaction.atomic(using=self.db, savepoint=False):\n            for pks, update_kwargs in updates:\n                self.filter(pk__in=pks).update(**update_kwargs)\n    bulk_update.alters_data = True\n\n    def get_or_create(self, defaults=None, **kwargs):\n        \"\"\"\n        Look up an object with the given kwargs, creating one if necessary.\n        Return a tuple of (object, created), where created is a boolean\n        specifying whether an object was created.\n        \"\"\"\n        # The get() needs to be targeted at the write database in order\n        # to avoid potential transaction consistency problems.\n        self._for_write = True\n        try:\n"
+  },
+  {
+    "tool": "run",
+    "command": "find . -name \"*.py\" -exec grep -l \"bulk_update\" {} \\; | grep test",
+    "returncode": 0,
+    "output": "./tests/queries/test_bulk_update.py\n./tests/migrations/test_state.py\n./tests/basic/tests.py\n./tests/postgres_tests/test_bulk_update.py\n"
+  },
+  {
+    "tool": "run",
+    "command": "cat ./tests/queries/test_bulk_update.py",
+    "returncode": 0,
+    "output": "import datetime\n\nfrom django.core.exceptions import FieldDoesNotExist\nfrom django.db.models import F\nfrom django.db.models.functions import Lower\nfrom django.test import TestCase, skipUnlessDBFeature\n\nfrom .models import (\n    Article, CustomDbColumn, CustomPk, Detail, Individual, JSONFieldNullable,\n    Member, Note, Number, Order, Paragraph, SpecialCategory, Tag, Valid,\n)\n\n\nclass BulkUpdateNoteTests(TestCase):\n    @classmethod\n    def setUpTestData(cls):\n        cls.notes = [\n            Note.objects.create(note=str(i), misc=str(i))\n            for i in range(10)\n        ]\n\n    def create_tags(self):\n        self.tags = [\n            Tag.objects.create(name=str(i))\n            for i in range(10)\n        ]\n\n    def test_simple(self):\n        for note in self.notes:\n            note.note = 'test-%s' % note.id\n        with self.assertNumQueries(1):\n            Note.objects.bulk_update(self.notes, ['note'])\n        self.assertCountEqual(\n            Note.objects.values_list('note', flat=True),\n            [cat.note for cat in self.notes]\n        )\n\n    def test_multiple_fields(self):\n        for note in self.notes:\n            note.note = 'test-%s' % note.id\n            note.misc = 'misc-%s' % note.id\n        with self.assertNumQueries(1):\n            Note.objects.bulk_update(self.notes, ['note', 'misc'])\n        self.assertCountEqual(\n            Note.objects.values_list('note', flat=True),\n            [cat.note for cat in self.notes]\n        )\n        self.assertCountEqual(\n            Note.objects.values_list('misc', flat=True),\n            [cat.misc for cat in self.notes]\n        )\n\n    def test_batch_size(self):\n        with self.assertNumQueries(len(self.notes)):\n            Note.objects.bulk_update(self.notes, fields=['note'], batch_size=1)\n\n    def test_unsaved_models(self):\n        objs = self.notes + [Note(note='test', misc='test')]\n        msg = 'All bulk_update() objects must have a primary key set.'\n        with self.assertRaisesMessage(ValueError, msg):\n            Note.objects.bulk_update(objs, fields=['note'])\n\n    def test_foreign_keys_do_not_lookup(self):\n        self.create_tags()\n        for note, tag in zip(self.notes, self.tags):\n            note.tag = tag\n        with self.assertNumQueries(1):\n            Note.objects.bulk_update(self.notes, ['tag'])\n        self.assertSequenceEqual(Note.objects.filter(tag__isnull=False), self.notes)\n\n    def test_set_field_to_null(self):\n        self.create_tags()\n        Note.objects.update(tag=self.tags[0])\n        for note in self.notes:\n            note.tag = None\n        Note.objects.bulk_update(self.notes, ['tag'])\n        self.assertCountEqual(Note.objects.filter(tag__isnull=True), self.notes)\n\n    def test_set_mixed_fields_to_null(self):\n        self.create_tags()\n        midpoint = len(self.notes) // 2\n        top, bottom = self.notes[:midpoint], self.notes[midpoint:]\n        for note in top:\n            note.tag = None\n        for note in bottom:\n            note.tag = self.tags[0]\n        Note.objects.bulk_update(self.notes, ['tag'])\n        self.assertCountEqual(Note.objects.filter(tag__isnull=True), top)\n        self.assertCountEqual(Note.objects.filter(tag__isnull=False), bottom)\n\n    def test_functions(self):\n        Note.objects.update(note='TEST')\n        for note in self.notes:\n            note.note = Lower('note')\n        Note.objects.bulk_update(self.notes, ['note'])\n        self.assertEqual(set(Note.objects.values_list('note', flat=True)), {'test'})\n\n    # Tests that use self.notes go here, otherwise put them in another class.\n\n\nclass BulkUpdateTests(TestCase):\n    def test_no_fields(self):\n        msg = 'Field names must be given to bulk_update().'\n        with self.assertRaisesMessage(ValueError, msg):\n            Note.objects.bulk_update([], fields=[])\n\n    def test_invalid_batch_size(self):\n        msg = 'Batch size must be a positive integer.'\n        with self.assertRaisesMessage(ValueError, msg):\n            Note.objects.bulk_update([], fields=["
+  },
+  {
+    "tool": "run",
+    "command": "head -20 ./tests/queries/test_bulk_update.py",
+    "returncode": 0,
+    "output": "import datetime\n\nfrom django.core.exceptions import FieldDoesNotExist\nfrom django.db.models import F\nfrom django.db.models.functions import Lower\nfrom django.test import TestCase, skipUnlessDBFeature\n\nfrom .models import (\n    Article, CustomDbColumn, CustomPk, Detail, Individual, JSONFieldNullable,\n    Member, Note, Number, Order, Paragraph, SpecialCategory, Tag, Valid,\n)\n\n\nclass BulkUpdateNoteTests(TestCase):\n    @classmethod\n    def setUpTestData(cls):\n        cls.notes = [\n            Note.objects.create(note=str(i), misc=str(i))\n            for i in range(10)\n        ]\n"
+  },
+  {
+    "tool": "run",
+    "command": "find . -name \"pytest.ini\" -o -name \"tox.ini\" -o -name \"setup.cfg\" -o -name \"pyproject.toml\" | head -5",
+    "returncode": 0,
+    "output": "./tox.ini\n./pyproject.toml\n./setup.cfg\n"
+  },
+  {
+    "tool": "run",
+    "command": "python -m pytest --version",
+    "returncode": 1,
+    "output": "\n/opt/miniconda3/envs/testbed/bin/python: No module named pytest\n"
+  },
+  {
+    "tool": "run",
+    "command": "python -c \"import django; print('Django is available')\"",
+    "returncode": 0,
+    "output": "Django is available\n"
+  },
+  {
+    "tool": "run",
+    "command": "python -c \"\nimport os\nimport sys\nsys.path.insert(0, '.')\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'tests.settings')\nimport django\ndjango.setup()\nfrom django.db.models.query import QuerySet\nprint('QuerySet bulk_update method source:')\nimport inspect\nprint(inspect.getsource(QuerySet.bulk_update))\n\"",
+    "returncode": 1,
+    "output": "\nTraceback (most recent call last):\n  File \"<string>\", line 7, in <module>\n  File \"/testbed/./django/__init__.py\", line 19, in setup\n    configure_logging(settings.LOGGING_CONFIG, settings.LOGGING)\n  File \"/testbed/./django/conf/__init__.py\", line 69, in __getattr__\n    self._setup(name)\n  File \"/testbed/./django/conf/__init__.py\", line 56, in _setup\n    self._wrapped = Settings(settings_module)\n  File \"/testbed/./django/conf/__init__.py\", line 143, in __init__\n    mod = importlib.import_module(self.SETTINGS_MODULE)\n  File \"/opt/miniconda3/envs/testbed/lib/python3.8/importlib/__init__.py\", line 127, in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n  File \"<frozen importlib._bootstrap>\", line 1014, in _gcd_import\n  File \"<frozen importlib._bootstrap>\", line 991, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 973, in _find_and_load_unlocked\nModuleNotFoundError: No module named 'tests.settings'\n"
+  },
+  {
+    "tool": "run",
+    "command": "ls ./tests/queries/",
+    "returncode": 0,
+    "output": "__init__.py\nmodels.py\ntest_bulk_update.py\ntest_contains.py\ntest_db_returning.py\ntest_explain.py\ntest_iterator.py\ntest_q.py\ntest_qs_combinators.py\ntest_query.py\ntests.py\n"
+  },
+  {
+    "tool": "run",
+    "command": "grep -A 20 -B 5 \"return 0\" ./django/db/models/query.py",
+    "returncode": 0,
+    "output": "        query.__class__ = sql.DeleteQuery\n        cursor = query.get_compiler(using).execute_sql(CURSOR)\n        if cursor:\n            with cursor:\n                return cursor.rowcount\n        return 0\n    _raw_delete.alters_data = True\n\n    def update(self, **kwargs):\n        \"\"\"\n        Update all elements in the current QuerySet, setting all the given\n        fields to the appropriate values.\n        \"\"\"\n        self._not_support_combined_queries('update')\n        if self.query.is_sliced:\n            raise TypeError('Cannot update a query once a slice has been taken.')\n        self._for_write = True\n        query = self.query.chain(sql.UpdateQuery)\n        query.add_update_values(kwargs)\n        # Clear any annotations so that they won't be present in subqueries.\n        query.annotations = {}\n        with transaction.mark_for_rollback_on_error(using=self.db):\n            rows = query.get_compiler(self.db).execute_sql(CURSOR)\n        self._result_cache = None\n        return rows\n    update.alters_data = True\n"
+  },
+  {
+    "tool": "run",
+    "command": "sed -n '545,575p' ./django/db/models/query.py",
+    "returncode": 0,
+    "output": "        # PK is used twice in the resulting update query, once in the filter\n        # and once in the WHEN. Each field will also have one CAST.\n        max_batch_size = connections[self.db].ops.bulk_batch_size(['pk', 'pk'] + fields, objs)\n        batch_size = min(batch_size, max_batch_size) if batch_size else max_batch_size\n        requires_casting = connections[self.db].features.requires_casted_case_in_updates\n        batches = (objs[i:i + batch_size] for i in range(0, len(objs), batch_size))\n        updates = []\n        for batch_objs in batches:\n            update_kwargs = {}\n            for field in fields:\n                when_statements = []\n                for obj in batch_objs:\n                    attr = getattr(obj, field.attname)\n                    if not isinstance(attr, Expression):\n                        attr = Value(attr, output_field=field)\n                    when_statements.append(When(pk=obj.pk, then=attr))\n                case_statement = Case(*when_statements, output_field=field)\n                if requires_casting:\n                    case_statement = Cast(case_statement, output_field=field)\n                update_kwargs[field.attname] = case_statement\n            updates.append(([obj.pk for obj in batch_objs], update_kwargs))\n        with transaction.atomic(using=self.db, savepoint=False):\n            for pks, update_kwargs in updates:\n                self.filter(pk__in=pks).update(**update_kwargs)\n    bulk_update.alters_data = True\n\n    def get_or_create(self, defaults=None, **kwargs):\n        \"\"\"\n        Look up an object with the given kwargs, creating one if necessary.\n        Return a tuple of (object, created), where created is a boolean\n        specifying whether an object was created.\n"
+  },
+  {
+    "tool": "write_file",
+    "path": "test_f2p_django__django_14559.py",
+    "lines": 31,
+    "content": "\"\"\"\nRegression test for Django bulk_update() return value behavior.\n\nThis tests that bulk_update() returns the number of rows matched (like update())\nrather than None.\n\"\"\"\n\nfrom django.test import TestCase\nfrom .models import Note\n\n\nclass BulkUpdateReturnValueTest(TestCase):\n    @classmethod\n    def setUpTestData(cls):\n        cls.notes = [Note.objects.create(note=str(i), misc=str(i)) for i in range(5)]\n\n    def test_bulk_update_returns_number_of_rows(self):\n        \"\"\"Test that bulk_update returns the number of rows updated.\"\"\"\n        # Test with existing objects\n        for note in self.notes:\n            note.note = 'updated-' + note.note\n            \n        # This should return the number of rows updated (5)\n        result = Note.objects.bulk_update(self.notes, ['note'])\n        self.assertEqual(result, 5)\n        \n    def test_bulk_update_empty_queryset_returns_zero(self):\n        \"\"\"Test that bulk_update with empty queryset returns 0.\"\"\"\n        # This should return 0 for empty objects list\n        result = Note.objects.bulk_update([], ['note'])\n        self.assertEqual(result, 0)"
+  },
+  {
+    "tool": "run",
+    "command": "python -m django test test_f2p_django__django_14559 --debug-mode",
+    "returncode": 1,
+    "output": "\nTraceback (most recent call last):\n  File \"/opt/miniconda3/envs/testbed/lib/python3.8/runpy.py\", line 194, in _run_module_as_main\n    return _run_code(code, main_globals, None,\n  File \"/opt/miniconda3/envs/testbed/lib/python3.8/runpy.py\", line 87, in _run_code\n    exec(code, run_globals)\n  File \"/testbed/django/__main__.py\", line 9, in <module>\n    management.execute_from_command_line()\n  File \"/testbed/django/core/management/__init__.py\", line 419, in execute_from_command_line\n    utility.execute()\n  File \"/testbed/django/core/management/__init__.py\", line 413, in execute\n    self.fetch_command(subcommand).run_from_argv(self.argv)\n  File \"/testbed/django/core/management/commands/test.py\", line 23, in run_from_argv\n    super().run_from_argv(argv)\n  File \"/testbed/django/core/management/base.py\", line 346, in run_from_argv\n    parser = self.create_parser(argv[0], argv[1])\n  File \"/testbed/django/core/management/base.py\", line 320, in create_parser\n    self.add_arguments(parser)\n  File \"/testbed/django/core/management/commands/test.py\", line 44, in add_arguments\n    test_runner_class = get_runner(settings, self.test_runner)\n  File \"/testbed/django/test/utils.py\", line 360, in get_runner\n    test_runner_class = test_runner_class or settings.TEST_RUNNER\n  File \"/testbed/django/conf/__init__.py\", line 69, in __getattr__\n    self._setup(name)\n  File \"/testbed/django/conf/__init__.py\", line 50, in _setup\n    raise ImproperlyConfigured(\ndjango.core.exceptions.ImproperlyConfigured: Requested setting TEST_RUNNER, but settings are not configured. You must either define the environment variable DJANGO_SETTINGS_MODULE or call settings.configure() before accessing settings.\n"
+  },
+  {
+    "tool": "run",
+    "command": "python -c \"\nimport os\nimport sys\n# Set up django\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django.conf.global_settings')\nsys.path.insert(0, '.')\n\n# Create a minimal test that directly calls our setup\nprint('Testing query structure')\n\n# Let's try different approach - directly access the current code to see if I can understand its signature\nimport inspect\nimport django.db.models.query\nprint('bulk_update method exists:', hasattr(django.db.models.query.QuerySet, 'bulk_update'))\n\"",
+    "returncode": 0,
+    "output": "Testing query structure\nbulk_update method exists: True\n"
+  },
+  {
+    "tool": "verify",
+    "target": "test_f2p_django__django_14559.py",
+    "before": {
+      "test_f2p_django__django_14559 (unittest.loader._FailedTest)": "ERROR",
+      "(errors=1)": "FAILED"
+    },
+    "after": {
+      "test_f2p_django__django_14559 (unittest.loader._FailedTest)": "ERROR",
+      "(errors=1)": "FAILED"
+    },
+    "flipped": []
+  },
+  {
+    "tool": "run",
+    "command": "pwd && ls -la",
+    "returncode": 0,
+    "output": "/testbed\ntotal 180\ndrwxrwxrwx  1 root root  4096 Sep 24 16:24 .\ndrwxr-xr-x  1 root root  4096 Sep 24 16:22 ..\n-rw-r--r--  1 root root   807 Aug 13 01:26 .editorconfig\n-rw-r--r--  1 root root   120 Aug 13 01:26 .eslintignore\n-rw-r--r--  1 root root  1407 Aug 13 01:26 .eslintrc\n-rw-r--r--  1 root root   297 Aug 13 01:26 .gitattributes\ndrwxrwxrwx  3 root root  4096 Aug 13 01:26 .github\n-rw-r--r--  1 root root   353 Aug 13 01:26 .gitignore\n-rw-r--r--  1 root root   281 Aug 13 01:26 .pre-commit-config.yaml\ndrwxrwxrwx  2 root root  4096 Aug 13 01:26 .tx\n-rw-r--r--  1 root root 39060 Aug 13 01:26 AUTHORS\n-rw-r--r--  1 root root  1115 Aug 13 01:26 CONTRIBUTING.rst\ndrwxr-xr-x  2 root root  4096 Aug 13 01:27 Django.egg-info\n-rw-r--r--  1 root root   369 Aug 13 01:26 Gruntfile.js\n-rw-r--r--  1 root root   236 Aug 13 01:26 INSTALL\n-rw-r--r--  1 root root  1552 Aug 13 01:26 LICENSE\n-rw-r--r--  1 root root 13227 Aug 13 01:26 LICENSE.python\n-rw-r--r--  1 root root   276 Aug 13 01:26 MANIFEST.in\n-rw-r--r--  1 root root  2122 Aug 13 01:26 README.rst\ndrwxrwxrwx  1 root root  4096 Aug 13 01:27 django\ndrwxrwxrwx 13 root root  4096 Aug 13 01:26 docs\ndrwxrwxrwx  2 root root  4096 Aug 13 01:26 extras\ndrwxrwxrwx  4 root root  4096 Aug 13 01:26 js_tests\n-rw-r--r--  1 root root   334 Aug 13 01:26 package.json\n-rw-r--r--  1 root root   109 Aug 13 01:26 pyproject.toml\ndrwxrwxrwx  2 root root  4096 Aug 13 01:26 scripts\n-rw-r--r--  1 root root  2052 Aug 13 01:26 setup.cfg\n-rw-r--r--  1 root root  1451 Aug 13 01:26 setup.py\n-rw-r--r--  1 root root  1105 Sep 24 16:24 test_f2p_django__django_14559.py\ndrwxrwxrwx  1 root root  4096 Sep 24 16:25 tests\n-rw-r--r--  1 root root  1551 Aug 13 01:26 tox.ini\n"
+  },
+  {
+    "tool": "write_file",
+    "path": "tests/queries/test_bulk_update_return.py",
+    "lines": 31,
+    "content": "\"\"\"\nRegression test for Django bulk_update() return value behavior.\n\nThis tests that bulk_update() returns the number of rows matched (like update())\nrather than None.\n\"\"\"\n\nfrom django.test import TestCase\nfrom tests.queries.models import Note\n\n\nclass BulkUpdateReturnValueTest(TestCase):\n    @classmethod\n    def setUpTestData(cls):\n        cls.notes = [Note.objects.create(note=str(i), misc=str(i)) for i in range(5)]\n\n    def test_bulk_update_returns_number_of_rows(self):\n        \"\"\"Test that bulk_update returns the number of rows updated.\"\"\"\n        # Test with existing objects\n        for note in self.notes:\n            note.note = 'updated-' + note.note\n            \n        # This should return the number of rows updated (5)\n        result = Note.objects.bulk_update(self.notes, ['note'])\n        self.assertEqual(result, 5)\n        \n    def test_bulk_update_empty_queryset_returns_zero(self):\n        \"\"\"Test that bulk_update with empty queryset returns 0.\"\"\"\n        # This should return 0 for empty objects list\n        result = Note.objects.bulk_update([], ['note'])\n        self.assertEqual(result, 0)"
+  },
+  {
+    "tool": "verify",
+    "target": "tests/queries/test_bulk_update_return.py",
+    "before": {
+      "test_bulk_update_return (unittest.loader._FailedTest)": "ERROR",
+      "(errors=1)": "FAILED"
+    },
+    "after": {
+      "test_bulk_update_return (unittest.loader._FailedTest)": "ERROR",
+      "(errors=1)": "FAILED"
+    },
+    "flipped": []
+  },
+  {
+    "tool": "run",
+    "command": "head -15 ./tests/queries/test_bulk_update.py",
+    "returncode": 0,
+    "output": "import datetime\n\nfrom django.core.exceptions import FieldDoesNotExist\nfrom django.db.models import F\nfrom django.db.models.functions import Lower\nfrom django.test import TestCase, skipUnlessDBFeature\n\nfrom .models import (\n    Article, CustomDbColumn, CustomPk, Detail, Individual, JSONFieldNullable,\n    Member, Note, Number, Order, Paragraph, SpecialCategory, Tag, Valid,\n)\n\n\nclass BulkUpdateNoteTests(TestCase):\n    @classmethod\n"
+  },
+  {
+    "tool": "write_file",
+    "path": "tests/queries/test_bulk_update_return.py",
+    "lines": 31,
+    "content": "\"\"\"\nRegression test for Django bulk_update() return value behavior.\n\nThis tests that bulk_update() returns the number of rows matched (like update())\nrather than None.\n\"\"\"\n\nfrom django.test import TestCase\nfrom .models import Note\n\n\nclass BulkUpdateReturnValueTest(TestCase):\n    @classmethod\n    def setUpTestData(cls):\n        cls.notes = [Note.objects.create(note=str(i), misc=str(i)) for i in range(5)]\n\n    def test_bulk_update_returns_number_of_rows(self):\n        \"\"\"Test that bulk_update returns the number of rows updated.\"\"\"\n        # Test with existing objects\n        for note in self.notes:\n            note.note = 'updated-' + note.note\n            \n        # This should return the number of rows updated (5)\n        result = Note.objects.bulk_update(self.notes, ['note'])\n        self.assertEqual(result, 5)\n        \n    def test_bulk_update_empty_queryset_returns_zero(self):\n        \"\"\"Test that bulk_update with empty queryset returns 0.\"\"\"\n        # This should return 0 for empty objects list\n        result = Note.objects.bulk_update([], ['note'])\n        self.assertEqual(result, 0)"
+  },
+  {
+    "tool": "verify",
+    "target": "tests/queries/test_bulk_update_return.py",
+    "before": {
+      "Test that bulk_update with empty queryset returns 0.": "FAILED",
+      "Test that bulk_update returns the number of rows updated.": "FAILED",
+      "(failures=2)": "FAILED"
+    },
+    "after": {
+      "Test that bulk_update with empty queryset returns 0.": "PASSED",
+      "Test that bulk_update returns the number of rows updated.": "PASSED"
+    },
+    "flipped": [
+      "Test that bulk_update returns the number of rows updated.",
+      "Test that bulk_update with empty queryset returns 0."
+    ]
+  },
+  {
+    "tool": "coverage",
+    "target": "tests/queries/test_bulk_update_return.py",
+    "result": {
+      "measured": true,
+      "percent": 100.0,
+      "covered": 4,
+      "executable_changed_lines": 4,
+      "hit": [
+        "django/db/models/query.py:544",
+        "django/db/models/query.py:566",
+        "django/db/models/query.py:569",
+        "django/db/models/query.py:570"
+      ],
+      "missed": [],
+      "matched_files": {
+        "django/db/models/query.py": "django/db/models/query.py"
+      },
+      "test_run_returncode": 0,
+      "test_output_tail": "')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
+      "missed_source": []
+    }
+  },
+  {
+    "tool": "mutation",
+    "target": "tests/queries/test_bulk_update_return.py",
+    "total": 4,
+    "killed": 3,
+    "survived": [
+      "rows_updated += self.filter(pk__in=pks).update(**update_kwargs)   ->   rows_updated = self.filter(pk__in=pks).update(**update_kwargs)"
+    ]
+  },
+  {
+    "tool": "write_file",
+    "path": "tests/queries/test_bulk_update_return.py",
+    "lines": 45,
+    "content": "\"\"\"\nRegression test for Django bulk_update() return value behavior.\n\nThis tests that bulk_update() returns the number of rows matched (like update())\nrather than None.\n\"\"\"\n\nfrom django.test import TestCase\nfrom .models import Note\n\n\nclass BulkUpdateReturnValueTest(TestCase):\n    @classmethod\n    def setUpTestData(cls):\n        # Create more notes to make sure batching is triggered\n        cls.notes = [Note.objects.create(note=str(i), misc=str(i)) for i in range(15)]\n\n    def test_bulk_update_returns_number_of_rows(self):\n        \"\"\"Test that bulk_update returns the number of rows updated.\"\"\"\n        # Test with existing objects\n        for note in self.notes:\n            note.note = 'updated-' + note.note\n            \n        # This should return the number of rows updated \n        result = Note.objects.bulk_update(self.notes, ['note'])\n        self.assertEqual(result, 15)\n        \n    def test_bulk_update_empty_queryset_returns_zero(self):\n        \"\"\"Test that bulk_update with empty queryset returns 0.\"\"\"\n        # This should return 0 for empty objects list\n        result = Note.objects.bulk_update([], ['note'])\n        self.assertEqual(result, 0)\n        \n    def test_bulk_update_batching_works_correctly(self):\n        \"\"\"Test that bulk_update handles batching correctly.\"\"\"\n        # Create notes in larger number to make sure batching occurs  \n        large_notes = [Note.objects.create(note=str(i), misc=str(i)) for i in range(20)]\n        \n        # Update all notes to make sure we have a consistent change\n        for note in large_notes:\n            note.note = 'batched-' + note.note\n            \n        # Should return exact count even with batching\n        result = Note.objects.bulk_update(large_notes, ['note'], batch_size=5)\n        self.assertEqual(result, 20)"
+  },
+  {
+    "tool": "verify",
+    "target": "tests/queries/test_bulk_update_return.py",
+    "before": {
+      "Test that bulk_update handles batching correctly.": "FAILED",
+      "Test that bulk_update with empty queryset returns 0.": "FAILED",
+      "Test that bulk_update returns the number of rows updated.": "FAILED",
+      "(failures=3)": "FAILED"
+    },
+    "after": {
+      "Test that bulk_update handles batching correctly.": "PASSED",
+      "Test that bulk_update with empty queryset returns 0.": "PASSED",
+      "Test that bulk_update returns the number of rows updated.": "PASSED"
+    },
+    "flipped": [
+      "Test that bulk_update handles batching correctly.",
+      "Test that bulk_update returns the number of rows updated.",
+      "Test that bulk_update with empty queryset returns 0."
+    ]
+  },
+  {
+    "tool": "mutation",
+    "target": "tests/queries/test_bulk_update_return.py",
+    "total": 4,
+    "killed": 4,
+    "survived": []
+  },
+  {
+    "tool": "coverage",
+    "target": "tests/queries/test_bulk_update_return.py",
+    "result": {
+      "measured": true,
+      "percent": 100.0,
+      "covered": 4,
+      "executable_changed_lines": 4,
+      "hit": [
+        "django/db/models/query.py:544",
+        "django/db/models/query.py:566",
+        "django/db/models/query.py:569",
+        "django/db/models/query.py:570"
+      ],
+      "missed": [],
+      "matched_files": {
+        "django/db/models/query.py": "django/db/models/query.py"
+      },
+      "test_run_returncode": 0,
+      "test_output_tail": "')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
+      "missed_source": []
+    }
+  },
+  {
+    "tool": "write_file",
+    "path": "tests/queries/test_bulk_update_return.py",
+    "lines": 31,
+    "content": "\"\"\"\nRegression test for Django bulk_update() return value behavior.\n\nThis tests that bulk_update() returns the number of rows matched (like update())\nrather than None.\n\"\"\"\n\nfrom django.test import TestCase\nfrom .models import Note\n\n\nclass BulkUpdateReturnValueTest(TestCase):\n    @classmethod\n    def setUpTestData(cls):\n        cls.notes = [Note.objects.create(note=str(i), misc=str(i)) for i in range(15)]\n\n    def test_bulk_update_returns_number_of_rows(self):\n        \"\"\"Test that bulk_update returns the number of rows updated.\"\"\"\n        # Test with existing objects\n        for note in self.notes:\n            note.note = 'updated-' + note.note\n            \n        # This should return the number of rows updated \n        result = Note.objects.bulk_update(self.notes, ['note'])\n        self.assertEqual(result, 15)\n        \n    def test_bulk_update_empty_queryset_returns_zero(self):\n        \"\"\"Test that bulk_update with empty queryset returns 0.\"\"\"\n        # This should return 0 for empty objects list\n        result = Note.objects.bulk_update([], ['note'])\n        self.assertEqual(result, 0)"
+  },
+  {
+    "tool": "verify",
+    "target": "tests/queries/test_bulk_update_return.py",
+    "before": {
+      "Test that bulk_update with empty queryset returns 0.": "FAILED",
+      "Test that bulk_update returns the number of rows updated.": "FAILED",
+      "(failures=2)": "FAILED"
+    },
+    "after": {
+      "Test that bulk_update with empty queryset returns 0.": "PASSED",
+      "Test that bulk_update returns the number of rows updated.": "PASSED"
+    },
+    "flipped": [
+      "Test that bulk_update returns the number of rows updated.",
+      "Test that bulk_update with empty queryset returns 0."
+    ]
+  },
+  {
+    "tool": "coverage",
+    "target": "tests/queries/test_bulk_update_return.py",
+    "result": {
+      "measured": true,
+      "percent": 100.0,
+      "covered": 4,
+      "executable_changed_lines": 4,
+      "hit": [
+        "django/db/models/query.py:544",
+        "django/db/models/query.py:566",
+        "django/db/models/query.py:569",
+        "django/db/models/query.py:570"
+      ],
+      "missed": [],
+      "matched_files": {
+        "django/db/models/query.py": "django/db/models/query.py"
+      },
+      "test_run_returncode": 0,
+      "test_output_tail": "')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n",
+      "missed_source": []
+    }
+  },
+  {
+    "tool": "mutation",
+    "target": "tests/queries/test_bulk_update_return.py",
+    "total": 4,
+    "killed": 3,
+    "survived": [
+      "rows_updated += self.filter(pk__in=pks).update(**update_kwargs)   ->   rows_updated = self.filter(pk__in=pks).update(**update_kwargs)"
+    ]
+  }
+]
