@@ -36,6 +36,16 @@ NETWORK = re.compile(
     r"git\s+(?:clone|fetch|pull|remote|ls-remote))\b", re.I)
 
 
+def _norm(path: str | None) -> str:
+    """A repository-relative path: `/testbed/a/b.py` and `./a/b.py` are `a/b.py`."""
+    p = (path or "").strip()
+    if p.startswith("/testbed/"):
+        p = p[len("/testbed/"):]
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
 def audit(box: E.Sandbox, tool_log: list, test_file: str) -> dict:
     """What the agent actually did, checked rather than assumed.
 
@@ -45,8 +55,15 @@ def audit(box: E.Sandbox, tool_log: list, test_file: str) -> dict:
     """
     tried_network = [e["command"] for e in tool_log
                      if e["tool"] == "run" and NETWORK.search(e.get("command", ""))]
-    wrote_elsewhere = [e["path"] for e in tool_log
-                       if e["tool"] == "write_file" and e.get("path") != test_file]
+    # Compared as paths, not strings. The test file written as `/testbed/tests/x.py` or
+    # `./tests/x.py` is the test file, and the raw comparison listed it as a write
+    # "outside the test" in most of the 296 runs across the ten arms that reported one --
+    # which made the field useless as a guard statistic. `testbed/tests/x.py` without the
+    # leading slash is *not* normalised away: from /testbed it really does land in a
+    # stray `testbed/` directory, and that is worth seeing.
+    target = _norm(test_file)
+    wrote_elsewhere = sorted({_norm(e["path"]) for e in tool_log
+                              if e["tool"] == "write_file" and _norm(e.get("path")) != target})
     # Against the snapshot taken before the agent started, not against the checkout's
     # own git -- that was deleted by `strip_git`, which made the previous version of this
     # line structurally dead: it asked `git status`, always got "not a repository", and
@@ -56,7 +73,7 @@ def audit(box: E.Sandbox, tool_log: list, test_file: str) -> dict:
     # This also covers what the tool log cannot. `files_written_outside_test` sees
     # `write_file` calls; an agent editing source with `sed -i` or a shell redirect is
     # invisible to it. The tree is not.
-    status = [(code, p) for code, p in box.tree_status() if p != test_file]
+    status = [(code, p) for code, p in box.tree_status() if _norm(p) != target]
     touched = [p for _, p in status]
     # Added against modified, because only one of them can void the measurement. A file
     # that did not exist at base is present in the before run and the after run alike, so
@@ -65,8 +82,16 @@ def audit(box: E.Sandbox, tool_log: list, test_file: str) -> dict:
     # pull request.
     added = sorted(p for code, p in status if code in ("??", "A"))
     altered = sorted(p for code, p in status if code not in ("??", "A"))
+    # Of the writes outside the test, which were new files the agent made for itself --
+    # a reproduction script, a debug print -- and which touched something that was
+    # already in the checkout. Only the second can put the measurement in doubt; the
+    # first is how an agent thinks, and counting them together hid the one in the other.
+    def is_new(p: str) -> bool:
+        return p in added or any(a.endswith("/") and p.startswith(a) for a in added)
     return {"network_attempts": tried_network,
             "files_written_outside_test": wrote_elsewhere,
+            "scratch_files": [p for p in wrote_elsewhere if is_new(p)],
+            "preexisting_written": [p for p in wrote_elsewhere if not is_new(p)],
             "isolation": box.audit_isolation(),
             "tree_changed": touched,
             "tree_added": added,

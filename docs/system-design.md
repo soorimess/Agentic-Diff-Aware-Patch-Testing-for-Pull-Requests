@@ -124,6 +124,15 @@ error:
 Measured **only for a `YES`**. Asking how much of a change a test exercised presumes the
 test exercises the change; for a `NO` or a `BROKEN` it presumes something false.
 
+**The agent sees lines, never the percentage.** The `coverage` tool, `verify`'s reach line
+and the stop check all name the changed lines a test never runs, with the code on each and
+the conditions above it, and ask for a test that runs every line the change touched. None
+of them states a figure or calls anything a target. Until 2026-09-25 the tool led with the
+percentage and closed with "100% is the target", while `58-finish.md` told the same agent
+"none of these figures is a target" -- and the percentage it was told to push up was the
+one this project publishes as a measure of test quality. The harness still computes it;
+it is simply no longer the agent's objective.
+
 Two instances sit at the metric's edges and a third shows what it cannot see at all --
 a deletion-only patch, a symmetric fix half-tested, and a test at 100% that cannot
 distinguish the fix from its absence. [decisions.md](decisions.md) has all three.
@@ -245,6 +254,16 @@ behind a path.
 | django | `./tests/runtests.py --verbosity 2 <label>` | `test_x (a.b.C.test_x)`, or the test's **docstring** |
 | sympy | `bin/test <path>` | bare function names, no path — and pytest is not installed |
 
+**A labels runner collects only `unittest.TestCase` methods.** django's `runtests.py` is
+unittest discovery underneath: a module-level `def test_x():` is skipped without a word,
+the run prints `Ran 0 tests ... OK` and exits 0, and the harness scores nothing collected.
+Across the ten arms, 127 of 127 successful django runs used a `TestCase` class and not one
+bare-function file ever passed; 31 runs were lost to it while the briefing described only
+how common each style was. `repo_facts` now states it as a rule for any `labels` runner --
+keyed on the runner kind, not the repository -- and its style samples are files that
+actually define a test (django's top-level `tests/test_sqlite.py` is a settings module,
+and was the only example django agents were ever shown).
+
 Version spread matters as much as the repository. pytest 3.3 prints no short-summary
 section at all, so `-v` is passed as well and the per-test line is parsed; `--no-header`
 arrived in pytest 6.0 and is a usage error in the 4.5 that pytest's own repository runs.
@@ -300,8 +319,8 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 925 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
-| `checks.py` | 131 | What the agent actually did, checked rather than assumed. |
+| `agent.py` | 1019 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `checks.py` | 156 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 207 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 416 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
@@ -313,20 +332,20 @@ That makes every shared resource a hazard, and two were real:
 | `layout.py` | 29 | Where the project is on disk, and the environment it runs with. |
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 182 | One place the model connection is configured, shared by every caller. |
-| `models.py` | 299 | Which model answers, and what it needs, read from `models.json`. |
+| `models.py` | 315 | Which model answers, and what it needs, read from `models.json`. |
 | `mutants.py` | 512 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
 | `parallel.py` | 245 | Running several pull requests at once, as separate processes. |
 | `prompt.py` | 237 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
-| `runners.py` | 350 | Three test-runner conventions, and how to read what they print. |
+| `runners.py` | 375 | Three test-runner conventions, and how to read what they print. |
 | `runs.py` | 479 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 326 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 790 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sandbox_tools.py` | 809 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
-| `trajectory.py` | 304 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
+| `trajectory.py` | 322 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
 | `verify.py` | 501 | The F2P decision. One implementation, used by every arm. |
 <!-- /generated:modules -->
 
@@ -353,6 +372,27 @@ There was a `repo_info` sub-agent here once, and [decisions.md](decisions.md) sa
 `verify` and `coverage` exist for the agent too, not only for the harness. The agent may
 call them as often as it likes; what is *recorded* is the harness's own run, after the
 agent has stopped. Under `--no-patch` neither is registered, because both need the diff.
+
+`verify` answers by the harness's own rule: fail-to-pass means something flipped **and**
+nothing still fails once the change is applied. Its headline always did; the lines under
+it -- the duty line, the coverage pointer, the pointer to `mutation`, the error flag --
+asked only whether anything flipped, so a file with two good tests and one broken one read
+"NOT fail-to-pass" and then "That it flips, and what it reaches, are two of the three
+questions". A negative verdict is also no longer flagged as a tool error: it used to arrive
+prefixed `[An error occurred during execution.]`, a median of five times per run by the
+point a stop was refused.
+
+### Refusing a stop
+
+With `--second-chance` or `require-tools`, every stop is checked, not just the first. A
+stop that leaves a gap -- no test, a file that collects nothing, a test that passes on the
+unfixed code, a finishing loop left open -- is refused with the current reason, and the
+agent carries on with what is left of the budget. It ends when the gap closes, the budget
+is spent, five refusals have been made, or the agent does nothing but stop again twice in a
+row. Until 2026-09-25 this happened once: 162 of 630 runs with a verify tool ended on an
+edit they never verified, 144 of them after the single refusal had fired. Every refusal is
+written to `injected_messages.json` and appears in `trajectory.json` at the point it
+arrived; the export used to show the opening task alone.
 
 ### `mutation`
 
@@ -558,7 +598,7 @@ uv run openhands-f2p --out-root out/nocov --no-coverage-tool
 | `--dry-run` | show the target path and runner command, make no LLM call |
 | `--no-compare` | skip the concept judgement against the developer's test |
 | `--mutants` | after the verdict, mutate the lines the patch changed with mutmut and count how many mutants each test kills -- the generated one and the developer's, on the same set. Bare --mutants uses 10. Deterministic and offline; the diffs land in <run>/<id>/mutations/. 0 is off |
-| `--second-chance` | refuse the first stop. When a run ends with nothing to score for a reason the agent could have seen itself -- no file written, a file that collects nothing, a test that passes on the unfixed code -- say so and let it carry on, once, on whatever is left of --max-iterations. The cap is not raised and not reset, so a run that stopped at 41 of 100 resumes with 59 and one that reached the cap gets nothing. Never quotes the run against the fixed code, so the agent still only knows what it could establish at base |
+| `--second-chance` | refuse a stop that leaves nothing to score. When a run ends for a reason the agent could have seen itself -- no file written, a file that collects nothing, a test that passes on the unfixed code -- say so and let it carry on, on whatever is left of --max-iterations, and check every later stop the same way: up to 5 refusals, ending early once the gap closes or the agent stops acting between refusals. The cap is not raised and not reset, so a run that stopped at 41 of 100 resumes with 59 and one that reached the cap gets nothing. Never quotes the run against the fixed code, so the agent still only knows what it could establish at base |
 | `--mutate-saved` | measure mutation on the tests already written, without running the agent again. Adds the `mutation` field and changes nothing else. Needs --mutants N |
 | `--recheck` | re-judge the saved tests under the current harness, without calling the model again |
 | `--retry-broken` | run only instances with no result, or whose result is BROKEN. A BROKEN verdict records that the harness or the connection failed and says nothing about the instance, so it is worth retrying; YES and NO are findings and are left alone |

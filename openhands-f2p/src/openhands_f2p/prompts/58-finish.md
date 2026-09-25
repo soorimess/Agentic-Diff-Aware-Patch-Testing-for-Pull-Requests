@@ -30,7 +30,7 @@ a failure, fix the test and run it again.
 {?coverage-tool}
 If one shows lines of the change your test never reached, decide what they are -- part of
 the behaviour you set out to pin down and so worth another assertion, a separate case that
-deserves its own test function, or genuinely outside what this test is for -- and act on
+deserves its own test, or genuinely outside what this test is for -- and act on
 that decision.
 {/coverage-tool}
 {?mutation-tool}
@@ -39,9 +39,9 @@ behaviour is part of what the change fixes -- and if it is, assert it. If it is 
 survivor is an answer, not an outstanding item.
 {/mutation-tool}
 {?coverage-tool}
-None of these figures is a target. They are the same question asked from different angles
-— is the behaviour I asserted really the behaviour this pull request changed — and a
-number is only worth what the test behind it is worth. Adding a call with no assertion
+None of these is a score to push up. They are the same question asked from different
+angles — is the behaviour I asserted really the behaviour this pull request changed — and
+each answer is only worth what the test behind it is worth. Adding a call with no assertion
 behind it answers nothing.
 {/coverage-tool}
 
@@ -64,9 +64,9 @@ the one above it, so work them in sequence rather than in parallel. Before you c
    rewrite the test and call `verify` again, as many times as it takes;
 {/verify-tool}
 {?coverage-tool}
-2. then `coverage`, with 100% of the changed lines as the target. If it reports less you
-   must have acted on that — either raised it, or established that a line cannot be
-   reached from a test. An assertion added only to execute a line is worth less than an
+2. then `coverage`: aim for a test that runs every line the change touched. If it lists
+   lines your test never runs, you must have acted on that — either made them run, or
+   established that a line cannot be reached from a test. An assertion added only to execute a line is worth less than an
    honest reason the line stays unreached;
 {/coverage-tool}
 {?mutation-tool}

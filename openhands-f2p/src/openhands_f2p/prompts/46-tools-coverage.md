@@ -11,7 +11,9 @@ job: Says what `coverage` is *for* -- a better test -- which the previous versio
   above it; those conditions are what your input has to satisfy for the line to run at
   all.
 
-Use it, and act on what it says — repeatedly. This is a working instrument, not a final
+Aim for a test that runs every line the change touched, and reach each one through the
+behaviour you are asserting. Use `coverage` to see which lines yours still misses, and
+act on what it says — repeatedly. This is a working instrument, not a final
 report: measure, add the case the missed lines point at, measure again. It applies the
 change and reverts it itself, so calling it costs you nothing and leaves nothing behind,
 and there is no reason to save it for the end.
@@ -24,10 +26,10 @@ input you did not think of.
 
 Coverage only means something for a test that already flips: asking how much of the change
 a test exercised presumes the test exercises the change. So the order is `verify` first,
-then `coverage` — and that is also the only case we measure, so a coverage figure for a
-test that does not flip is not recorded at all.
+then `coverage` — and that is also the only case we measure, so coverage of a test that
+does not flip is not recorded at all.
 
 What you must never do is add code whose only purpose is to execute a line. A call with no
-assertion behind it raises the figure and tests nothing, and it makes the number worthless
-to everyone who reads it afterwards, including you. Reach a line because the behaviour you
+assertion behind it makes a line run and tests nothing, and it hides the gap from
+everyone who reads the test afterwards, including you. Reach a line because the behaviour you
 are asserting takes you through it.

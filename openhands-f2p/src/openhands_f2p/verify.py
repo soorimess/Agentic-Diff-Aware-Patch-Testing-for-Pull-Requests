@@ -213,12 +213,13 @@ def loop_gap(tool_log: list, instruments: tuple[str, ...],
                may have been written since -- an answer about a file that has been edited
                is an answer about a file that no longer exists. While this is open it is
                the *only* thing said.
-    `coverage` must have been called, and if it last reported under 100% the agent must
-               have edited the test after seeing that. 100% is the target and the message
-               says so, because a target is what makes the tool's output actionable --
-               but the demand enforced here is that a shortfall was answered rather than
-               read and passed over, since a line can be genuinely unreachable and an
-               assertion written only to execute one is worth less than saying why.
+    `coverage` must have been called, and if it last listed missed lines the agent must
+               have edited the test after seeing them. The agent is shown lines, never a
+               percentage: the percentage is what the report publishes, and a number the
+               agent is told to push up stops measuring anything. The demand enforced
+               here is that missed lines were answered rather than read and passed over,
+               since a line can be genuinely unreachable and an assertion written only to
+               execute one is worth less than saying why.
     `mutation` must have been called, and that is all. Survivors are for the agent to
                weigh -- some are genuinely outside what the change fixes -- and requiring
                a response would be an instruction to close the list rather than to
@@ -288,12 +289,11 @@ def loop_gap(tool_log: list, instruments: tuple[str, ...],
         else:
             i, e = got
             cov = e.get("result") or {}
-            if cov.get("measured") and cov.get("percent", 100) < 100 and not wrote_after(i):
-                gaps.append(f"`coverage` last reported {cov['percent']:.0f}% of the "
-                            f"changed lines ({cov['covered']}/"
-                            f"{cov['executable_changed_lines']}) and you changed nothing "
-                            f"after reading it. Aim at 100% and keep calling `coverage` "
-                            f"until you are there or you can say why a line is out of "
+            if cov.get("measured") and cov.get("missed") and not wrote_after(i):
+                gaps.append(f"`coverage` last listed lines of the change your test never "
+                            f"runs, and you changed nothing after reading it. Keep "
+                            f"changing the test and calling `coverage` until every "
+                            f"changed line runs or you can say why a line is out of "
                             f"reach. Work the missed lines one at a time: decide for "
                             f"each whether it is the same behaviour by another route, a "
                             f"separate case that deserves its own test, or genuinely "

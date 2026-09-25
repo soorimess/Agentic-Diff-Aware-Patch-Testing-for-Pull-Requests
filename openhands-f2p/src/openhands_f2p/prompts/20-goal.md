@@ -27,8 +27,11 @@ job: The deliverable, stated as an engineering task rather than as our scoring f
 ---
 A pull request changes how this library behaves. Your job is to write the regression tests
 that pin that behaviour down, in `{test_file}`: enough to have caught this bug before it
-was fixed, and to catch it again if anyone reintroduces it. One test function per
-behaviour the change settles separately -- as many as the change has, and no more.
+was fixed, and to catch it again if anyone reintroduces it. One test per behaviour the
+change settles separately -- as many as the change has, and no more. A test is whatever
+this project's runner collects: a function in some projects, a method on a test class
+in others. The briefing above says which, and a test the runner does not collect is
+not a test.
 
 {?patch}
 Work out what the code does *now*, what it will do *after* the change, and assert the

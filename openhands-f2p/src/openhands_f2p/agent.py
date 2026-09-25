@@ -97,6 +97,27 @@ def _recap(counts: dict[str, int], tool_log: list) -> str:
     return "\n".join(lines)
 
 
+def _elsewhere(run: dict, test_file: str) -> str:
+    """What the agent did write, when it was not the file that gets scored.
+
+    "Wrote no test" was true of the target and false of the run: `seaborn-3069` wrote
+    `tests/test_f2p_mwaskom__seaborn_3269.py` -- one digit off -- and the record read as
+    though it had written nothing. Naming the files turns a puzzle into a typo.
+    """
+    target = Path(test_file).name
+    wrote = sorted({e["path"] for e in run.get("tool_log", [])
+                    if e.get("tool") == "write_file" and e.get("path")
+                    and Path(e["path"]).name != target})
+    tests = [w for w in wrote if Path(w).name.startswith("test")]
+    return f" (it wrote {', '.join(tests[:3])} instead)" if tests else ""
+
+
+# How many times a stop may be refused. The budget bounds a run anyway; this bounds the
+# number of times the same kind of message is appended to the context, and a run still
+# open after five refusals has usually stopped moving.
+MAX_REFUSALS = 5
+
+
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
               out_dir: Path, features: FeatureSet, n_mutants: int = 0,
               model: str | None = None, provider: str | None = None,
@@ -186,6 +207,10 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     flow.record(flow.AGENT, "tools registered", ", ".join(names))
     flow.record(flow.AGENT, "task sent", f"{len(task)} chars, max_iter={max_iterations}")
     conversation.send_message(task)
+    # Every message the harness sends after the task, in order. The trajectory export is
+    # rebuilt from disk and used to show the opening task alone -- so a run that was
+    # refused twice read, in the trajectory, as an agent that simply kept going.
+    injected: list[dict] = []
     error = None
     try:
         conversation.run()
@@ -200,51 +225,90 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
         flow.record(flow.AGENT, "run raised", error[:200])
     flow.record(flow.AGENT, "agent finished", status)
 
-    # A second chance, when the run ended with nothing a judge could score and the
-    # reason is one the agent could have seen for itself. `V.shortfall` decides both --
-    # what counts as unfinished and what may be said about it -- and returns None when
-    # there is nothing base-observable to report, which is when this does nothing.
+    # Refusing the stop, for as long as there is a reason to and budget to do it with.
+    #
+    # This used to happen once. `conversation.run()` was called a single time after the
+    # nudge, so the agent was refused, edited the test, called `finish` again -- and that
+    # second stop went through unchecked. Across the ten arms 162 of 630 runs with a
+    # verify tool ended on an edit they never verified, 144 of them after the nudge had
+    # already fired; 103 had edited after a verify that said NOT fail-to-pass, and 102 of
+    # those failed. The nudge told the agent "you cannot finish while this is the answer"
+    # and nothing made that true: `finish` stayed callable and a second call was free.
+    #
+    # Now every stop is checked, and each one that leaves a gap is refused with the
+    # current reason. That is what gating `finish` means in practice -- the SDK's finish
+    # still ends `run()`, and this loop answers it -- without reaching into the SDK's own
+    # terminal action. It ends when the gap closes, the budget is spent, the round cap is
+    # reached, or the agent stops doing anything between refusals.
+    #
+    # `V.shortfall` and `V.loop_gap` decide what counts as unfinished and what may be
+    # said, from base-observable facts only; they return None when there is nothing to say.
     retry: dict | None = None
     # The cap is a fact about the first stop. Counting the continuation's actions into it
     # would report a run as capped because the two stretches together passed the limit,
     # when neither did.
     first_run_actions = sum(counts.values())
+    rounds: list[dict] = []
     if (second_chance or "require-tools" in features) and error is None:
-        left = max_iterations - first_run_actions
-        rel = V.written_test_path(box, tool_log, test_file)
-        # Two independent grounds for refusing the stop, and each has its own flag. They
-        # share one message because sending two would spend two turns saying one thing.
-        gaps: list[tuple[str, str]] = []
-        if left > 0 and second_chance:
-            found = V.shortfall(box, instance, rel)
-            if found:
-                gaps.append(found)
-        if left > 0 and "require-tools" in features:
-            # By what each instrument last *said*, not by whether it appears in the log.
-            # See `V.loop_gap` -- counting calls measured the proxy and let a run stop on
-            # a `verify` that had just reported failure.
-            found = V.loop_gap(tool_log, instruments(features), rel)
-            if found:
-                gaps.append(found)
-        gap = None if not gaps else (
-            "+".join(r for r, _ in gaps), "\n\n".join(say for _, say in gaps))
-        if left <= 0:
-            flow.record(flow.AGENT, "second chance", "no budget left at the cap")
-        elif gap is None:
-            flow.record(flow.AGENT, "second chance", "not needed")
-        else:
+        while True:
+            spent = sum(counts.values())
+            left = max_iterations - spent
+            rel = V.written_test_path(box, tool_log, test_file)
+            # Two independent grounds for refusing the stop, and each has its own flag.
+            # They share one message because sending two would spend two turns saying
+            # one thing.
+            gaps: list[tuple[str, str]] = []
+            if left > 0 and second_chance:
+                found = V.shortfall(box, instance, rel)
+                if found:
+                    gaps.append(found)
+            if left > 0 and "require-tools" in features:
+                # By what each instrument last *said*, not by whether it appears in the
+                # log. See `V.loop_gap`.
+                found = V.loop_gap(tool_log, instruments(features), rel)
+                if found:
+                    gaps.append(found)
+            gap = None if not gaps else (
+                "+".join(r for r, _ in gaps), "\n\n".join(say for _, say in gaps))
+            if left <= 0:
+                flow.record(flow.AGENT, "second chance", "no budget left at the cap")
+                break
+            if gap is None:
+                flow.record(flow.AGENT, "second chance",
+                            "not needed" if not rounds else
+                            f"gap closed after {len(rounds)} refusal(s)")
+                break
+            if len(rounds) >= MAX_REFUSALS:
+                flow.record(flow.AGENT, "second chance",
+                            f"stopped refusing after {MAX_REFUSALS} rounds; gap still open")
+                break
+            # Two rounds in a row where the agent did nothing but stop again. Refusing a
+            # third time buys another identical stop and another few thousand tokens of
+            # the same message; the gap stays recorded in `rounds`.
+            if len(rounds) >= 2 and rounds[-1]["actions"] <= 1 and rounds[-2]["actions"] <= 1:
+                flow.record(flow.AGENT, "second chance",
+                            "agent stopped acting between refusals; not refusing again")
+                break
+
             reason, say = gap
             nudge = prompt.followup("second-chance", shortfall=say,
                                     recap=_recap(counts, tool_log), test_file=rel,
                                     budget=left, cap=max_iterations)
-            flow.record(flow.AGENT, "second chance", f"{reason}; {left} actions left")
-            field("retry", f"{reason} -- carrying on with {left} of "
-                           f"{max_iterations} actions left")
+            flow.record(flow.AGENT, "second chance",
+                        f"round {len(rounds) + 1}: {reason}; {left} actions left")
+            if not rounds:
+                field("retry", f"{reason} -- carrying on with {left} of "
+                               f"{max_iterations} actions left")
             # `run()` restarts its own iteration count from zero, so what is left of the
             # cap has to be set here. Without this the continuation silently gets a
             # second full cap, and one flag doubles what a run is allowed to spend.
             conversation.max_iteration_per_run = left
             conversation.send_message(nudge)
+            # Kept for the trajectory: the SDK's event log holds this turn, but the
+            # export was built from the opening task alone and never showed it.
+            injected.append({"at_tool": len(tool_log), "after_action": spent,
+                             "reason": reason, "text": nudge})
+            before = sum(counts.values())
             try:
                 conversation.run()
                 status = str(conversation.state.execution_status)
@@ -253,10 +317,19 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 status = "ERROR"
                 flow.record(flow.AGENT, "retry raised", error[:200])
             after = sum(counts.values())
-            retry = {"reason": reason, "said": say, "budget": left,
-                     "actions": after - first_run_actions}
+            rounds.append({"reason": reason, "said": say, "budget": left,
+                           "actions": after - before})
             flow.record(flow.AGENT, "second chance done",
-                        f"{after - first_run_actions} more actions, {status}")
+                        f"round {len(rounds)}: {after - before} more actions, {status}")
+            if error:
+                break
+    if rounds:
+        # The first round's reason and budget at the top level, where every existing
+        # reader looks; the total the continuation spent; and every round beneath.
+        retry = {"reason": rounds[0]["reason"], "said": rounds[0]["said"],
+                 "budget": rounds[0]["budget"],
+                 "actions": sum(r["actions"] for r in rounds),
+                 "rounds": rounds}
 
     elapsed = time.time() - t_start
     if live:
@@ -283,6 +356,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             # continuation cannot push a run over a cap it shares.
             "capped": n_actions >= max_iterations,
             "invented": dict(sandbox_tools.INVENTED), "retry": retry,
+            "injected": injected,
             "transcript": transcript,
             "tool_log": tool_log, "model": model, "task": task,
             "actions": sum(1 for r in transcript if "action" in r)}
@@ -500,7 +574,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                                        f"{run['actions']} actions without writing a test"
                                        if run.get("capped") else
                                        f"took {run['actions']} action(s) but wrote no "
-                                       f"test at {test_file}")))
+                                       f"test at {test_file}" + _elsewhere(run, test_file))))
         else:
             (d / Path(test_file).name).write_text(code)
             field("test", f"{code.count(chr(10)) + 1} lines written")
@@ -578,6 +652,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                    f"git {checks['vcs']}")
 
     (d / "tool_log.json").write_text(json.dumps(run["tool_log"], indent=2))
+    (d / "injected_messages.json").write_text(json.dumps(run.get("injected") or [], indent=2))
     (d / "before_fix.log").write_text(verdict.base_log)
     (d / "after_fix.log").write_text(verdict.head_log)
     usage = token_usage(d)
@@ -607,7 +682,10 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               # presence is what separates a second-chance arm from a control one in a
               # table, so it is recorded even when the retry changed nothing.
               "second_chance": run.get("retry"),
-              "files_edited_outside_test": checks["files_written_outside_test"],
+              # Edits to files that existed at base -- the guard's subject. Scratch
+              # files the agent created for itself are listed separately.
+              "files_edited_outside_test": checks["preexisting_written"],
+              "scratch_files": checks["scratch_files"],
               # From the tree, not the tool log: this is the one that would catch an
               # agent editing the library with the shell, which is what would make the
               # "before the fix" run a fact about something other than the pull request.
@@ -705,11 +783,13 @@ def build_parser() -> argparse.ArgumentParser:
                         f"--mutants uses {mutants.DEFAULT_MUTANTS}. Deterministic and "
                         f"offline; the diffs land in <run>/<id>/mutations/. 0 is off")
     p.add_argument("--second-chance", action="store_true",
-                   help="refuse the first stop. When a run ends with nothing to score "
+                   help="refuse a stop that leaves nothing to score. When a run ends "
                         "for a reason the agent could have seen itself -- no file "
                         "written, a file that collects nothing, a test that passes on "
-                        "the unfixed code -- say so and let it carry on, once, on "
-                        "whatever is left of --max-iterations. The cap is not raised "
+                        "the unfixed code -- say so and let it carry on, on whatever is "
+                        "left of --max-iterations, and check every later stop the same "
+                        "way: up to 5 refusals, ending early once the gap closes or the "
+                        "agent stops acting between refusals. The cap is not raised "
                         "and not reset, so a run that stopped at 41 of 100 resumes with "
                         "59 and one that reached the cap gets nothing. Never quotes the "
                         "run against the fixed code, so the agent still only knows what "

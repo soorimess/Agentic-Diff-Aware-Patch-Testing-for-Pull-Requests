@@ -14,20 +14,21 @@ passes today and will still pass tomorrow if that branch breaks again. The misse
 are the inputs you did not think of, and the conditions printed above each one say what
 your input has to satisfy to get there.
 
-**Call `coverage`, and if it comes back under 100%, change the test before you stop.**
+**Call `coverage`, and if it lists changed lines your test never runs, change the test
+before you stop.** The aim is a test that runs every line the change touched.
 That is the rule, and it is checked: a run that reads a shortfall and does nothing about
-it will be sent back. It is not a demand for 100% — often the remaining lines are
-genuinely outside what this test is for — it is a demand that a shortfall gets answered
-once rather than noted and passed over. Decide what the missed lines are, change the test,
+it will be sent back. It is not a demand that every line runs whatever it takes —
+sometimes a line is genuinely outside what this test is for — it is a demand that each
+missed line gets an answer rather than being noted and passed over. Decide what the missed lines are, change the test,
 call `coverage` again; you do not need to re-run the earlier checks in between. Keep going
 until what remains is missed for a reason you can state in a sentence.
 
-A low figure is not a bad mark. It is a description of your test, usually a precise one:
+Missed lines are not a bad mark. They are a description of your test, usually a precise one:
 the change has more than one path through it and you took one. So ask whether the missed
 lines are the same behaviour reached another way -- one more assertion normally covers
 that -- or a genuinely separate case the same pull request also fixed, which deserves a
-second test function rather than an assertion stretched to reach it.
+second test rather than an assertion stretched to reach it.
 
 What you must not do is add code whose only purpose is to execute a line. A call with no
-assertion after it raises the number and tests nothing, and it makes the figure useless to
-everyone who reads it afterwards, including you.
+assertion after it makes a line run and tests nothing, and it hides the gap from
+everyone who reads the test afterwards, including you.

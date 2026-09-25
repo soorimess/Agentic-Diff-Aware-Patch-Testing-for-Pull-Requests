@@ -131,6 +131,11 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
     if (out_dir / "flow.jsonl").exists():
         flow_rows = [json.loads(l) for l in (out_dir / "flow.jsonl").read_text().splitlines() if l.strip()]
     task = result.get("task", "")
+    # Messages the harness sent after the task -- each refusal of a stop -- keyed by the
+    # tool-log position they arrived at. Without these the export showed one user message
+    # and an agent that simply carried on, which is how a single-shot refusal went
+    # unnoticed through a ten-arm series.
+    injected = load("injected_messages.json", []) or []
 
     # Why the agent called each tool. The model says it in the `content` of the same
     # completion that carried the tool call -- "I'll open numbers.py to inspect
@@ -191,9 +196,16 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
         if row["event"] == "test path":
             break
 
+    def say(msg: dict, offset: float) -> None:
+        add({"source": "user", "action": "message", "message": "harness",
+             "args": {"content": msg.get("text", ""), "images_urls": []}}, offset)
+
     # --- the agent's tool calls ---------------------------------------------
     for i, entry in enumerate(tool_log):
         offset = offsets[i] if i < len(offsets) else float(i)
+        for msg in injected:
+            if msg.get("at_tool") == i:
+                say(msg, offset)
         tool = entry.get("tool")
 
         if tool == "write_file":
@@ -251,6 +263,12 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
                                      **({"outcomes": entry["outcomes"]}
                                         if entry.get("outcomes") else {})}}},
             offset + 0.1)
+
+    # A refusal the agent answered by stopping again, with no tool call in between,
+    # arrives after the last entry in the log. Still shown, in order.
+    for msg in injected:
+        if msg.get("at_tool", 0) >= len(tool_log):
+            say(msg, float(len(tool_log)))
 
     # --- verification, which is the harness and not the agent ----------------
     last = flow_rows[-1]["t"] if flow_rows else float(len(tool_log))

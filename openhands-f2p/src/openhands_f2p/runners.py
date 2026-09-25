@@ -311,11 +311,21 @@ def test_config(box) -> str:
 
 
 def example_tests(box, directory: str, limit: int = 3) -> list[str]:
-    """A few tests already in the directory the new one goes into."""
-    found = box.exec(
-        f"ls -1 {directory or '.'}/test_*.py {directory or '.'}/*_test.py "
-        f"2>/dev/null | head -{limit}").output.split()
-    return [f.strip().lstrip("./") for f in found if f.strip()]
+    """A few files near the new one that actually define a test.
+
+    Named by content, not by filename. The first version listed `test_*.py` in the
+    target directory, and for django that directory holds exactly one such file,
+    `tests/test_sqlite.py` -- a settings module with no test in it. It was the only
+    style example django agents were ever shown, and 31 of them went on to write
+    module-level `def test_*` functions the runner never collects. The directory first,
+    then one level down, where django keeps its real tests.
+    """
+    d = directory or "."
+    probe = (f"for f in {d}/test_*.py {d}/*_test.py {d}/*/tests.py {d}/*/test_*.py; do "
+             f"[ -f \"$f\" ] && grep -qE '^[[:space:]]*def test|^class [A-Za-z0-9_]*Test' "
+             f"\"$f\" && echo \"$f\"; done 2>/dev/null | head -{limit}")
+    found = box.exec(probe).output.split()
+    return [f.strip().removeprefix("./") for f in found if f.strip()]
 
 
 def repo_facts(box, test_file: str) -> str:
@@ -338,7 +348,22 @@ def repo_facts(box, test_file: str) -> str:
     if config:
         lines += ["", "Test configuration, verbatim from the checkout:", ""]
         lines += [f"  {line}" for line in config.splitlines()]
-    elif runner["cmd"] != PYTEST:
+    if runner["args"] == "labels":
+        # A hard rule, not a style. A labels runner is unittest discovery underneath,
+        # and unittest collects methods named test_* on TestCase subclasses and nothing
+        # else. A module-level `def test_x():` is skipped without a word: the run reports
+        # "Ran 0 tests ... OK", exits 0, and scores as nothing collected. Across the ten
+        # arms, 127 of 127 successful django runs used a TestCase class and not one
+        # bare-function file ever passed -- while the briefing only ever described how
+        # common each style was. Keyed on the runner kind, not the repository.
+        lines += ["", "**This runner only collects test methods on a `unittest.TestCase` "
+                      "subclass.** Put each test in a class that inherits from "
+                      "`unittest.TestCase` (or the project's own subclass of it, if the "
+                      "tests nearby use one), as a method whose name starts with `test`. "
+                      "A module-level `def test_...():` is never collected -- the run says "
+                      "`Ran 0 tests` and exits successfully, and your file counts as "
+                      "having no test at all."]
+    if not config and runner["cmd"] != PYTEST:
         # Said outright rather than left to be inferred from the runner line above it.
         # A `pytest.ini` can still be sitting in the checkout for the agent to find, and
         # the import failure it invites costs the whole run: the file does not import, so

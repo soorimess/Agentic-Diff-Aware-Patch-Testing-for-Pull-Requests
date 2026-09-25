@@ -336,12 +336,15 @@ class CoverageObservation(Observation):
 
 
 class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
-    """How much of the pull request's change the test actually executes.
+    """Which of the pull request's changed lines the test never executes.
 
-    One definition, and it is the same number the harness scores: of the executable
-    lines this PR changed, what fraction did your test run. Measured with the patch
-    applied, because the lines it adds do not exist at any other moment -- and always
-    reverted afterwards, so the tree is left where the agent found it.
+    The same lines the harness scores, shown as lines and never as a percentage. The
+    earlier output led with the figure and closed with "100% is the target", while
+    58-finish.md told the same agent "none of these figures is a target" -- and the
+    figure it was told to maximise was the one the report published as an independent
+    measure of test quality. The harness still computes the percentage; the agent is
+    shown only what it can act on. Measured with the patch applied, because the lines it
+    adds do not exist at any other moment, and always reverted afterwards.
     """
 
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
@@ -372,20 +375,17 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
             return CoverageObservation.from_text(
                 f"could not measure change coverage: {cov.get('reason')}", is_error=True)
 
-        lines = [f"Your test executes {cov['percent']}% of the lines this pull request "
-                 f"changed ({cov['covered']} of {cov['executable_changed_lines']} "
-                 f"executable changed lines)."]
         if not cov["missed"]:
-            lines.append("Every executable changed line is covered. Nothing to add.")
-            return CoverageObservation.from_text("\n".join(lines))
+            return CoverageObservation.from_text(
+                "Your test runs every executable line this pull request changed.")
+        lines = ["Some lines this pull request changed never ran under your test."]
 
         # The source and the guards, not just the numbers. "line 1631 is uncovered" is
         # not something an agent can act on; "line 1631 is `Q *= q.p`, and it sits under
         # `if not isinstance(q, SYMPY_INTS)`" says exactly what the input has to look
         # like for that line to run.
-        lines += ["", "These changed lines never ran. For each one you can see the code "
-                      "and the conditions above it -- those conditions are what your "
-                      "input has to satisfy:", ""]
+        lines += ["", "For each one you can see the code and the conditions above it -- "
+                      "those conditions are what your input has to satisfy:", ""]
         for item in cov.get("missed_source") or []:
             lines.append(f"  {item['ref']}")
             for g in item["guards"]:
@@ -395,9 +395,11 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
             lines.append("")
         extra = len(cov["missed"]) - len(cov.get("missed_source") or [])
         if extra > 0:
-            lines.append(f"  ... and {extra} more uncovered changed lines")
-        lines += ["Pick inputs that make those conditions true, or add a second case to "
-                  "the same test file. Then measure again. 100% is the target."]
+            lines.append(f"  ... and {extra} more changed lines that never ran")
+        lines += ["Write the test so that every line the change touched runs: pick inputs "
+                  "that make those conditions true, or add a second test for a separate "
+                  "case the same change fixes. Reach each line through the behaviour you "
+                  "are asserting. Then call `coverage` again."]
         # The rule, where the shortfall is read. Deliberately paired with the escape
         # hatch: some changed lines cannot be reached from a test at all, and an
         # assertion written only to execute one buys a number and costs a reviewer's
@@ -405,7 +407,7 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         if self.require_tools:
             lines += ["",
                       "You cannot finish having read this and changed nothing. Either "
-                      "raise the figure, or be able to say which of these lines is "
+                      "make these lines run, or be able to say which of them is "
                       "genuinely out of reach from a test and why."]
         return CoverageObservation.from_text("\n".join(lines))
 
@@ -418,8 +420,8 @@ class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="coverage",
-            description=("Measure what fraction of the pull request's changed lines your "
-                         "test executes, and list the changed lines it misses."),
+            description=("List the lines this pull request changed that your test never "
+                         "runs, with the code of each and the conditions above it."),
             action_type=CoverageAction,
             observation_type=CoverageObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
@@ -578,8 +580,13 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             # adds exist at all. Computed here rather than after the revert -- doing it
             # afterwards measures coverage of a tree where those line numbers hold
             # different code, and the run fails outright.
-            if {n for n, v in base_out.items() if v in ("FAILED", "ERROR")} & {
-                    n for n, v in head_out.items() if v == "PASSED"}:
+            # Only for a file that meets the harness's verdict: something flipped AND
+            # nothing still fails once the change is applied. Keyed on `flipped` alone,
+            # a file with two good tests and one broken one got a coverage report here --
+            # a working test's feedback, attached to a NO.
+            flips = ({n for n, v in base_out.items() if v in ("FAILED", "ERROR")}
+                     & {n for n, v in head_out.items() if v == "PASSED"})
+            if flips and not any(v in ("FAILED", "ERROR") for v in head_out.values()):
                 missed = self._reach(action.target)
         finally:
             self.box.apply_patch(self.patch, revert=True)
@@ -614,6 +621,15 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         else:
             head = f"Fail-to-pass: {len(flipped)} test(s) fail before and pass after."
 
+        # The harness's rule, in one place, for everything below the headline. The
+        # headline was always right, but the duty line, the coverage pointer, the mutation
+        # pointer and the error flag all asked `flipped` -- "did anything flip" -- which is
+        # not the verdict. `scikit-learn-14087` wrote three tests, two flipped and one
+        # still failed: it read "NOT fail-to-pass ... still fail" and then, underneath,
+        # "That it flips, and what it reaches, are two of the three questions", with no
+        # duty line. It scored NO having been told both things.
+        ok = bool(flipped) and not still_failing
+
         # The obligation, said where the answer arrives. It used to live only in the
         # prompt block the agent read once at the start and in the refusal it gets after
         # deciding it was finished -- neither of which is in front of it at the moment it
@@ -621,7 +637,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # an earlier run stopped on exactly this observation.
         duty = ("\n\nYou cannot finish while this is the answer. Rewrite the test and "
                 "call `verify` again, as many times as it takes."
-                if self.require_tools and not flipped else "")
+                if self.require_tools and not ok else "")
 
         # Reported here rather than left for the agent to ask about. The `coverage` tool
         # already offered this, and across twenty-six runs it was called twelve times --
@@ -644,9 +660,14 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         nxt = ("\n\nThat it flips, and what it reaches, are two of the three questions. "
                "Whether it would notice a fix that is subtly *wrong* is the third, and "
                "nothing above answers it -- `mutation` does."
-               if flipped and self.point_at_mutation else "")
+               if ok and self.point_at_mutation else "")
+        # Never an error. The tool ran and answered; "no" is an answer. It was flagged
+        # `is_error=not flipped`, so every negative verdict reached the model prefixed
+        # "[An error occurred during execution.]" -- a median of five of them already in
+        # context by the time a second chance began. `is_error` is kept for the cases
+        # where the tool genuinely could not run (the tree in an unexpected state).
         return VerifyObservation.from_text(head + duty + missed + nxt + body,
-                                           is_error=not flipped)
+                                           is_error=False)
 
     def _reach(self, target: str) -> str:
         """How much of the change this test runs, and what to do if it is not all of it.
@@ -657,8 +678,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         the agent cannot miss that something is unfinished, and the explaining is still
         the other tool's job.
 
-        No percentage is shown when the test reaches everything either; "all of them" is
-        a fact, and a figure invites raising a figure.
+        No percentage and no count, in either direction. "All of them" and "not all of
+        them" are facts the agent can act on; a figure is a score, and a score in front
+        of the agent is a score to raise.
         """
         try:
             cov = E.changed_line_coverage(self.box, [target], self.patch)
@@ -669,12 +691,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         missed = len(cov.get("missed") or [])
         if not missed:
             return "\n\nIt runs every line this pull request changed."
-        total = cov["executable_changed_lines"]
-        head = (f"\n\nIt runs {cov['covered']} of the {total} lines this pull request "
-                f"changed -- {cov['percent']:.0f}% -- and {missed} never execute. "
-                f"100% is the target."
-                + (" You cannot finish having read a shortfall and left it alone: "
-                   "either raise it, or establish that a line cannot be reached."
+        head = ("\n\nSome lines this pull request changed never run under this test."
+                + (" You cannot finish having read that and left it alone: either make "
+                   "them run, or establish that a line cannot be reached from a test."
                    if self.require_tools else ""))
         where = (" Call `coverage` on this file to see which they are, the code on each "
                  "one and the conditions above it."
