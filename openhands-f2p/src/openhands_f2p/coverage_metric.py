@@ -145,9 +145,9 @@ def measure_coverage(box: "Sandbox", targets: list[str],
         # symptom. What the test run itself printed is the cause.
         missing = "No module named coverage" in (rep.output + run.output)
         return {"ok": False, "returncode": run.returncode, "files": {},
-                "detail": ("`coverage` is not installed in this container -- the pip "
-                           "install at setup failed, so nothing could be measured. See "
-                           "the `install then seal` line in flow.log."
+                "detail": ("`coverage` is not installed in this container, so nothing "
+                           "could be measured. See the `install offline` line in "
+                           "flow.log."
                            if missing else
                            f"coverage json: {rep.output.strip()[-200:]} | "
                            f"test run exit {run.returncode}: {run.output[-600:]}")}

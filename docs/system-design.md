@@ -40,6 +40,14 @@ Two things follow from it:
 
 - The container cannot reach PyPI, GitHub or a search engine, so the fix cannot be looked
   up in a later release. Verified per run, not asserted: `dns_resolves` is recorded.
+- The container never has a network, not even at setup. `coverage` -- the one package
+  the harness adds -- is installed from a wheel the host downloads from PyPI (the release
+  pip would pick for the container's Python, sha256-checked, cached in `.cache/wheels/`)
+  and `docker cp`s in; see `wheels.py` and `Sandbox._install_offline`. Until 2026-09-26 it
+  was pip-installed over a bridge disconnected right after, and a failed install let the
+  run go on without it: Docker Desktop's proxy stopped answering and `full` runs went
+  ahead with a coverage tool that measured nothing. A failed install is now fatal (the
+  run is BROKEN and `--retry-broken` picks it up).
 - `.git` is deleted before the agent starts. A worktree was shown to be able to read the
   future test out of history, which would have made every result meaningless.
 
@@ -309,10 +317,13 @@ the ones the file actually names.
 ### Temperature
 
 `--temperature` sets the agent's sampling temperature (0 to 2; anything else is refused,
-not clamped). Unset, nothing is sent and the provider picks -- which is what every run
-before the flag did, and the request stays byte-for-byte what it was: the value is not
-passed to the SDK at all rather than passed as `None`. It is the agent's only; the judge
-keeps its own settings. `parallel.py` forwards it tested against `None`, because `0.0`
+not clamped). **The default is 0.3** (`models.DEFAULT_TEMPERATURE`, since 2026-09-26): on
+the 26-instance set it scored 20/26 against 16/26 with none sent, 15 genuine once a
+source-text test is discounted (`experiments-tests/temperature-0.3.md`). Every run
+before that -- the ten arms included -- sent none and the provider picked;
+`configure_llm(temperature=None)` still sends nothing at all rather than `None`, which
+is how those requests stay reproducible. It is the agent's only; the judge keeps its
+own settings. `parallel.py` forwards it tested against `None`, because `0.0`
 is a real temperature and the truthiness test used for `--model` would drop it. What is
 recorded in `result.json` as `temperature` is read back from the configured LLM, not
 from the flag; results from before the flag have no such field.
@@ -343,7 +354,7 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1072 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1094 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 160 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 286 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 424 | Of the lines this pull request changed, how many did the test execute? |
@@ -356,7 +367,7 @@ That makes every shared resource a hazard, and two were real:
 | `layout.py` | 29 | Where the project is on disk, and the environment it runs with. |
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 187 | One place the model connection is configured, shared by every caller. |
-| `models.py` | 332 | Which model answers, and what it needs, read from `models.json`. |
+| `models.py` | 338 | Which model answers, and what it needs, read from `models.json`. |
 | `mutants.py` | 512 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
 | `parallel.py` | 250 | Running several pull requests at once, as separate processes. |
@@ -364,13 +375,14 @@ That makes every shared resource a hazard, and two were real:
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 380 | Three test-runner conventions, and how to read what they print. |
 | `runs.py` | 498 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
-| `sandbox.py` | 341 | One container per instance, and the only door into it. |
+| `sandbox.py` | 355 | One container per instance, and the only door into it. |
 | `sandbox_tools.py` | 866 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 362 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 577 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 651 | The F2P decision. One implementation, used by every arm. |
+| `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
 <!-- /generated:modules -->
 
 ## The agent's tools
@@ -691,7 +703,7 @@ uv run openhands-f2p --out-root out/nocov --no-coverage-tool
 |---|---|
 | `--model` | the agent's model (default: gpt-5-mini, from the registry). Profiled: gpt-5-mini, gpt-5.5, gpt-5-nano, gpt-oss-20b, qwen3-coder-30b-a3b-instruct, qwen3-14b, llama-3.1-8b-instruct, gpt-5.6-luna |
 | `--judge-model` | the model that compares the generated test with the developer's (default: gpt-5.6-luna, from the registry) |
-| `--temperature` | the agent's sampling temperature, 0 to 2. Unset (the default) sends none and the provider picks -- which is what every run before this flag did. Applies to the agent only; the judge is not affected |
+| `--temperature` | the agent's sampling temperature, 0 to 2 (default: 0.3). Runs before 2026-09-26 sent none and the provider picked. Applies to the agent only; the judge is not affected |
 | `--provider` | override the profile's provider, for reaching the same model id through a different gateway. Choices: `litellm-proxy`, `openai`, `anthropic`. |
 <!-- /generated:cli -->
 

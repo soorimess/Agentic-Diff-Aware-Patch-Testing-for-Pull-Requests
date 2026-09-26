@@ -13,6 +13,7 @@ the fix" run.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -82,20 +83,17 @@ class Sandbox:
         claim_image(self.image)
         pull_image(self.image, quiet=self.quiet)
         cmd = ["docker", "run", "-d", "--name", self.name, "--platform", PLATFORM]
-        # `--network none` cannot be undone at runtime, and `extra_packages` needs a
-        # network for exactly one pip install. So when something has to be installed the
-        # container starts on the default bridge and is disconnected immediately after --
-        # which ends in the same place, and `audit_isolation` is what proves it.
-        needs_install = bool(self.extra_packages)
-        if not self.network and not needs_install:
+        # `extra_packages` no longer needs a network: the wheels are fetched on the host
+        # and copied in (see `_install_offline`), so the box starts sealed and stays so.
+        if not self.network:
             cmd += ["--network", "none"]
         cmd += [self.image, "sleep", "infinity"]
         r = _run(cmd, timeout=600)
         if r.returncode:
             raise SystemExit(f"could not start container:\n{r.stderr[-1200:]}")
         self.container = r.stdout.strip()
-        if needs_install:
-            self._install_then_seal()
+        if self.extra_packages:
+            self._install_offline()
         net = "network=none" if not self.network else "NETWORK ENABLED"
         if not self.quiet:
             print(f"  sandbox {self.name[:28]} ({net})")
@@ -103,33 +101,49 @@ class Sandbox:
                     image=self.image, container=self.container[:12])
         return self
 
-    def _install_then_seal(self) -> None:
-        """pip install the extras, then take the network away and check it is gone."""
-        pkgs = " ".join(shlex.quote(p) for p in self.extra_packages)
-        # Three attempts. This is the one moment the container has a network, and it is
-        # the only chance to get `coverage` in: a single transient PyPI failure cost
-        # sympy-24562 its coverage figure, seventy seconds of retrying nothing, and a
-        # measurement that could not be recovered without a fresh container.
-        installed = False
-        for attempt in (1, 2, 3):
-            r = self.exec(f"pip install -q {pkgs}", workdir="/", timeout=900)
-            installed = r.returncode == 0
-            if installed:
-                break
-            flow.record(flow.SETUP, "install retry",
-                        f"attempt {attempt} failed: {r.output.strip()[-160:]}")
-            time.sleep(3)
-        d = _run(["docker", "network", "disconnect", "bridge", self.container],
-                 timeout=120)
-        flow.record(flow.SETUP, "install then seal",
-                    f"{pkgs}: {'ok' if installed else 'FAILED after 3 attempts'}; "
-                    f"network {'removed' if d.returncode == 0 else 'STILL ATTACHED'}")
-        # Never take the seal on trust: if the disconnect silently failed we would run a
-        # whole instance believing it was isolated when it was not.
-        if self.audit_isolation()["dns_resolves"]:
+    def _install_offline(self) -> None:
+        """Install the extras from wheels fetched on the host. Any failure is fatal.
+
+        This replaced a pip install over a bridge that was disconnected afterwards. When
+        that install failed the run went on without the package -- `coverage` then could
+        not measure anything, so a `full` run was quietly a run without its coverage tool
+        and without a coverage figure. A run that cannot have what its configuration
+        says it has is not run.
+        """
+        from openhands_f2p import wheels
+        names = " ".join(self.extra_packages)
+
+        def fail(why: str) -> None:
+            flow.record(flow.SETUP, "install offline", f"{names}: FAILED -- {why[-300:]}")
             self.stop()
-            raise SystemExit("could not remove the container network after installing "
-                             f"{pkgs} -- refusing to run with an open network")
+            raise SystemExit(f"could not install {names} in the container: {why}")
+
+        r = self.exec('python -c "import platform;print(platform.python_version())"',
+                      workdir="/", timeout=120)
+        python = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+        if r.returncode or not re.fullmatch(r"3\.\d+\.\d+\S*", python):
+            fail(f"could not read the container's Python version: {r.output[-300:]}")
+        copied = []
+        for package in self.extra_packages:
+            try:
+                wheel = wheels.wheel_for(package, python)
+            except Exception as e:  # noqa: BLE001 -- reported whole, then fatal
+                fail(f"no {package} wheel for Python {python}: {type(e).__name__}: {e}")
+            cp = _run(["docker", "cp", str(wheel), f"{self.container}:/tmp/{wheel.name}"],
+                      timeout=300)
+            if cp.returncode:
+                fail(f"docker cp {wheel.name}: {cp.stderr[-300:]}")
+            copied.append(f"/tmp/{wheel.name}")
+        # --no-deps: nothing could be fetched anyway, and `coverage` has no dependencies.
+        # A package that did would fail here or at import -- loudly, either way.
+        r = self.exec("pip install -q --no-index --no-deps "
+                      + " ".join(shlex.quote(c) for c in copied), workdir="/", timeout=900)
+        if r.returncode:
+            fail(f"pip install: {r.output.strip()[-600:]}")
+        self.exec("rm -f " + " ".join(shlex.quote(c) for c in copied), workdir="/")
+        flow.record(flow.SETUP, "install offline",
+                    f"{names}: ok -- {', '.join(c.split('/')[-1] for c in copied)} "
+                    f"for Python {python}, no network")
 
     def stop(self) -> None:
         if self.container:

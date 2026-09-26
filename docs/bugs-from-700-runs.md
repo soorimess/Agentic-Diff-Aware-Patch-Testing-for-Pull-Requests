@@ -164,10 +164,24 @@ Reading both runs' trajectories and completions (details in
   (eight wasted actions in one run); and no reach diagnosis when coverage records nothing,
   since that can be a subprocess the tracer does not follow.
 
+## Found in the source-check run
+
+- **A failed `coverage` install did not stop the run.** Docker Desktop's proxy stopped
+  answering; `pip install coverage` timed out three times (109 s each), flow.log said
+  `FAILED after 3 attempts`, and the run went on with the `coverage` tool registered but
+  unable to measure, no reach diagnosis, and no coverage figure. It had happened before
+  unnoticed: four instances of `control-26` and one of `fix-smoke`. Fixed: the wheel is
+  fetched on the host and copied in, the container never has a network, and any failure
+  is fatal. (Server runs of the ten arms all recorded `coverage: ok`, 70 of 70 in base.)
+
+## Changed after the fact
+
+- **Sampling temperature 0.3 is the default** since 2026-09-26. One run at 0.3 scored
+  20/26 against 16/26 with none sent (p = 0.22; 20 vs 15 genuine, p = 0.06). Adopted on
+  that evidence; the ten arms all ran with none sent.
+
 ## Not changed yet, on purpose
 
-- **Sampling is unset by default.** `--temperature` exists since `42ac3e1`; one run at 0.3
-  scored 20/26 against 16/26 unset (p = 0.22). Not adopted as the default yet.
 - **A second chance that hands the agent its own failing test** with the remaining budget,
   rather than asking it to recall the file. To be tested on its own. Discarding the
   conversation, as a fresh retry does, is ruled out.

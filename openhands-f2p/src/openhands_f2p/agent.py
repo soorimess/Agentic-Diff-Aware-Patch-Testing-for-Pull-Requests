@@ -126,7 +126,8 @@ MAX_PASSES_AT_BASE_ROUNDS = 2
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
               out_dir: Path, features: FeatureSet, n_mutants: int = 0,
               model: str | None = None, provider: str | None = None,
-              second_chance: bool = False, temperature: float | None = None) -> dict:
+              second_chance: bool = False,
+              temperature: float | None = M.DEFAULT_TEMPERATURE) -> dict:
     from openhands.sdk import Agent, Conversation, Tool
     from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 
@@ -531,7 +532,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
           out_root: Path | None = None, label: str = "",
           n_mutants: int = 0, model: str | None = None,
           provider: str | None = None, judge_model: str | None = None,
-          second_chance: bool = False, temperature: float | None = None) -> dict:
+          second_chance: bool = False,
+          temperature: float | None = M.DEFAULT_TEMPERATURE) -> dict:
     features = features if features is not None else FeatureSet.of()
     inst = load(pr["id"])
     repo = inst["repo"]
@@ -575,8 +577,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
 
     with flow.recording(d, f"{pr['id']}  ({repo})  config={features.slug()}"), \
             E.Sandbox(pr["id"], quiet=True,
-                      # installed on the bridge, then the network is removed and
-                      # the seal re-checked -- see Sandbox._install_then_seal
+                      # from a wheel fetched on the host; the box never has a
+                      # network -- see Sandbox._install_offline
                       extra_packages=("coverage",)) as box:
         flow.record(flow.SETUP, "instance", f"{pr['note']}")
         box.strip_git()
@@ -739,7 +741,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               "usage": usage,
               "model": run["model"], "agent_status": run["status"],
               # None: no temperature was sent and the provider chose -- every run
-              # before `--temperature` existed. Absent from those results entirely.
+              # before `--temperature` existed (absent from those results entirely).
+              # Since 2026-09-26 the default is M.DEFAULT_TEMPERATURE.
               "temperature": run.get("temperature"),
               "agent_error": flow.scrub(run.get("error") or "") or None,
               # The prompt lives here rather than in its own task.txt: it is one field,

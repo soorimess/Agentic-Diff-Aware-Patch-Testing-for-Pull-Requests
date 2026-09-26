@@ -259,6 +259,12 @@ def profile_for(model: str) -> ModelProfile:
     return MODELS[-1]
 
 
+# The agent's sampling temperature when --temperature is not given. 0.3 since
+# 2026-09-26: on the 26-instance set it scored 20/26 against 16/26 with none sent
+# (experiments-tests/temperature-0.3.md). Every run before that sent none.
+DEFAULT_TEMPERATURE = 0.3
+
+
 def _temperature(text: str) -> float:
     """A temperature, or a refusal -- never a silently clamped value."""
     import argparse
@@ -286,11 +292,11 @@ def add_arguments(parser: object) -> None:
     group.add_argument("--judge-model", default=None,
                        help=f"the model that compares the generated test with the "
                             f"developer's (default: {DEFAULT_JUDGE}, from the registry)")
-    group.add_argument("--temperature", type=_temperature, default=None,
-                       help="the agent's sampling temperature, 0 to 2. Unset (the "
-                            "default) sends none and the provider picks -- which is what "
-                            "every run before this flag did. Applies to the agent only; "
-                            "the judge is not affected")
+    group.add_argument("--temperature", type=_temperature, default=DEFAULT_TEMPERATURE,
+                       help=f"the agent's sampling temperature, 0 to 2 (default: "
+                            f"{DEFAULT_TEMPERATURE}). Runs before 2026-09-26 sent none and "
+                            f"the provider picked. Applies to the agent only; the judge is "
+                            f"not affected")
     group.add_argument("--provider", default=None, choices=tuple(BY_PROVIDER),
                        help="override the profile's provider, for reaching the same "
                             "model id through a different gateway")
