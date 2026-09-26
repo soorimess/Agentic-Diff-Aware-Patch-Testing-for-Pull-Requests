@@ -174,6 +174,28 @@ Reading both runs' trajectories and completions (details in
   fetched on the host and copied in, the container never has a network, and any failure
   is fatal. (Server runs of the ten arms all recorded `coverage: ok`, 70 of 70 in base.)
 
+## Found in the ten-arm check on five evaluation instances (eval5-arms)
+
+Each arm was run on five instances the system was never tuned on, to check that a removed
+feature is removed and nothing else changes. Batch 1 (base, −second-chance, −guard,
+−require-tools) showed three places where it was not:
+
+- **−second-chance got more refusals than base.** The two-rounds-running limit keyed on the
+  reason `passes_at_base`, which only the flag produces. Without the flag the same state
+  arrives as `loop_open` and ran to five rounds: 20 refusals against base's 4, none
+  converting after the second. Fixed: those rounds count toward the same limit.
+- **−guard was told the guard exists.** The rules said every edit to an existing file "is
+  reverted" -- false in that arm, and a threat can deter without enforcement. Fixed: that
+  sentence is gated on `guard`.
+- **−require-tools was told the coverage duty is enforced** ("it is checked ... will be sent
+  back"). Fixed: gated on `require-tools`.
+
+Both prompt leaks were also in the ten-arm series, so those arms remain comparable with each
+other; the −guard and −require-tools arms there measured the enforcement, not the stated
+rule. Base's prompt is byte-identical after the change. `prompt.py` gained inline blocks
+(`...sentence.{?guard} Next sentence.{/guard}`), which keep or drop one sentence without
+disturbing the paragraph around it.
+
 ## Changed after the fact
 
 - **Sampling temperature 0.3 is the default** since 2026-09-26. One run at 0.3 scored

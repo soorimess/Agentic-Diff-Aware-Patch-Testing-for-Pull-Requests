@@ -65,6 +65,13 @@ about "what it will do *after* the change" describes something the agent can no 
 see. Same for the multi-check framing in `55-check-runs.md` — "work through these in
 order" describes nothing when one check is left.
 
+A block can also sit inside a paragraph, opener right after the text it follows:
+`...rather than passing it.{?guard} This is checked after every action...{/guard}` keeps or
+drops that one sentence and leaves the paragraph break after it alone. `50-rules.md` does
+this for the guard's "any such edit is reverted" and `57-check-reaches.md` for the
+coverage duty's "it will be sent back": an arm without the feature must not be told it is
+enforced.
+
 Feature names come from `FEATURES` in `openhands_f2p/features.py`. A name that is not in
 that registry raises when the piece is parsed, so a typo fails loudly instead of silently
 including or excluding text.

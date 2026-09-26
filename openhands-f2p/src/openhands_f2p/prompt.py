@@ -130,7 +130,21 @@ def _resolve_blocks(body: str, features: FeatureSet) -> str:
     pairs first and the wrapper last.
     """
     def one(m: re.Match) -> str:
-        return f"{m.group(2)}\n" if holds(m.group(1), features) else ""
+        keep = holds(m.group(1), features)
+        # Inline -- the opener follows text on its line, as when one sentence of a
+        # paragraph belongs to a feature. The match ate the newline after the closer, and
+        # that newline is the paragraph's, so it goes back whichever way the block goes.
+        # (Returning "" would join the next paragraph onto this one.)
+        # Newlines just inside the tags were eaten the same way and belong to the text
+        # being kept, so a kept inline block reads exactly as if it had no tags.
+        if m.start() > 0 and m.string[m.start() - 1] != "\n":
+            tail = "\n" if m.group(0).endswith("\n") else ""
+            if not keep:
+                return tail
+            lead = "\n" if m.string[m.start(2) - 1] == "\n" else ""
+            mid = "\n" if m.string[m.end(2)] == "\n" else ""
+            return lead + m.group(2) + mid + tail
+        return f"{m.group(2)}\n" if keep else ""
     while True:
         resolved = BLOCK.sub(one, body)
         if resolved == body:

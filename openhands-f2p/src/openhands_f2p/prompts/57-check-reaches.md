@@ -15,9 +15,9 @@ are the inputs you did not think of, and the conditions printed above each one s
 your input has to satisfy to get there.
 
 **Call `coverage`, and if it lists changed lines your test never runs, change the test
-before you stop.** The aim is a test that runs every line the change touched.
+before you stop.** The aim is a test that runs every line the change touched.{?require-tools}
 That is the rule, and it is checked: a run that reads a shortfall and does nothing about
-it will be sent back. It is not a demand that every line runs whatever it takes —
+it will be sent back.{/require-tools} It is not a demand that every line runs whatever it takes —
 sometimes a line is genuinely outside what this test is for — it is a demand that each
 missed line gets an answer rather than being noted and passed over. Decide what the missed lines are, change the test,
 call `coverage` again; you do not need to re-run the earlier checks in between. Keep going

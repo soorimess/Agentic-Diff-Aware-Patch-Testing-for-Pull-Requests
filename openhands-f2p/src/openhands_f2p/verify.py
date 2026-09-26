@@ -324,6 +324,16 @@ def verify_settled(tool_log: list) -> bool:
     return bool(e.get("flipped")) and not still and not wrote
 
 
+def verify_not_f2p(tool_log: list) -> bool:
+    """Whether the agent's own last `verify` fell short of fail-to-pass, or it never called
+    one. Edits since do not matter: this is what the agent was last told, not the file."""
+    found = [e for e in tool_log if e.get("tool") == "verify"]
+    if not found:
+        return True
+    still = [n for n, st in (found[-1].get("after") or {}).items() if st in BEHAVIOURAL]
+    return not found[-1].get("flipped") or bool(still)
+
+
 def loop_gap(tool_log: list, instruments: tuple[str, ...],
              rel: str) -> tuple[str, str] | None:
     """Whether the finishing loop actually closed, read off the agent's own actions.

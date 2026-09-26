@@ -337,15 +337,28 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                             "test already fail-to-pass; its one reminder about the "
                             "remaining checks was given; not refusing again")
                 break
+            # Rounds spent on a test that is still not fail-to-pass. With --second-chance
+            # the harness says so itself (`passes_at_base`). Without it the same state
+            # reaches the agent only as `loop_open` -- "your last verify said not
+            # fail-to-pass" -- and was refused five times where the flag's arm stops at
+            # two: the arm that removes the second chance got more refusals than the one
+            # that has it (eval5-arms, 20 against 4). The agent's own verdict stands in
+            # for the flag's, so removing the flag removes help rather than adding rounds.
+            not_f2p = V.verify_not_f2p(tool_log)
+
+            def stuck(why: str, short: bool) -> bool:
+                return "passes_at_base" in why or (
+                    not second_chance and "loop_open" in why and short)
+
             streak = 0
             for r in reversed(rounds):
-                if "passes_at_base" not in r["reason"]:
+                if not stuck(r["reason"], r.get("not_f2p", False)):
                     break
                 streak += 1
-            if "passes_at_base" in reason and streak >= MAX_PASSES_AT_BASE_ROUNDS:
+            if stuck(reason, not_f2p) and streak >= MAX_PASSES_AT_BASE_ROUNDS:
                 flow.record(flow.AGENT, "second chance",
-                            f"passes at base after {streak} refusals running; "
-                            f"not refusing again")
+                            f"{'passes at base' if second_chance else 'not fail-to-pass by its own verify'}"
+                            f" after {streak} refusals running; not refusing again")
                 break
             # Which of the two mistakes a passing-at-base test is making. Only with the
             # coverage tool registered: see `V.reach_diagnosis`.
@@ -382,7 +395,8 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 flow.record(flow.AGENT, "retry raised", error[:200])
             after = sum(counts.values())
             rounds.append({"reason": reason, "said": say, "budget": left,
-                           "actions": after - before, "settled": settled})
+                           "actions": after - before, "settled": settled,
+                           "not_f2p": not_f2p})
             flow.record(flow.AGENT, "second chance done",
                         f"round {len(rounds)}: {after - before} more actions, {status}")
             if error:
