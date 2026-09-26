@@ -288,6 +288,21 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 found = V.loop_gap(tool_log, instruments(features), rel)
                 if found:
                     gaps.append(found)
+            # A test that asserts on the project's source text rather than on behaviour.
+            # Checked in every configuration: it reads only the test file. See
+            # `V.source_gap`.
+            if left > 0:
+                found = V.source_gap(box, rel)
+                if found:
+                    gaps.append(found)
+            # A test that flips while running none of the changed lines: asked once, and
+            # only when nothing else is open and the agent holds `coverage`.
+            if (left > 0 and not gaps and "coverage-tool" in features
+                    and V.verify_settled(tool_log)
+                    and not any("runs_no_change" in r["reason"] for r in rounds)):
+                found = V.no_reach_gap(box, instance, rel)
+                if found:
+                    gaps.append(found)
             gap = None if not gaps else (
                 "+".join(r for r, _ in gaps), "\n\n".join(say for _, say in gaps))
             if left <= 0:
@@ -717,6 +732,10 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               # without the pair on record the two are indistinguishable in the table.
               "test_path": test_file,
               "test_path_default": default_path,
+              # The line of the final test that reads project source as text, or None.
+              # Recorded beside the verdict, not folded into it: such a test is
+              # mechanically fail-to-pass and the verdict says so. See `V.reads_source`.
+              "reads_source": V.reads_source(code or ""),
               "usage": usage,
               "model": run["model"], "agent_status": run["status"],
               # None: no temperature was sent and the provider chose -- every run

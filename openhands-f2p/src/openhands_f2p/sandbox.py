@@ -294,6 +294,21 @@ class Sandbox:
             return []
         return [ln.strip().strip('"') for ln in r.output.splitlines() if ln.strip()]
 
+    def tracked(self, paths: list[str]) -> set[str]:
+        """Which of `paths` existed at base -- are tracked by the snapshot.
+
+        Repository-relative paths only; a path outside the checkout (`/tmp/fix.patch`)
+        is by definition not something the base had.
+        """
+        rel = [p for p in paths if p and not p.startswith("/")]
+        if not rel:
+            return set()
+        quoted = " ".join("'" + p.replace("'", "'\\''") + "'" for p in rel)
+        r = self.exec(f"{self._tree_git()} ls-files -- {quoted}", timeout=120)
+        if r.returncode != 0:
+            return set()
+        return {ln.strip().strip('"') for ln in r.output.splitlines() if ln.strip()}
+
     def restore(self, paths: list[str]) -> list[str]:
         """Put `paths` back as the snapshot has them. Returns the ones actually restored.
 

@@ -25,6 +25,7 @@ than an error:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -239,6 +240,79 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
             "differently, and assert that value or behaviour instead.")
 
 
+# Reading the project's own source and asserting on the text. Eight "fail-to-pass" tests
+# across every run did this -- `inspect.getsource(UserCreationForm.save)` then
+# `assertIn('hasattr(self, "save_m2m")', source)` -- which flips on this fix because the
+# agent was shown its text, tests no behaviour, and fails on an equivalent fix worded
+# differently. The judge rated all eight tangential / none / reject; the verdict counted
+# them YES. Matched on the test's text, so it is the same check in every configuration.
+#
+# The target decides it. `inspect.getsource(UserCreationForm.save)` reads a named object
+# of the project; `inspect.getsource(f)` on the function sympy's `lambdify` just generated
+# reads the behaviour itself -- the generated source *is* what sympy-14976 changes. So a
+# dotted or class-named target counts, a bare local name does not.
+SOURCE_READING = re.compile(
+    r"\bgetsource(?:lines|file)?\s*\(\s*(?:[A-Za-z_]\w*\.[\w.]+|[A-Z]\w*)\s*\)"
+    r"|\bopen\s*\([^)\n]*(?:__file__|\.py['\"])"
+    r"|(?:__file__|\.py['\"])[^\n]*\.read_(?:text|bytes)\s*\(")
+
+
+def reads_source(text: str) -> str | None:
+    """The first line of the test that reads project source as text, if any."""
+    for line in (text or "").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if SOURCE_READING.search(line):
+            return line.strip()[:120]
+    return None
+
+
+def source_gap(box: Sandbox, rel: str) -> tuple[str, str] | None:
+    """Refuse a stop whose test asserts on source text rather than behaviour."""
+    line = reads_source(box.read(rel) or "")
+    if not line:
+        return None
+    flow.record(flow.VERIFY, "reads source", f"{rel}: {line}")
+    return ("reads_source",
+            f"`{rel}` reads the project's source code as text (`{line}`). A test that "
+            f"checks what the fix *says* passes on this exact wording and fails on an "
+            f"equivalent fix written differently; it tests nothing the pull request "
+            f"changes about how the code behaves. Remove that. Call the code the change "
+            f"modifies, with an input that goes through it, and assert on what it returns, "
+            f"raises or does.")
+
+
+def no_reach_gap(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str, str] | None:
+    """A test that flips while running none of the changed lines: worth one question.
+
+    Soft by design. It is how a source-text test looks from outside (0% on all eight),
+    but two genuine behavioural tests also measured 0% -- the change reached through a
+    path coverage did not trace -- so the message allows the agent to say so and stop.
+    Only with the coverage tool registered, for the reason `reach_diagnosis` gives.
+    """
+    patch = instance["patch"]
+    if box.ensure_base(patch) != "base":
+        return None
+    box.apply_patch(patch)
+    try:
+        cov = E.changed_line_coverage(box, [rel], patch)
+    except Exception:                                           # noqa: BLE001
+        cov = {}
+    finally:
+        box.apply_patch(patch, revert=True)
+    if not (cov.get("measured") and cov.get("covered") == 0):
+        return None
+    flow.record(flow.VERIFY, "flips without reaching",
+                f"{rel}: runs 0 of {cov.get('executable_changed_lines')} changed lines")
+    return ("runs_no_change",
+            f"`{rel}` flips, but running it executes none of the lines this pull request "
+            f"changes. A test that flips without running the change is usually checking "
+            f"something other than behaviour -- a string, a file, an attribute that "
+            f"happens to differ. Make it call the changed code and assert on the result. "
+            f"If it genuinely reaches the change through a path coverage cannot follow, "
+            f"say so in one sentence and finish.")
+
+
 def verify_settled(tool_log: list) -> bool:
     """Whether the test is fail-to-pass by the agent's own last `verify`, unchanged since."""
     found = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == "verify"]
@@ -319,9 +393,23 @@ def loop_gap(tool_log: list, instruments: tuple[str, ...],
         else:
             i, e = got
             still = [n for n, st in (e.get("after") or {}).items() if st in BEHAVIOURAL]
-            if not e.get("flipped") or still:
-                said = (f"{len(still)} test(s) still failing after the change"
-                        if still else "nothing flipped")
+            flipped = e.get("flipped") or []
+            if (not flipped or still) and wrote_after(i):
+                # Said "the test has not changed since" here regardless, which was false
+                # for every run that had edited after its last verify -- three of the nine
+                # refusals in one 26-instance run.
+                gaps.append(f"The last `verify` said **not fail-to-pass**, and you have "
+                            f"edited the test since, so nothing has checked the file on "
+                            f"disk now. Call `verify` on it, and keep going until it says "
+                            f"fail-to-pass.")
+            elif not flipped or still:
+                if flipped and still:
+                    said = (f"{len(flipped)} test(s) already fail before the change and "
+                            f"pass after -- keep them -- but {len(still)} still fail after "
+                            f"it. Fix or delete the ones that still fail")
+                else:
+                    said = (f"{len(still)} test(s) still failing after the change"
+                            if still else "nothing flipped")
                 gaps.append(f"The last `verify` said **not fail-to-pass** -- {said}. That "
                             f"is the answer to the only question that decides this run, "
                             f"and the test has not changed since. Rewrite the test and "

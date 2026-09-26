@@ -215,6 +215,13 @@ class RunExecutor(ToolExecutor[RunAction, RunObservation]):
 
 
 class SandboxRunTool(ToolDefinition[RunAction, RunObservation]):
+    # The name the model calls. Without it the SDK derives one from the class --
+    # `SandboxVerifyTool` became `sandbox_verify` -- while every prompt, tool output and
+    # refusal says `verify`. Two runs of 52 spent all five refusals looking for a
+    # `verify` command that did not exist under that name; the `name=` passed to the
+    # constructor below never reached the model, because the SDK holds it on the class.
+    name = "run"
+
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None,
                log: list | None = None, **params):
@@ -267,6 +274,8 @@ class WriteExecutor(ToolExecutor[WriteAction, WriteObservation]):
 
 
 class SandboxWriteTool(ToolDefinition[WriteAction, WriteObservation]):
+    name = "write_file"
+
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None,
                log: list | None = None, **params):
@@ -323,6 +332,8 @@ class TestExecutor(ToolExecutor[TestAction, TestObservation]):
 
 
 class SandboxTestTool(ToolDefinition[TestAction, TestObservation]):
+    name = "run_tests"
+
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                log: list | None = None, reveal_runner: bool = True, **params):
@@ -443,6 +454,8 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
 
 
 class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
+    name = "coverage"
+
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, require_tools: bool = False,
@@ -530,6 +543,8 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
 
 
 class SandboxMutationTool(ToolDefinition[MutationAction, MutationObservation]):
+    name = "mutation"
+
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, n: int = 5, **params):
@@ -643,6 +658,15 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     f"it is and fail once the change is applied. You have found the right "
                     f"behaviour and asserted the old side of it. Assert what the change "
                     f"makes true, not what it replaces.")
+        elif still_failing and flipped:
+            # Part of the file is right. Said as such, because "the test is wrong" alone
+            # sent seaborn-3069 into adding tests beside a flipping one for four verifies,
+            # and then deleting the one that flipped. Twenty-one of the 700 runs ended
+            # holding a correct test next to a broken one.
+            head = (f"NOT fail-to-pass yet, but part of it is right: {flipped[:3]} fail "
+                    f"before the change and pass after -- keep those. {still_failing[:3]} "
+                    f"still fail after the change is applied: fix them or delete them. "
+                    f"Every test in the file has to pass once the change is in.")
         elif still_failing:
             head = (f"NOT fail-to-pass: {still_failing[:3]} still fail after the change "
                     f"is applied. The test is wrong, not the code.")
@@ -741,6 +765,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
 
 
 class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
+    name = "verify"
+
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, reveal_missed: bool = True,

@@ -90,9 +90,12 @@ def _as_markdown(task: str) -> str:
 
 # Tool-call names as the model sends them -> the name in the tool log. Only the real
 # tools: a call to an invented name (`sandbox_run_tests`, `sandbox_finish`) never ran.
+# Runs before the tools were named after the prompt used the SDK's class-derived names.
 _CALL_NAMES = {"sandbox_run": "run", "sandbox_write": "write_file",
                "sandbox_test": "run_tests", "sandbox_verify": "verify",
-               "sandbox_coverage": "coverage", "sandbox_mutation": "mutation"}
+               "sandbox_coverage": "coverage", "sandbox_mutation": "mutation",
+               **{n: n for n in ("run", "write_file", "run_tests", "verify", "coverage",
+                                 "mutation")}}
 
 
 def _describe(tool: str, entry: dict) -> str:

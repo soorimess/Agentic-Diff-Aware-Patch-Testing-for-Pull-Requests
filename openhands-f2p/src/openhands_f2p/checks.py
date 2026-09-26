@@ -86,12 +86,16 @@ def audit(box: E.Sandbox, tool_log: list, test_file: str) -> dict:
     # a reproduction script, a debug print -- and which touched something that was
     # already in the checkout. Only the second can put the measurement in doubt; the
     # first is how an agent thinks, and counting them together hid the one in the other.
-    def is_new(p: str) -> bool:
-        return p in added or any(a.endswith("/") and p.startswith(a) for a in added)
+    #
+    # Asked of the base snapshot, not inferred from what is added now. Inferring it
+    # filed `/tmp/fix.patch` -- outside the checkout, never in the snapshot -- as an edit
+    # to a pre-existing file, and would have done the same to a scratch file the agent
+    # created and then deleted.
+    existed = box.tracked(wrote_elsewhere)
     return {"network_attempts": tried_network,
             "files_written_outside_test": wrote_elsewhere,
-            "scratch_files": [p for p in wrote_elsewhere if is_new(p)],
-            "preexisting_written": [p for p in wrote_elsewhere if not is_new(p)],
+            "scratch_files": [p for p in wrote_elsewhere if p not in existed],
+            "preexisting_written": [p for p in wrote_elsewhere if p in existed],
             "isolation": box.audit_isolation(),
             "tree_changed": touched,
             "tree_added": added,

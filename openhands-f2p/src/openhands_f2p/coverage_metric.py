@@ -348,8 +348,16 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
         # is carried out of the container here rather than guessed at afterwards.
         seen = sorted(traced["raw"])
         near = [k for k in seen if any(k.endswith(w) or w.endswith(k) for w in wanted)]
+        # A fix that deletes code and adds none (scikit-learn-25747 removes two lines and
+        # rewords a docstring) has nothing at head for a test to execute. Called "all
+        # comments or blanks" before, which described the added lines and hid the point.
+        removed = any(ln.startswith("-") and not ln.startswith("---")
+                      and ln[1:].strip() and not ln[1:].strip().startswith("#")
+                      for ln in patch.splitlines())
         return {"measured": False,
-                "reason": ("the changed lines are all comments or blanks" if near else
+                "reason": (("the fix only removes code -- it adds no executable line for a "
+                            "test to run" if removed else
+                            "the changed lines are all comments or blanks") if near else
                            "the changed file was never imported by this test"),
                 "changed_files": sorted(wanted),
                 "matched_traced_files": near,

@@ -144,10 +144,30 @@ changed file leaves no entry in the coverage report, the metric calls that
 case of not reaching the change. The diagnosis now reads that reason as "runs none of
 the changed lines". The published coverage metric is unchanged.
 
+## Found in the temperature test (control-26, temp-0.3-26)
+
+Reading both runs' trajectories and completions (details in
+`experiments-tests/temperature-0.3.md`):
+
+- **Tool names did not match the prompt** -- `sandbox_verify` to the model, `verify` in every
+  message. Fixed: tools are named as the prompt names them.
+- **Source-text tests pass the verdict.** Eight across all runs (six in the ten-arm series,
+  none in the base arm). Fixed: the stop is refused, the prompt forbids it, results record
+  `reads_source`.
+- **`verify` hid a partly working test**, and **the refusal claimed "not changed since"
+  after an edit**. Fixed.
+- **The audit filed `/tmp/fix.patch` as a pre-existing file.** Fixed: asked of the base
+  snapshot.
+- **A deletion-only fix read "all comments or blanks".** Fixed: says the fix only removes
+  code.
+- Not changed: `think` called with `summary` instead of `thought` is rejected by the SDK
+  (eight wasted actions in one run); and no reach diagnosis when coverage records nothing,
+  since that can be a subprocess the tracer does not follow.
+
 ## Not changed yet, on purpose
 
-- **Sampling is unset.** No `temperature`, `top_p` or `seed` anywhere; four identical
-  gateway calls returned three different answers. To be tested on its own before adoption.
+- **Sampling is unset by default.** `--temperature` exists since `42ac3e1`; one run at 0.3
+  scored 20/26 against 16/26 unset (p = 0.22). Not adopted as the default yet.
 - **A second chance that hands the agent its own failing test** with the remaining budget,
   rather than asking it to recall the file. To be tested on its own. Discarding the
   conversation, as a fresh retry does, is ruled out.

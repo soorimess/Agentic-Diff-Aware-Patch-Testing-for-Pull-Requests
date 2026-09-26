@@ -344,9 +344,9 @@ That makes every shared resource a hazard, and two were real:
 | module | lines | what it is |
 |---|---|---|
 | `agent.py` | 1072 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
-| `checks.py` | 156 | What the agent actually did, checked rather than assumed. |
+| `checks.py` | 160 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 286 | Does the generated test check the same thing the developer's test checks? |
-| `coverage_metric.py` | 416 | Of the lines this pull request changed, how many did the test execute? |
+| `coverage_metric.py` | 424 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
 | `features.py` | 255 | What the agent is given, as one registry that everything else reads. |
@@ -364,13 +364,13 @@ That makes every shared resource a hazard, and two were real:
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 380 | Three test-runner conventions, and how to read what they print. |
 | `runs.py` | 498 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
-| `sandbox.py` | 326 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 840 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sandbox.py` | 341 | One container per instance, and the only door into it. |
+| `sandbox_tools.py` | 866 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
-| `trajectory.py` | 359 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 563 | The F2P decision. One implementation, used by every arm. |
+| `trajectory.py` | 362 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
+| `verify.py` | 577 | The F2P decision. One implementation, used by every arm. |
 <!-- /generated:modules -->
 
 ## The agent's tools
@@ -434,7 +434,31 @@ where the model's pattern under refusal was *write → verify → finish* every 
   already passing.
 
 Replayed over that run's recorded refusals, the last two rules drop 25 of 55 rounds without
-losing any of the three conversions.
+losing any of the three conversions. (One of those three, django-13406, later turned out to
+be a source-text test -- see below.)
+
+**A test that asserts the fix's source text is refused.** Eight "fail-to-pass" tests across
+every run read the patched function with `inspect.getsource` and asserted that the patch's
+lines were in it. That flips, because the agent was shown the patch, and it tests nothing;
+the judge rated all eight tangential / none / reject. `V.source_gap` reads the test file
+before accepting any stop, in every configuration, and refuses one that calls `getsource`
+on a named project object or opens a `.py` file -- a bare local (`inspect.getsource(f)` on
+the function sympy's `lambdify` just generated) is the behaviour itself and is not matched.
+The prompt says the same in `50-rules.md`, and every result records the offending line as
+`reads_source`. Separately, and only when the agent holds `coverage`, a test that flips
+while executing none of the changed lines is asked about once (`V.no_reach_gap`); softly,
+because two genuine behavioural tests also measured 0%.
+
+**Tools are named as the prompt names them.** The SDK derives a tool's API name from its
+class (`SandboxVerifyTool` -> `sandbox_verify`) and ignores the `name=` passed to the
+constructor, so the model saw `sandbox_verify` while every prompt and refusal said `verify`.
+Two of 52 runs spent all five refusals looking for a `verify` command. Each tool class now
+sets `name`.
+
+**`verify` names the part that is right.** When some tests flip and others still fail, the
+headline lists the flipping ones and says to keep them, and the refusal says the same; "the
+test is wrong" alone sent one run into deleting its only flipping test. A refusal after an
+edit no longer claims the test "has not changed since".
 
 ### `mutation`
 

@@ -23,6 +23,11 @@ job: The constraints. The first one is load-bearing for the measurement rather t
   So the rule now says what the reading is *for* and hands the stopping point to the test.
   It names no metric: preferring a draft you have run to a file you have skimmed is how the
   work is done whether or not anyone is scoring it.
+
+  The third paragraph is there because eight "fail-to-pass" tests across every run read
+  the patched function with `inspect.getsource` and asserted that the patch's lines were
+  in it. That flips -- the agent was shown the patch -- and tests nothing. The harness
+  also refuses such a stop (`V.source_gap`); the rule says it before the work starts.
 ---
 **Do not modify or delete any file that is already here.** Not the library source, not
 an existing test, not an existing fixture. The test is supposed to fail on this code —
@@ -35,6 +40,12 @@ Creating files is allowed. Your test goes in `{test_file}`, and if it genuinely 
 names of your own rather than an existing fixture's. A file that did not exist before is
 present when the test runs against the old code and against the fixed code alike, so it
 cannot make a test appear to flip. A file you edited can, which is the whole difference.
+
+**Test what the code does, not what it says.** Do not read the project's source as text —
+no `inspect.getsource`, no opening a `.py` file — and assert on its contents. Such a test
+passes on this fix's exact wording and fails on an equivalent fix written differently; it
+is refused when you try to finish. Call the changed code and assert on what it returns,
+raises or does.
 
 Read the source before you write -- enough to know what to assert, not enough to be
 certain of everything. Then get a test running, and let what it does correct the rest of
