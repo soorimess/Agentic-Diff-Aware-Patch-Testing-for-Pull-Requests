@@ -35,7 +35,7 @@ that is the entire point — and editing what it tests destroys the measurement 
 passing it.{?guard} This is checked after every action and any such edit is reverted, so it costs
 you the action and gains you nothing.{/guard}
 
-Creating files is allowed. Your test goes in `{test_file}`, and if it genuinely needs more
+Creating files is allowed. Your test goes in `{test_file}`{?!repo-facts}, in the directory you chose{/!repo-facts}, and if it genuinely needs more
 — a fixture directory, a sample package to import, data to read — create those too, under
 names of your own rather than an existing fixture's. A file that did not exist before is
 present when the test runs against the old code and against the fixed code alike, so it

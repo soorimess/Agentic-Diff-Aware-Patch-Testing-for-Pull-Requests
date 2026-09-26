@@ -354,7 +354,7 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1108 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1110 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 160 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 286 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 424 | Of the lines this pull request changed, how many did the test execute? |
@@ -439,13 +439,17 @@ where the model's pattern under refusal was *write → verify → finish* every 
   the assertion). The refusal says which, from the changed-line coverage at head. Only when
   the agent holds `coverage`, which reports exactly this, so the refusal adds nothing the
   agent could not ask for itself.
-- **`passes_at_base` is refused at most twice in a row.** Seven of eight runs that reached it
+- **A test that cannot be scored is refused at most twice in a row** -- `passes_at_base`
+  or `collects_nothing`. Seven of eight runs that reached it
   stayed for all five rounds; the one that recovered left after the first. Without
   `--second-chance` the harness cannot say "passes at base", and the same state reaches
   the agent as `loop_open` -- its own last `verify` said not fail-to-pass. Those rounds
   count toward the same limit (`V.verify_not_f2p`). Before this, the arm that removes the
   second chance was refused five times where the arm that has it stopped at two: 20
-  refusals against 4 on `eval5-arms`, none converting after the second.
+  refusals against 4 on `eval5-arms`, none converting after the second. `collects_nothing`
+  joined the limit after an `eval5-arms` run spent five rounds on a file that never
+  collected; the one `collects_nothing` conversion on record came in the round after its
+  second, on a different reason, which the limit still allows.
 - **A test that already flips gets one reminder.** Refusals over an unanswered `coverage` or
   `mutation` cannot change its verdict, and two tests were refused five times each while
   already passing.

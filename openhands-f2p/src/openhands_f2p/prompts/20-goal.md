@@ -26,7 +26,7 @@ job: The deliverable, stated as an engineering task rather than as our scoring f
   rewritten to avoid the first time, arrived at from the other direction.
 ---
 A pull request changes how this library behaves. Your job is to write the regression tests
-that pin that behaviour down, in `{test_file}`: enough to have caught this bug before it
+that pin that behaviour down, in `{test_file}`{?!repo-facts} in the directory you chose{/!repo-facts}: enough to have caught this bug before it
 was fixed, and to catch it again if anyone reintroduces it. One test per behaviour the
 change settles separately -- as many as the change has, and no more. A test is whatever
 this project's runner collects: a function in some projects, a method on a test class

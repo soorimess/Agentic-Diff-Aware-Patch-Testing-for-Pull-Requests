@@ -47,5 +47,5 @@ this project's own runner; give it the path you chose and confirm the test is ac
 collected, because a path the runner cannot reach reports nothing at all rather than
 failing.
 
-Reading is unrestricted; creating is not. That one file is the only thing you may add,
-and the library source stays exactly as you found it.
+Reading is unrestricted; changing is not. The library source and every file already in
+the checkout stay exactly as you found them -- the rules below say what you may create.

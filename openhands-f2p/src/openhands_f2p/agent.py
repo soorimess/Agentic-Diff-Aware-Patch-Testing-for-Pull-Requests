@@ -116,10 +116,12 @@ def _elsewhere(run: dict, test_file: str) -> str:
 # number of times the same kind of message is appended to the context, and a run still
 # open after five refusals has usually stopped moving.
 MAX_REFUSALS = 5
-# `passes_at_base` refused at most this many rounds in a row. On the new system's first
-# run seven of eight instances that reached it stayed there for all five rounds; the one
-# that recovered left it after the first. A third identical refusal has not converted
-# anything, in either system.
+# A test that cannot be scored -- `passes_at_base` or `collects_nothing` -- refused at
+# most this many rounds in a row. On the new system's first run seven of eight instances
+# that reached `passes_at_base` stayed there for all five rounds; the one that recovered
+# left it after the first. `collects_nothing` joined after eval5-arms, where one run spent
+# five rounds on a file that never collected; the one collects_nothing conversion on
+# record left it after the second. A third identical refusal has not converted anything.
 MAX_PASSES_AT_BASE_ROUNDS = 2
 
 
@@ -347,8 +349,8 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             not_f2p = V.verify_not_f2p(tool_log)
 
             def stuck(why: str, short: bool) -> bool:
-                return "passes_at_base" in why or (
-                    not second_chance and "loop_open" in why and short)
+                return ("passes_at_base" in why or "collects_nothing" in why or (
+                    not second_chance and "loop_open" in why and short))
 
             streak = 0
             for r in reversed(rounds):
@@ -357,7 +359,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 streak += 1
             if stuck(reason, not_f2p) and streak >= MAX_PASSES_AT_BASE_ROUNDS:
                 flow.record(flow.AGENT, "second chance",
-                            f"{'passes at base' if second_chance else 'not fail-to-pass by its own verify'}"
+                            f"{'not scoreable (passes at base or collects nothing)' if second_chance else 'not fail-to-pass by its own verify'}"
                             f" after {streak} refusals running; not refusing again")
                 break
             # Which of the two mistakes a passing-at-base test is making. Only with the

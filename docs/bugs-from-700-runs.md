@@ -190,6 +190,21 @@ feature is removed and nothing else changes. Batch 1 (base, −second-chance, �
 - **−require-tools was told the coverage duty is enforced** ("it is checked ... will be sent
   back"). Fixed: gated on `require-tools`.
 
+Batch 2 (the three fixed arms rerun, plus −repo-facts):
+
+- **−repo-facts was told two contradictory things.** Its exploration piece said "that one
+  file is the only thing you may add"; the rules, in every arm, say fixture files may be
+  created. And the rules and goal said "your test goes in `test_f2p_x.py`" -- in this arm
+  a bare file name, since choosing the directory is the agent's job -- which reads as the
+  repository root. Both failing −repo-facts runs that never collected had put the file
+  there. Fixed: "in the directory you chose", and the exploration piece defers to the
+  rules on creating files. Only this arm's prompt changes.
+- **`collects_nothing` was refused five times running** with nothing changing. Now under
+  the same two-rounds-running limit as `passes_at_base`.
+- The source-text refusal fired live for the first time (−repo-facts django-13279:
+  `inspect.getsource(SessionBase.encode)`); the agent rewrote it as a behaviour test and
+  ended YES with full coverage.
+
 Both prompt leaks were also in the ten-arm series, so those arms remain comparable with each
 other; the −guard and −require-tools arms there measured the enforcement, not the stated
 rule. Base's prompt is byte-identical after the change. `prompt.py` gained inline blocks
