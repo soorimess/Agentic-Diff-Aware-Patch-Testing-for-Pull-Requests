@@ -1,0 +1,206 @@
+# Run status, per pull request
+
+Last run in this table: 2026-09-26 10:51 UTC.
+
+- **70** instances across **12** repositories
+- **50/70** fail-to-pass, of those that reached a verdict
+- **50** measured for changed-line coverage: **mean 88%** per test, median 100%
+- **74%** of the changed lines those tests were measured against (198/269, pooled)
+- **39%** of every source line all 70 patches change (198/508) -- a fixed denominator, so this is the figure that compares across arms
+- \$5.06 and 70.3M tokens in total
+- **35** of these were sent a second-chance message after stopping with nothing to score, and **16** of them ended fail-to-pass; the other 35 finished or failed for a reason the agent could not have seen at base
+
+
+### What the refused runs did next
+
+`loop_open` belongs to `require-tools` and fires with or without `--second-chance`; the rows marked *added by the flag* are the ones this flag is answerable for.
+
+| told | runs | ended YES | ended NO | ended BROKEN | |
+|---|---|---|---|---|---|
+| `loop_open` | 34 | 16 | 18 | 0 | from `require-tools` |
+| `loop_open+reads_source` | 1 | 0 | 1 | 0 | from `require-tools` |
+Every row was produced with the same configuration: **`full`** &mdash; what the agent was given. `full` means nothing was withheld.
+
+Coverage is measured only for tests that are fail-to-pass; for anything else the question does not apply. A `—` in that column means not measured, not zero.
+
+The agent held the `mutation` tool in this run, so the mutants scored here are the **held-out half** of the pool &mdash; the agent was shown the other half and never these. That keeps the number a measurement rather than a mark for revising against the sample, but it also halves the denominator, so a per-instance figure is noisier than one from a run without the tool. The two are not comparable row for row.
+
+`concept`, `issue` and `readable` are three separate answers from one judgement call by a stronger model that wrote none of these tests: whether the test is about the same behaviour as the maintainer's, whether it reaches every behaviour the pull request settles, and whether it would pass review. None of them feeds the F2P verdict.
+
+The two `mutants` columns are the same set of mutants asked of two tests. `mutmut` mutates the lines the patch changed -- negating a condition, moving a boundary, replacing a literal -- and each column is how many of those mutants that test fails on, which is how many wrong versions of the fix it would have caught. Nothing is filtered out, so the columns are comparable: a mutant the developer's test kills and the agent's does not is a gap, and one neither kills is probably behaviourally equivalent to the fix and says nothing about either test. The individual diffs are in each instance's `mutations/`.
+
+The three judge columns are levels from 1 (worst) to 5 (best), printed as `label (level)`:
+
+| scale | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| concept -- same behaviour as the maintainer's test? | different | tangential | narrower | close | equivalent |
+| issue -- every behaviour the pull request settles? | none | minor only | main only | nearly complete | complete |
+| readable -- would it pass review? | reject | poor | acceptable | good | exemplary |
+
+| instance | version | verdict | coverage | mutants: agent test | mutants: dev test | actions | tools used | concept | issue | readable | last run |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| [`astropy__astropy-14369`](./astropy__astropy-14369/) | 5.1 | YES | 100% (4/4) | 3/10 | 3/10 | 25 | `run` x14, `run_tests` x3, `verify` x2, `write_file` x2, `coverage` x1, `mutation` x1 | close (4) | nearly complete (4) | acceptable (3) | 2026-09-26 06:38 UTC |
+| [`astropy__astropy-14539`](./astropy__astropy-14539/) | 5.1 | YES | 100% (1/1) | 3/3 | 3/3 | 23 | `run` x6, `run_tests` x6, `write_file` x3, `coverage` x2, `mutation` x2, `verify` x2 | tangential (2) | main only (3) | acceptable (3) | 2026-09-26 06:31 UTC |
+| [`astropy__astropy-14598`](./astropy__astropy-14598/) | 5.2 | YES | 100% (2/2) | 2/2 | 2/2 | 26 | `run` x9, `run_tests` x4, `verify` x3, `write_file` x3, `coverage` x2, `mutation` x2 | close (4) | nearly complete (4) | acceptable (3) | 2026-09-26 06:34 UTC |
+| [`astropy__astropy-7606`](./astropy__astropy-7606/) | 1.3 | YES | 100% (6/6) | 3/4 | 4/4 | 63 | `run` x20, `run_tests` x10, `verify` x9, `write_file` x9, `coverage` x7, `mutation` x3 | equivalent (5) | main only (3) | poor (2) | 2026-09-26 06:45 UTC |
+| [`django__django-10914`](./django__django-10914/) | 3.0 | YES | 100% (1/1) | — | — | 51 | `run` x27, `write_file` x9, `run_tests` x4, `verify` x4, `coverage` x2, `mutation` x2 | narrower (3) | main only (3) | acceptable (3) | 2026-09-26 06:35 UTC |
+| [`django__django-11179`](./django__django-11179/) | 3.0 | NO | — | — | — | 63 | `run` x26, `write_file` x16, `run_tests` x9, `verify` x4, `coverage` x1  (+2 edits reverted) | — | — | — | 2026-09-26 06:42 UTC |
+| [`django__django-11477`](./django__django-11477/) | 3.0 | YES | 100% (1/1) | 1/1 | 1/1 | 44 | `run` x19, `run_tests` x7, `write_file` x7, `coverage` x2, `mutation` x2, `verify` x1 | narrower (3) | main only (3) | reject (1) | 2026-09-26 06:37 UTC |
+| [`django__django-12308`](./django__django-12308/) | 3.1 | YES | 100% (5/5) | 2/3 | 2/3 | 26 | `run` x14, `coverage` x2, `run_tests` x2, `verify` x2, `write_file` x2, `mutation` x1 | close (4) | main only (3) | poor (2) | 2026-09-26 06:41 UTC |
+| [`django__django-12965`](./django__django-12965/) | 3.2 | NO | — | — | — | 74 | `run` x22, `write_file` x17, `run_tests` x16, `verify` x7, `coverage` x2, `mutation` x1 | — | — | — | 2026-09-26 06:52 UTC |
+| [`django__django-13012`](./django__django-13012/) | 3.2 | NO | — | — | — | 50 | `run` x17, `write_file` x9, `run_tests` x8, `coverage` x4, `mutation` x2, `verify` x2 | — | — | — | 2026-09-26 06:50 UTC |
+| [`django__django-13023`](./django__django-13023/) | 3.2 | YES | 100% (1/1) | no mutants | no mutants | 25 | `run` x11, `write_file` x4, `run_tests` x3, `coverage` x2, `verify` x2, `mutation` x1 | narrower (3) | main only (3) | good (4) | 2026-09-26 06:44 UTC |
+| [`django__django-13449`](./django__django-13449/) | 3.2 | NO | — | — | — | 65 | `run` x22, `write_file` x13, `run_tests` x12, `verify` x4, `coverage` x2, `mutation` x2  (+1 edit reverted) | — | — | — | 2026-09-26 06:57 UTC |
+| [`django__django-13513`](./django__django-13513/) | 3.2 | NO | — | — | — | 74 | `run` x21, `write_file` x18, `run_tests` x11, `coverage` x9, `verify` x7, `mutation` x2 | — | — | — | 2026-09-26 07:06 UTC |
+| [`django__django-13590`](./django__django-13590/) | 3.2 | YES | 100% (5/5) | 5/5 | 4/5 | 26 | `run` x7, `run_tests` x4, `write_file` x4, `coverage` x3, `verify` x3, `mutation` x2 | narrower (3) | complete (5) | poor (2) | 2026-09-26 06:54 UTC |
+| [`django__django-13794`](./django__django-13794/) | 3.2 | YES | 100% (4/4) | no mutants | no mutants | 23 | `run` x10, `write_file` x3, `coverage` x2, `mutation` x2, `run_tests` x2, `verify` x2 | close (4) | main only (3) | good (4) | 2026-09-26 06:52 UTC |
+| [`django__django-14534`](./django__django-14534/) | 4.0 | YES | 100% (1/1) | no mutants | no mutants | 49 | `run` x32, `write_file` x5, `run_tests` x4, `verify` x2, `coverage` x1, `mutation` x1 | equivalent (5) | complete (5) | acceptable (3) | 2026-09-26 07:01 UTC |
+| [`django__django-14559`](./django__django-14559/) | 4.0 | YES | 25% (1/4) | 0/2 | 2/2 | 48 | `run` x15, `write_file` x10, `verify` x9, `coverage` x3, `run_tests` x3, `mutation` x1 | narrower (3) | minor only (2) | acceptable (3) | 2026-09-26 07:06 UTC |
+| [`django__django-14580`](./django__django-14580/) | 4.0 | YES | 100% (1/1) | 3/3 | 3/3 | 35 | `run` x17, `run_tests` x5, `write_file` x5, `coverage` x2, `mutation` x2, `verify` x2 | close (4) | complete (5) | acceptable (3) | 2026-09-26 07:03 UTC |
+| [`django__django-14608`](./django__django-14608/) | 4.0 | YES | 50% (1/2) | no mutants | no mutants | 47 | `run` x18, `run_tests` x7, `write_file` x7, `verify` x6, `coverage` x5, `mutation` x1 | narrower (3) | main only (3) | poor (2) | 2026-09-26 07:10 UTC |
+| [`django__django-14725`](./django__django-14725/) | 4.1 | NO | — | — | — | 65 | `write_file` x16, `run` x14, `run_tests` x14, `verify` x8, `coverage` x1, `mutation` x1 | — | — | — | 2026-09-26 07:15 UTC |
+| [`django__django-14765`](./django__django-14765/) | 4.0 | YES | 100% (4/4) | 1/1 | 0/1 | 15 | `run` x7, `run_tests` x2, `coverage` x1, `mutation` x1, `verify` x1, `write_file` x1 | equivalent (5) | complete (5) | good (4) | 2026-09-26 07:02 UTC |
+| [`django__django-14792`](./django__django-14792/) | 4.0 | YES | 100% (1/1) | 0/1 | 1/1 | 28 | `run` x12, `run_tests` x4, `write_file` x3, `verify` x2, `coverage` x1, `mutation` x1 | narrower (3) | main only (3) | poor (2) | 2026-09-26 07:09 UTC |
+| [`django__django-14915`](./django__django-14915/) | 4.1 | YES | 100% (2/2) | no mutants | no mutants | 24 | `run` x10, `mutation` x3, `verify` x3, `coverage` x2, `run_tests` x2, `write_file` x2 | equivalent (5) | complete (5) | acceptable (3) | 2026-09-26 07:12 UTC |
+| [`django__django-15252`](./django__django-15252/) | 4.1 | YES | 75% (3/4) | 0/2 | 0/2 | 42 | `run` x17, `write_file` x6, `run_tests` x5, `coverage` x3, `verify` x3, `mutation` x2 | narrower (3) | main only (3) | poor (2) | 2026-09-26 07:17 UTC |
+| [`django__django-15569`](./django__django-15569/) | 4.1 | YES | 100% (1/1) | no mutants | no mutants | 30 | `run` x17, `run_tests` x3, `write_file` x3, `coverage` x2, `verify` x2, `mutation` x1 | equivalent (5) | complete (5) | acceptable (3) | 2026-09-26 07:13 UTC |
+| [`django__django-16136`](./django__django-16136/) | 4.2 | NO | — | — | — | 51 | `run` x12, `write_file` x11, `run_tests` x10, `coverage` x3, `mutation` x3, `verify` x2 | — | — | — | 2026-09-26 07:20 UTC |
+| [`django__django-16139`](./django__django-16139/) | 4.2 | YES | 100% (1/1) | 1/1 | 1/1 | 29 | `run` x11, `run_tests` x4, `coverage` x3, `mutation` x3, `verify` x3, `write_file` x3 | narrower (3) | main only (3) | poor (2) | 2026-09-26 07:17 UTC |
+| [`django__django-16454`](./django__django-16454/) | 5.0 | NO | — | — | — | 52 | `run` x15, `write_file` x12, `run_tests` x11, `verify` x4, `coverage` x3, `mutation` x2 | — | — | — | 2026-09-26 07:28 UTC |
+| [`django__django-16560`](./django__django-16560/) | 5.0 | YES | 72% (13/18) | 1/10 | 1/10 | 32 | `run` x10, `verify` x5, `write_file` x5, `coverage` x4, `mutation` x2, `run_tests` x2 | narrower (3) | minor only (2) | acceptable (3) | 2026-09-26 07:26 UTC |
+| [`django__django-16642`](./django__django-16642/) | 5.0 | YES | 100% (1/1) | 4/4 | 4/4 | 24 | `run` x13, `run_tests` x4, `verify` x2, `coverage` x1, `mutation` x1, `write_file` x1 | equivalent (5) | complete (5) | good (4) | 2026-09-26 07:21 UTC |
+| [`django__django-16667`](./django__django-16667/) | 5.0 | YES | 100% (2/2) | no mutants | no mutants | 22 | `run` x11, `run_tests` x3, `write_file` x2, `coverage` x1, `mutation` x1, `verify` x1 | narrower (3) | main only (3) | acceptable (3) | 2026-09-26 07:21 UTC |
+| [`matplotlib__matplotlib-20676`](./matplotlib__matplotlib-20676/) | 3.4 | YES | 100% (4/4) | 4/5 | 5/5 | 28 | `run` x15, `run_tests` x3, `coverage` x2, `verify` x2, `write_file` x2, `mutation` x1 | narrower (3) | complete (5) | acceptable (3) | 2026-09-26 07:31 UTC |
+| [`matplotlib__matplotlib-20859`](./matplotlib__matplotlib-20859/) | 3.4 | YES | 67% (2/3) | no mutants | no mutants | 33 | `run` x22, `coverage` x2, `run_tests` x2, `verify` x2, `mutation` x1, `write_file` x1 | close (4) | nearly complete (4) | good (4) | 2026-09-26 07:32 UTC |
+| [`matplotlib__matplotlib-24870`](./matplotlib__matplotlib-24870/) | 3.6 | YES | 76% (13/17) | no mutants | no mutants | 45 | `run` x24, `run_tests` x5, `verify` x4, `write_file` x4, `coverage` x2, `mutation` x1 | narrower (3) | main only (3) | good (4) | 2026-09-26 09:17 UTC |
+| [`matplotlib__matplotlib-24970`](./matplotlib__matplotlib-24970/) | 3.6 | YES | 100% (6/6) | 3/10 | 2/10 | 25 | `run` x11, `verify` x3, `coverage` x2, `mutation` x2, `run_tests` x2, `write_file` x2 | narrower (3) | main only (3) | acceptable (3) | 2026-09-26 07:38 UTC |
+| [`matplotlib__matplotlib-25960`](./matplotlib__matplotlib-25960/) | 3.7 | NO | — | — | — | 49 | `write_file` x12, `run` x9, `run_tests` x9, `verify` x7, `mutation` x3, `coverage` x2 | — | — | — | 2026-09-26 09:26 UTC |
+| [`mwaskom__seaborn-3069`](./mwaskom__seaborn-3069/) | 0.12 | NO | — | — | — | 68 | `run` x26, `write_file` x13, `run_tests` x12, `verify` x8, `coverage` x1, `mutation` x1 | — | — | — | 2026-09-26 09:24 UTC |
+| [`pallets__flask-5014`](./pallets__flask-5014/) | 2.3 | YES | 100% (2/2) | 2/2 | 0/2 | 23 | `run` x9, `write_file` x3, `coverage` x2, `mutation` x2, `run_tests` x2, `verify` x2 | equivalent (5) | complete (5) | good (4) | 2026-09-26 07:37 UTC |
+| [`psf__requests-2931`](./psf__requests-2931/) | 2.9 | YES | 67% (2/3) | 0/1 | 0/1 | 57 | `run` x17, `verify` x13, `write_file` x13, `coverage` x7, `run_tests` x2, `mutation` x1 | equivalent (5) | nearly complete (4) | poor (2) | 2026-09-26 09:21 UTC |
+| [`pydata__xarray-2905`](./pydata__xarray-2905/) | 0.12 | YES | 50% (1/2) | no mutants | no mutants | 47 | `run` x21, `run_tests` x10, `write_file` x8  (+1 edit reverted) | equivalent (5) | main only (3) | good (4) | 2026-09-26 09:19 UTC |
+| [`pydata__xarray-4075`](./pydata__xarray-4075/) | 0.12 | YES | 100% (3/3) | 6/10 | 3/10 | 16 | `run` x3, `verify` x3, `write_file` x3, `coverage` x2, `run_tests` x2, `mutation` x1 | equivalent (5) | complete (5) | acceptable (3) | 2026-09-26 09:19 UTC |
+| [`pydata__xarray-4629`](./pydata__xarray-4629/) | 0.12 | YES | 100% (1/1) | 1/1 | 0/1 | 23 | `run` x9, `run_tests` x3, `coverage` x2, `mutation` x2, `verify` x2, `write_file` x2 | equivalent (5) | complete (5) | good (4) | 2026-09-26 09:15 UTC |
+| [`pydata__xarray-4687`](./pydata__xarray-4687/) | 0.12 | NO | — | — | — | 51 | `run` x17, `run_tests` x11, `write_file` x10, `coverage` x2, `verify` x2, `mutation` x1  (+1 edit reverted) | — | — | — | 2026-09-26 09:21 UTC |
+| [`pydata__xarray-6744`](./pydata__xarray-6744/) | 2022.06 | YES | 100% (9/9) | 9/10 | 9/10 | 31 | `run` x10, `verify` x4, `write_file` x4, `coverage` x3, `mutation` x3, `run_tests` x3 | narrower (3) | main only (3) | acceptable (3) | 2026-09-26 09:38 UTC |
+| [`pylint-dev__pylint-4970`](./pylint-dev__pylint-4970/) | 2.10 | YES | 100% (2/2) | 1/1 | 1/1 | 58 | `run` x31, `write_file` x8, `run_tests` x6, `verify` x5, `coverage` x2, `mutation` x2  (+1 edit reverted) | narrower (3) | none (1) | reject (1) | 2026-09-26 09:42 UTC |
+| [`pylint-dev__pylint-7277`](./pylint-dev__pylint-7277/) | 2.15 | YES | 100% (3/3) | 3/3 | 3/3 | 27 | `run` x10, `verify` x4, `write_file` x4, `coverage` x2, `mutation` x2, `run_tests` x2  (+1 edit reverted) | close (4) | nearly complete (4) | poor (2) | 2026-09-26 09:31 UTC |
+| [`pytest-dev__pytest-6197`](./pytest-dev__pytest-6197/) | 5.2 | NO | — | — | — | 49 | `run` x28, `run_tests` x5, `coverage` x3, `write_file` x3, `verify` x2, `mutation` x1 | — | — | — | 2026-09-26 09:34 UTC |
+| [`pytest-dev__pytest-6202`](./pytest-dev__pytest-6202/) | 5.2 | YES | 100% (1/1) | 0/1 | 1/1 | 33 | `run` x10, `run_tests` x9, `write_file` x8, `coverage` x1, `mutation` x1, `verify` x1 | narrower (3) | complete (5) | poor (2) | 2026-09-26 09:30 UTC |
+| [`scikit-learn__scikit-learn-10297`](./scikit-learn__scikit-learn-10297/) | 0.20 | NO | — | — | — | 35 | `run` x20, `run_tests` x3, `coverage` x2, `mutation` x2, `verify` x2, `write_file` x2  (+1 edit reverted) | — | — | — | 2026-09-26 09:35 UTC |
+| [`scikit-learn__scikit-learn-13124`](./scikit-learn__scikit-learn-13124/) | 0.21 | NO | — | — | — | 48 | `run` x18, `write_file` x12, `run_tests` x6, `verify` x4 | — | — | — | 2026-09-26 09:47 UTC |
+| [`scikit-learn__scikit-learn-14087`](./scikit-learn__scikit-learn-14087/) | 0.22 | YES | 60% (3/5) | 2/5 | 2/5 | 44 | `run` x11, `write_file` x9, `verify` x7, `run_tests` x6, `coverage` x4, `mutation` x3 | close (4) | nearly complete (4) | acceptable (3) | 2026-09-26 09:52 UTC |
+| [`scikit-learn__scikit-learn-9288`](./scikit-learn__scikit-learn-9288/) | 0.22 | YES | 100% (3/3) | 5/5 | 5/5 | 22 | `run` x8, `verify` x3, `write_file` x3, `coverage` x2, `mutation` x2, `run_tests` x2 | narrower (3) | complete (5) | acceptable (3) | 2026-09-26 09:47 UTC |
+| [`sphinx-doc__sphinx-7462`](./sphinx-doc__sphinx-7462/) | 3.1 | YES | 20% (2/10) | 0/10 | 6/10 | 37 | `run` x10, `write_file` x8, `run_tests` x7, `verify` x5, `coverage` x3, `mutation` x1 | tangential (2) | none (1) | poor (2) | 2026-09-26 09:48 UTC |
+| [`sphinx-doc__sphinx-7590`](./sphinx-doc__sphinx-7590/) | 3.1 | YES | 62% (29/47) | 1/10 | 4/10 | 49 | `run` x25, `run_tests` x6, `verify` x5, `write_file` x4, `coverage` x3, `mutation` x1 | narrower (3) | main only (3) | poor (2) | 2026-09-26 09:56 UTC |
+| [`sphinx-doc__sphinx-7757`](./sphinx-doc__sphinx-7757/) | 3.1 | YES | 88% (14/16) | 8/10 | 8/10 | 42 | `run` x24, `run_tests` x4, `write_file` x4, `coverage` x2, `verify` x2, `mutation` x1 | close (4) | complete (5) | good (4) | 2026-09-26 09:52 UTC |
+| [`sphinx-doc__sphinx-8035`](./sphinx-doc__sphinx-8035/) | 3.2 | NO | — | — | — | 52 | `run` x25, `run_tests` x8, `write_file` x8, `coverage` x2, `verify` x2, `mutation` x1 | — | — | — | 2026-09-26 10:01 UTC |
+| [`sphinx-doc__sphinx-8459`](./sphinx-doc__sphinx-8459/) | 3.4 | NO | — | — | — | 57 | `write_file` x15, `run` x14, `run_tests` x11, `verify` x7, `coverage` x3 | — | — | — | 2026-09-26 10:02 UTC |
+| [`sphinx-doc__sphinx-9591`](./sphinx-doc__sphinx-9591/) | 4.2 | NO | — | — | — | 84 | `run` x26, `write_file` x23, `run_tests` x19, `verify` x7, `coverage` x3 | — | — | — | 2026-09-26 10:17 UTC |
+| [`sphinx-doc__sphinx-9658`](./sphinx-doc__sphinx-9658/) | 4.3 | NO | — | — | — | 72 | `run` x19, `write_file` x13, `coverage` x9, `run_tests` x8, `mutation` x7, `verify` x7 | — | — | — | 2026-09-26 10:19 UTC |
+| [`sympy__sympy-12489`](./sympy__sympy-12489/) | 1.0 | YES | 38% (14/37) | 1/10 | 5/10 | 56 | `run` x13, `write_file` x13, `verify` x11, `run_tests` x6, `coverage` x4, `mutation` x4 | narrower (3) | main only (3) | exemplary (5) | 2026-09-26 10:29 UTC |
+| [`sympy__sympy-13551`](./sympy__sympy-13551/) | 1.1 | NO | — | — | — | 50 | `run` x16, `run_tests` x9, `write_file` x8, `coverage` x3, `verify` x3, `mutation` x1  (+1 edit reverted) | — | — | — | 2026-09-26 10:10 UTC |
+| [`sympy__sympy-14976`](./sympy__sympy-14976/) | 1.2 | YES | 100% (2/2) | 5/5 | 5/5 | 33 | `run` x21, `run_tests` x3, `write_file` x3, `verify` x2, `coverage` x1, `mutation` x1 | narrower (3) | main only (3) | poor (2) | 2026-09-26 10:11 UTC |
+| [`sympy__sympy-15349`](./sympy__sympy-15349/) | 1.4 | YES | 100% (1/1) | 3/3 | 3/3 | 33 | `run` x16, `run_tests` x4, `write_file` x4, `verify` x3, `coverage` x2, `mutation` x2 | close (4) | complete (5) | acceptable (3) | 2026-09-26 10:22 UTC |
+| [`sympy__sympy-16450`](./sympy__sympy-16450/) | 1.5 | YES | 100% (1/1) | 1/3 | 3/3 | 31 | `run` x9, `run_tests` x4, `verify` x4, `write_file` x4, `coverage` x3, `mutation` x3 | narrower (3) | main only (3) | good (4) | 2026-09-26 10:46 UTC |
+| [`sympy__sympy-16766`](./sympy__sympy-16766/) | 1.5 | YES | 100% (4/4) | 6/6 | 6/6 | 43 | `run` x28, `write_file` x5, `coverage` x2, `mutation` x2, `run_tests` x2, `verify` x2 | equivalent (5) | complete (5) | good (4) | 2026-09-26 10:26 UTC |
+| [`sympy__sympy-17318`](./sympy__sympy-17318/) | 1.5 | NO | — | — | — | 77 | `run` x27, `run_tests` x15, `write_file` x15, `verify` x7, `coverage` x2, `mutation` x1 | — | — | — | 2026-09-26 10:35 UTC |
+| [`sympy__sympy-18189`](./sympy__sympy-18189/) | 1.6 | YES | 100% (1/1) | 2/3 | 2/3 | 39 | `run` x17, `run_tests` x4, `write_file` x4, `coverage` x3, `mutation` x3, `verify` x3  (+1 edit reverted) | equivalent (5) | complete (5) | good (4) | 2026-09-26 10:50 UTC |
+| [`sympy__sympy-19637`](./sympy__sympy-19637/) | 1.7 | YES | 50% (1/2) | 0/2 | 1/2 | 39 | `run` x14, `write_file` x7, `verify` x6, `run_tests` x5, `coverage` x3, `mutation` x2 | tangential (2) | none (1) | acceptable (3) | 2026-09-26 10:49 UTC |
+| [`sympy__sympy-20590`](./sympy__sympy-20590/) | 1.7 | YES | 100% (1/1) | no mutants | no mutants | 41 | `run` x24, `write_file` x4, `run_tests` x3, `coverage` x2, `mutation` x2, `verify` x2 | narrower (3) | main only (3) | good (4) | 2026-09-26 10:46 UTC |
+| [`sympy__sympy-21596`](./sympy__sympy-21596/) | 1.9 | YES | 100% (11/11) | no mutants | no mutants | 67 | `run` x29, `write_file` x11, `run_tests` x10, `verify` x7, `coverage` x4, `mutation` x1 | narrower (3) | main only (3) | poor (2) | 2026-09-26 10:51 UTC |
+
+## Behaviours the judge says are not covered
+
+Read alongside the coverage column: these come from reading the issue and the fix, not from line execution, so the two disagree in useful ways.
+
+- **astropy__astropy-14369** (nearly complete (4))
+  - The leading-division /s branch returning s^-1.
+- **astropy__astropy-14539** (main only (3))
+  - Different values in Q-format VLA columns are detected and reported with the correct differing rows, values, totals, ratios, and report text.
+- **astropy__astropy-14598** (nearly complete (4))
+  - A long card value containing `''` followed by a space survives the round-trip unchanged.
+- **astropy__astropy-7606** (main only (3))
+  - The generated test does not assert that a regular Unit.__eq__(None) returns the exact value NotImplemented; assert result is not True is weaker.
+  - The generated test does not exercise the changed type(self) behaviour with an UnrecognizedUnit subclass.
+- **django__django-10914** (main only (3))
+  - The default FileSystemStorage exposes file_permissions_mode as 0o644.
+  - A MemoryUploadedFile upload is saved with 0o644 permissions.
+  - A TemporaryUploadedFile upload is saved with 0o644 permissions.
+- **django__django-11477** (main only (3))
+  - A present named optional group remains captured and usable during URL resolution.
+  - `translate_url()` rewrites the affected URL correctly when the optional segment is absent.
+  - `translate_url()` continues to rewrite the affected URL correctly when the optional segment is present.
+- **django__django-12308** (main only (3))
+  - A nonempty JSONField string value is displayed as a JSON string.
+  - An invalid JSON value that raises TypeError falls back to display_for_value.
+- **django__django-13023** (main only (3))
+  - Values causing decimal.Decimal() to raise ValueError produce ValidationError.
+- **django__django-13794** (main only (3))
+  - The add filter concatenates two lazy strings.
+  - Lazy proxies representing integer values can be added together.
+- **django__django-14559** (minor only (2))
+  - A nonempty bulk_update() returns the total number of rows matched across its updates.
+  - Duplicate objects in the same batch count the matched database row once.
+  - Duplicate objects in separate batches contribute to the returned count once per batch.
+- **django__django-14608** (main only (3))
+  - When formset validation or `clean()` raises `ValidationError`, the replacement non-form ErrorList carries the `nonform` CSS class.
+- **django__django-14792** (main only (3))
+  - An unnamed datetime.timezone fixed offset returns its offset name, "UTC+10:00".
+  - A named datetime.timezone fixed offset preserves its explicit name, "Etc/GMT-10".
+  - A named pytz timezone returns its timezone name, "Europe/Madrid".
+- **django__django-15252** (main only (3))
+  - The non-empty or not-yet-computed plan path still calls ensure_schema.
+- **django__django-16139** (main only (3))
+  - Resolution of the link from a UserAdmin change URL reached through a to_field.
+  - Resolution of the replacement link from the ordinary pk-based change URL.
+- **django__django-16560** (minor only (2))
+  - PostgreSQL ExclusionConstraint accepts and forwards a custom violation error code.
+  - CheckConstraint equality remains true when otherwise identical codes match.
+  - UniqueConstraint equality remains true when otherwise identical codes match.
+- **django__django-16667** (main only (3))
+  - Form and field validation report the overflow input as an invalid date with "Enter a valid date.".
+- **matplotlib__matplotlib-20859** (nearly complete (4))
+  - An unsupported parent still raises TypeError with an error message referring to FigureBase.
+- **matplotlib__matplotlib-24870** (main only (3))
+  - Boolean tricontour() automatic levels at 0.5.
+  - Boolean tricontourf() automatic levels at [0, 0.5, 1].
+  - Automatic detection for boolean lists and masked arrays in the quadrilateral paths.
+- **matplotlib__matplotlib-24970** (main only (3))
+  - The expected colormap output is preserved for uint8, int, float16, and float inputs.
+- **psf__requests-2931** (nearly complete (4))
+  - Raw string or bytes URL parameters are converted with to_native_string before query encoding so URL parameter handling is preserved.
+- **pydata__xarray-2905** (main only (3))
+  - Pandas Series, Index, and DataFrame inputs continue to be converted to their values data.
+- **pydata__xarray-6744** (main only (3))
+  - center=True manual iteration for the other tested sizes, including size 1, even size 2, and size 7
+  - center=False manual iteration preserves trailing-window results for sizes 1, 2, 3, and 7
+- **pylint-dev__pylint-4970** (none (1))
+  - With `min_lines` set to 0, duplicate-code checking is disabled: the checker returns without computing or displaying duplicate results.
+- **pylint-dev__pylint-7277** (nearly complete (4))
+  - Remove the first entry when it is `os.getcwd()`.
+- **scikit-learn__scikit-learn-14087** (nearly complete (4))
+  - Elasticnet fitting and preservation of selected l1-ratio values.
+- **sphinx-doc__sphinx-7462** (none (1))
+  - The Python-domain unparser renders an empty tuple annotation as opening and closing parentheses instead of popping from an empty result.
+  - The pycode AST unparser renders an empty tuple as the string "()".
+- **sphinx-doc__sphinx-7590** (main only (3))
+  - Hexadecimal floating-point UDLs are parsed to the end with the floating suffix separated from the UDL identifier.
+  - UDL ASTs receive the correct mangled IDs combining the literal and identifier.
+  - UDL identifiers are rendered and cross-referenced as `operator""<identifier>`.
+- **sympy__sympy-12489** (main only (3))
+  - The cycle, multiple-argument, integer, sequence, and nested-sequence constructor branches create instances of the requested subclass.
+  - Reconstructing or resizing an existing subclass preserves the requested subclass.
+  - Internal `_af_new` allocation uses the class on which it is invoked.
+- **sympy__sympy-14976** (main only (3))
+  - nsolve retains the requested precision when solving an equation containing a rational.
+- **sympy__sympy-16450** (main only (3))
+  - preservation of other supplied assumptions and the complete derived assumption set
+- **sympy__sympy-19637** (none (1))
+  - For a no-space input, `kernS` returns the correctly parsed expression instead of merely producing a non-None value.
+- **sympy__sympy-20590** (main only (3))
+  - The instance rejects assignment of an undeclared attribute with `AttributeError`.
+- **sympy__sympy-21596** (main only (3))
+  - Combine solutions from multiple factors of an imaginary part over Integers, yielding only the valid integer root FiniteSet(1).
+  - Apply the same factorized imaginary-part filtering over Naturals0, yielding FiniteSet(1).
+  - Represent an unsolved nonlinear imaginary-part condition with a ConditionSet inside the resulting ImageSet.
