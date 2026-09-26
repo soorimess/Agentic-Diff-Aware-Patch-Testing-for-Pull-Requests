@@ -263,6 +263,70 @@ which is uncapped by design; no refusal message named a missing tool; no YES rea
 coverage, mutation and judge were recorded on every YES but one, whose developer test does
 not pass on the fixed code.
 
+## Found reading all 700 experiments-v2 runs
+
+Every trajectory of the ten arms was read (five readers, two arms each, flagged cases
+checked by hand). No crash, harness traceback, killed process or hung step in any run;
+every run had its arm's tools, the model, temperature 0.3, a sealed network and
+`coverage` installed; the refusal limits held everywhere; the guard never touched a test.
+
+### Fixed: the django output parser dropped a test whose status came on a later line
+
+`runners.parse_output` read a django result only as `name ... status` on one line. When a
+test printed something in between -- argparse usage, a coroutine warning -- the test was
+dropped. Three verdicts were wrong, and were re-scored offline from the saved logs by the
+harness's own `verify._decide` (`experiments-v2/rescore.py`; the runs keep their old
+verdict in `rescored_from`):
+
+| run | recorded | re-scored |
+|---|---|---|
+| −coverage / django-16454 | YES | NO (a test still errors after the fix) |
+| −cov −mut −duty / django-16454 | YES | NO (same) |
+| −repo-facts / django-16136 | NO | YES (coverage, mutation, judge not measured: rescored offline) |
+
+Checked over all 1,292 django logs in v1 and v2: every status-on-a-later-line case now
+parses. No v1 verdict was affected.
+
+### Pending, deliberately not fixed yet (decided 2026-09-26)
+
+These reached the agent during the run, so fixing them means rerunning; each touches a
+handful of runs spread across arms, and the v2 results are reported with them in place.
+
+- The same parser shape inside `verify` / `run_tests` misled the agent in a few django
+  runs; sympy tests that print showed "no tests ran" to the agent (verdicts unaffected --
+  all 220 final sympy logs parse).
+- `reads_source` fires on a test that *writes* a fixture with `open(path, 'w')`
+  (no-second-chance sphinx-9591, no-require-tools sphinx-8459).
+- `loop_gap.wrote_after` counts any `write_file`, so a scratch file after a passing
+  `verify` produced "you edited the test since" (no-mutation-tool django-14915,
+  no-coverage+mutation matplotlib-20859; both YES).
+- `loop_gap` reads the last `verify` whatever file it ran on: a verify on another file
+  closed the loop in 6 runs (4 NO).
+- A test at the repository root that django cannot import is scored as a failing test
+  (`unittest.loader._FailedTest`), not as "collects nothing" (−repo-facts django-14534,
+  13449, 16454, 16560).
+- A corrupted library file (tree state unknown) under −guard kept being refused with
+  "call `verify`", which cannot run there (sklearn-10297).
+- `verify` says "you cannot finish having read that" about missed changed lines in arms
+  without the coverage tool, where nothing enforces it (`sandbox_tools._reach` keys on
+  `require_tools` only).
+- A test whose status is SKIPPED at base got no refusal (no-cov+mut+require django-16560).
+- Django tests sharing a docstring collapse into one node, and subTest lines can merge
+  (counts wrong, verdicts right: django-14765, 16667, 13023).
+- Cosmetic: the mutation tool's own cleanup is logged as "patch left applied by the agent";
+  "no mutations" is reported when the single mutant went to the agent's half; `guard` is
+  counted among the agent's tools in refusal recaps; a moved test's old path is listed as
+  a stray write; `verify` calls on a tree not at base are missing from `tool_log`; the
+  "still failing after the fix" reason is shown for tests that pass before and fail after;
+  the no-verify-tool RUNS.md labels `no_test` as from require-tools.
+
+### A design point the coverage arms should be read with
+
+`verify` measures changed-line coverage itself and says whether every changed line ran
+(`_reach`). Arms without the coverage tool get that yes/no as often as base (−coverage:
+42 outputs in 18 runs; base 45 in 16); what they lose is *which* lines and their code. So
+−coverage measures "no line-level detail", not "no coverage feedback".
+
 ## Changed after the fact
 
 - **Sampling temperature 0.3 is the default** since 2026-09-26. One run at 0.3 scored

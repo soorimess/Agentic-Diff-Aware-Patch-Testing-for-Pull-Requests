@@ -189,6 +189,12 @@ PYTEST_VERBOSE = re.compile(
 DJANGO_LINE = re.compile(r"^(.*?) \.\.\. (ok|FAIL|ERROR|skipped.*|expected failure"
                          r"|unexpected success)\s*$")
 SYMPY_LINE = re.compile(r"^(test_\w+)\s+(ok|F|E|fail|Fail|exception|skipped|w|s|X|f)\b")
+# A django verbose line whose status did not follow on the same line: the test printed
+# something (argparse usage, a warning traceback) between `name ...` and `ok`. The status
+# then arrives alone on a later line and belongs to the name still pending.
+DJANGO_OPEN = re.compile(r"^(.*?) \.\.\. ")
+DJANGO_STATUS_ALONE = re.compile(r"^(ok|FAIL|ERROR|skipped.*|expected failure"
+                                 r"|unexpected success)\s*$")
 
 _NORMAL = {"ok": "PASSED", "PASSED": "PASSED", "XPASS": "PASSED",
            "expected failure": "PASSED", "F": "FAILED", "FAIL": "FAILED",
@@ -218,6 +224,11 @@ def parse_output(output: str) -> dict[str, str]:
     FAIL_TO_PASS/PASS_TO_PASS contain -- docstrings included.
     """
     out: dict[str, str] = {}
+    # experiments-v2: django-16454 printed argparse usage between `name ...` and `ERROR`,
+    # the test was dropped, and a test still failing after the fix scored YES in two
+    # arms; django-16136's coroutine warning did the same to a passing test and scored a
+    # real YES as NO.
+    pending: str | None = None
     for raw in output.splitlines():
         # Stripped even with --color=no: some runners colour regardless of the flag,
         # and the escape sequences sit *inside* the node id, not just around it.
@@ -239,6 +250,19 @@ def parse_output(output: str) -> dict[str, str]:
         if m:
             name, status = m.group(1).strip(), m.group(2)
             out[name] = _NORMAL.get(status, "SKIPPED" if "skip" in status else status)
+            pending = None
+            continue
+        if pending is not None:
+            m = DJANGO_STATUS_ALONE.match(line)
+            if m:
+                status = m.group(1)
+                out[pending] = _NORMAL.get(status, "SKIPPED" if "skip" in status
+                                           else status)
+                pending = None
+                continue
+        m = DJANGO_OPEN.match(line)
+        if m and not line.startswith(("Ran ", "FAILED", "OK")):
+            pending = m.group(1).strip()
             continue
         m = SYMPY_LINE.match(line)
         if m:
