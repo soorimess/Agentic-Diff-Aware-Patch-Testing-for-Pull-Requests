@@ -324,14 +324,18 @@ def verify_settled(tool_log: list) -> bool:
     return bool(e.get("flipped")) and not still and not wrote
 
 
-def verify_not_f2p(tool_log: list) -> bool:
-    """Whether the agent's own last `verify` fell short of fail-to-pass, or it never called
-    one. Edits since do not matter: this is what the agent was last told, not the file."""
+def verify_unscoreable(tool_log: list) -> bool:
+    """Whether the agent's own last `verify` showed a test that cannot be scored: every test
+    passing before the fix, or nothing collected. What `passes_at_base` and
+    `collects_nothing` report under --second-chance, read here from what the agent was
+    itself shown -- so a run without that flag is held to the same limit, no more and no
+    less. A test that fails on both sides is not this: it is broken, not aimed wrong, and
+    those rounds do convert (four runs recovered after a third such refusal)."""
     found = [e for e in tool_log if e.get("tool") == "verify"]
     if not found:
-        return True
-    still = [n for n, st in (found[-1].get("after") or {}).items() if st in BEHAVIOURAL]
-    return not found[-1].get("flipped") or bool(still)
+        return False
+    before = found[-1].get("before") or {}
+    return not before or all(st not in BEHAVIOURAL for st in before.values())
 
 
 def loop_gap(tool_log: list, instruments: tuple[str, ...],

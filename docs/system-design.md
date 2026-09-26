@@ -354,7 +354,7 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1110 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1112 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 160 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 286 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 424 | Of the lines this pull request changed, how many did the test execute? |
@@ -381,7 +381,7 @@ That makes every shared resource a hazard, and two were real:
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 362 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 661 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 665 | The F2P decision. One implementation, used by every arm. |
 | `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
 <!-- /generated:modules -->
 
@@ -443,8 +443,11 @@ where the model's pattern under refusal was *write → verify → finish* every 
   or `collects_nothing`. Seven of eight runs that reached it
   stayed for all five rounds; the one that recovered left after the first. Without
   `--second-chance` the harness cannot say "passes at base", and the same state reaches
-  the agent as `loop_open` -- its own last `verify` said not fail-to-pass. Those rounds
-  count toward the same limit (`V.verify_not_f2p`). Before this, the arm that removes the
+  the agent as `loop_open`. Those rounds count toward the same limit when the agent's own
+  last `verify` showed the same state -- every test passing before the fix, or nothing
+  collected (`V.verify_unscoreable`). A test failing on both sides is capped in neither
+  configuration: replayed over every recorded run, capping it would have cut four
+  conversions. Before this, the arm that removes the
   second chance was refused five times where the arm that has it stopped at two: 20
   refusals against 4 on `eval5-arms`, none converting after the second. `collects_nothing`
   joined the limit after an `eval5-arms` run spent five rounds on a file that never

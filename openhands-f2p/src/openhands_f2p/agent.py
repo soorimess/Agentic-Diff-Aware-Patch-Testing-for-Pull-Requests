@@ -339,14 +339,16 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                             "test already fail-to-pass; its one reminder about the "
                             "remaining checks was given; not refusing again")
                 break
-            # Rounds spent on a test that is still not fail-to-pass. With --second-chance
-            # the harness says so itself (`passes_at_base`). Without it the same state
-            # reaches the agent only as `loop_open` -- "your last verify said not
-            # fail-to-pass" -- and was refused five times where the flag's arm stops at
-            # two: the arm that removes the second chance got more refusals than the one
-            # that has it (eval5-arms, 20 against 4). The agent's own verdict stands in
-            # for the flag's, so removing the flag removes help rather than adding rounds.
-            not_f2p = V.verify_not_f2p(tool_log)
+            # Rounds spent on a test that cannot be scored. With --second-chance the
+            # harness says so itself (`passes_at_base`, `collects_nothing`). Without it
+            # the same state reaches the agent only as `loop_open`, and was refused five
+            # times where the flag's arm stops at two: the arm that removes the second
+            # chance got more refusals than the one that has it (eval5-arms, 20 against
+            # 4). The agent's own last `verify` -- all passing before the fix, or nothing
+            # collected -- stands in for the flag's check, so removing the flag removes
+            # help rather than adding rounds. A test failing on both sides is capped in
+            # neither configuration.
+            not_f2p = V.verify_unscoreable(tool_log)
 
             def stuck(why: str, short: bool) -> bool:
                 return ("passes_at_base" in why or "collects_nothing" in why or (
@@ -359,7 +361,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 streak += 1
             if stuck(reason, not_f2p) and streak >= MAX_PASSES_AT_BASE_ROUNDS:
                 flow.record(flow.AGENT, "second chance",
-                            f"{'not scoreable (passes at base or collects nothing)' if second_chance else 'not fail-to-pass by its own verify'}"
+                            f"{'not scoreable (passes at base or collects nothing)' if second_chance else 'not scoreable by its own verify (passes before the fix or collects nothing)'}"
                             f" after {streak} refusals running; not refusing again")
                 break
             # Which of the two mistakes a passing-at-base test is making. Only with the

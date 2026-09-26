@@ -205,6 +205,26 @@ Batch 2 (the three fixed arms rerun, plus −repo-facts):
   `inspect.getsource(SessionBase.encode)`); the agent rewrote it as a behaviour test and
   ended YES with full coverage.
 
+Batch 3 (−repo-facts rerun, −coverage, −mutation, −cov −mut):
+
+- **The −second-chance limit was wider than base's.** It counted any `loop_open` round whose
+  own verify said "not fail-to-pass", which also takes in a test failing on both sides --
+  a state base never caps, and one that converts (four recorded runs recovered after a
+  third refusal). Narrowed to exactly what base caps: the agent's own last `verify` shows
+  everything passing before the fix, or nothing collected.
+- Checked and left alone: three −cov −mut runs never called `verify` although told to
+  twice (v1's same arm: 64 of 70 did, so this is variance on five); the guard reverted two
+  `sed` edits to library source and said so; a pytest test that drives pytest through a
+  subprocess flipped with 0 changed lines covered, got the soft "if coverage cannot follow
+  the path, say so" refusal once, and kept its YES.
+
+Batch 4 (−verify, −cov −mut −duty, and base and −second-chance rerun on the final code)
+found nothing to change: every arm registers exactly its tools, no refusal names a tool
+the arm lacks, and the two refusal paths stop at the same point. Final five-instance
+tally, one run each: base 2, −second-chance 2, −guard 2, −require-tools 2, −repo-facts 2,
+−coverage 1, −mutation 3, −cov −mut 2, −verify 0, −cov −mut −duty 2 -- five instances
+say nothing about the arms' effects; they were run to check that each removal is clean.
+
 Both prompt leaks were also in the ten-arm series, so those arms remain comparable with each
 other; the −guard and −require-tools arms there measured the enforcement, not the stated
 rule. Base's prompt is byte-identical after the change. `prompt.py` gained inline blocks
