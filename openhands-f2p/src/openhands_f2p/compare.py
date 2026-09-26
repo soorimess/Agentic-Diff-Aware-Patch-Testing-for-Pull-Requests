@@ -265,13 +265,23 @@ def compare(instance: dict[str, Any], generated: str,
         patch=instance["patch"][:6000],
         developer_test=added_lines(instance["test_patch"])[:8000],
         generated=generated[:12000])
-    resp = llm.completion([
-        Message(role="system", content=[TextContent(text=SYSTEM)]),
-        Message(role="user", content=[TextContent(text=user)]),
-    ])
-    text = "".join(c.text for c in resp.message.content
-                   if getattr(c, "text", None))
-    out = _parse(text)
+    # Asked at most twice, with the identical prompt, and only when the answer cannot be
+    # read. One judgement in about fifty came back unparseable in experiments-v2's first
+    # pass (django-14792), with nothing on disk to say why. Same model, same settings:
+    # a re-ask, not a fallback. An answer that still cannot be read is kept whole in
+    # `raw`, so the next one can be diagnosed.
+    for attempt in (1, 2):
+        resp = llm.completion([
+            Message(role="system", content=[TextContent(text=SYSTEM)]),
+            Message(role="user", content=[TextContent(text=user)]),
+        ])
+        text = "".join(c.text for c in resp.message.content
+                       if getattr(c, "text", None))
+        out = _parse(text)
+        if out.get("verdict") != "unparsed":
+            break
+        out["raw"] = text
+    out["attempts"] = attempt
     out["model"] = model
     return out
 

@@ -29,6 +29,7 @@ import argparse
 from dataclasses import replace
 import json
 import os
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -545,6 +546,17 @@ def mutate_saved(pr: dict, n: int, root: Path | None = None) -> dict:
     return {"id": pr["id"], "mutation": score.as_dict()}
 
 
+_OUTSIDE = re.compile(
+    r"\b(402|429|500|502|503|504)\b|APIConnectionError|RateLimit|ServiceUnavailable|"
+    r"InternalServerError|Timeout|timed out|Connection (?:reset|refused|aborted)|"
+    r"Budget has been exceeded|requires more credits", re.I)
+
+
+def _outside_failure(error: str) -> bool:
+    """An agent error caused by the gateway or the network rather than by the run itself."""
+    return bool(_OUTSIDE.search(error or ""))
+
+
 def do_pr(pr: dict, max_iterations: int, dry_run: bool,
           features: FeatureSet | None = None, no_compare: bool = False,
           out_root: Path | None = None, label: str = "",
@@ -617,9 +629,17 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
         # Resolved before `audit`, which flags every write that is not the test file:
         # left unresolved, the agent's own chosen path would be reported as a stray
         # write on every run of this configuration.
+        #
+        # In every configuration, not only when the agent chose the directory: the
+        # refusal loop and the agent's own `verify` already follow the file wherever it
+        # was written, and scoring a different path made them disagree. django-14915
+        # (experiments-v2) moved its test into tests/forms_tests/tests/, verified it
+        # there as fail-to-pass, had its stop accepted on that file -- and was scored
+        # "wrote no test" at the path it had been given. `test_path_default` keeps the
+        # path the harness named.
         default_path = test_file
-        if "repo-facts" not in features:
-            test_file = V.written_test_path(box, run["tool_log"], default_path)
+        test_file = V.written_test_path(box, run["tool_log"], default_path)
+        if "repo-facts" not in features or test_file != default_path:
             flow.record(flow.AGENT, "test path chosen", test_file)
             field("chose", f"{test_file}"
                            + ("" if test_file == default_path
@@ -670,6 +690,20 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
             # exactly that at 100 actions, having written once and verified once, where
             # the runs that pass it write three or four times. The verdict stays what the
             # test earned; the reason says the test may not be finished.
+            # Cut off by something outside the agent -- the gateway ran out of credit,
+            # a rate limit, a 5xx, a dropped connection. The test on disk is whatever the
+            # agent had when the call failed, and the stop was never checked, so scoring
+            # it records the outage as a finding about the instance. experiments-v2's
+            # first pass lost 35 runs this way to an exhausted OpenRouter key (22 scored
+            # NO, 13 YES) before this line existed; v1 had none. BROKEN is what
+            # --retry-broken picks up. A context window overflow is not in this list: it
+            # is the run's own length, like the action cap, and keeps its verdict.
+            if run.get("error") and _outside_failure(run["error"]):
+                verdict = replace(
+                    verdict, f2p="BROKEN",
+                    why=f"the agent was cut off after {run['actions']} actions by a failure "
+                        f"outside it ({run['error'][:160]}); the test on disk scored "
+                        f"{verdict.f2p}, but it is not the agent's finished answer")
             if run.get("capped") and verdict.f2p != "YES":
                 verdict = replace(
                     verdict,

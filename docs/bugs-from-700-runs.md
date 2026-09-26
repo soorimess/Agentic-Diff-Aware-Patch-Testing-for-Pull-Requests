@@ -231,6 +231,38 @@ rule. Base's prompt is byte-identical after the change. `prompt.py` gained inlin
 (`...sentence.{?guard} Next sentence.{/guard}`), which keep or drop one sentence without
 disturbing the paragraph around it.
 
+## Found in experiments-v2's first pass (base and −second-chance, 140 runs)
+
+The one fix round the v2 plan allows, after reading every trajectory of the first two arms.
+The OpenRouter key ran out of credit about two-thirds of the way through, which is what
+exposed the first two.
+
+- **A run cut off by the gateway was scored as a finding.** 35 runs lost the model
+  mid-conversation to `402 ... requires more credits` and were judged on whatever test was
+  on disk -- 22 NO, 13 YES -- with the stop never checked. v1 had no agent errors at all,
+  so this never showed. Fixed: an agent error from outside the run (402, 429, 5xx,
+  connection, timeout, gateway budget) makes the verdict BROKEN, with what the partial
+  test would have scored in the reason; `--retry-broken` reruns it. A context-window
+  overflow is the run's own length and keeps its verdict, like the action cap.
+- **The job pool did not recognise exhausted credit.** The gateway's own "Budget has been
+  exceeded" stopped a run; OpenRouter's "requires more credits" did not, so every remaining
+  job started and died. Both now stop it.
+- **The refusal loop and the verdict scored different files.** With repo-facts on, the
+  loop, like the agent's own `verify`, follows the test wherever it was written; the
+  verdict read only the path the agent was given. django-14915 moved its test into
+  `tests/forms_tests/tests/`, verified it fail-to-pass there, had its stop accepted on that
+  file, and was scored "wrote no test". Fixed: the verdict scores the file the agent ended
+  with, in every configuration (`test_path_default` keeps the named one). Two runs in about
+  nine hundred were affected, one of them in v1 (−cov −mut django-15252).
+- **One judgement in about fifty could not be read** -- django-14792: the judge left the
+  `readability` object unclosed. Fixed: asked once more with the identical prompt, and an
+  answer that still cannot be read is kept whole in `raw`.
+
+Checked and correct: every run that ran five refusals was a test failing on both sides,
+which is uncapped by design; no refusal message named a missing tool; no YES read source;
+coverage, mutation and judge were recorded on every YES but one, whose developer test does
+not pass on the fixed code.
+
 ## Changed after the fact
 
 - **Sampling temperature 0.3 is the default** since 2026-09-26. One run at 0.3 scored

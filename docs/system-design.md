@@ -354,9 +354,9 @@ That makes every shared resource a hazard, and two were real:
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1112 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1146 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 160 | What the agent actually did, checked rather than assumed. |
-| `compare.py` | 286 | Does the generated test check the same thing the developer's test checks? |
+| `compare.py` | 296 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 424 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
@@ -370,7 +370,7 @@ That makes every shared resource a hazard, and two were real:
 | `models.py` | 338 | Which model answers, and what it needs, read from `models.json`. |
 | `mutants.py` | 512 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
-| `parallel.py` | 250 | Running several pull requests at once, as separate processes. |
+| `parallel.py` | 253 | Running several pull requests at once, as separate processes. |
 | `prompt.py` | 251 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 380 | Three test-runner conventions, and how to read what they print. |
