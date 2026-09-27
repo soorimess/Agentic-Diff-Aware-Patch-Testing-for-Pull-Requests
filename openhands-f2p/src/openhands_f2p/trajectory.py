@@ -112,6 +112,8 @@ def _describe(tool: str, entry: dict) -> str:
              f"conftest:          {', '.join(info.get('conftest_files') or []) or 'none'}",
              f"style:             {info.get('style')}"])
     if tool == "verify":
+        if entry.get("error"):
+            return f"could not run: {entry['error']}"
         flipped = entry.get("flipped") or []
         head = ("fail-to-pass: " + ", ".join(n.split("::")[-1] for n in flipped)
                 if flipped else "NOT fail-to-pass")

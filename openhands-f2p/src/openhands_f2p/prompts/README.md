@@ -100,7 +100,7 @@ the same conversation, and only in the configurations that ask for one.
 
 | file | job |
 |---|---|
-| `second-chance.md` | refuses the agent's first stop, when the run ended with nothing a judge could score. Sent by `--second-chance`. Says only what the agent could have established at base -- never that the test failed against the fix, which exists only in the head run |
+| `second-chance.md` | refuses a stop that leaves a gap -- sent by `--second-chance` (no test, collects nothing, passes or is skipped at base) and by `require-tools` (loop open). Says only what the agent could have established at base -- never that the test failed against the fix, which exists only in the head run. A `--second-chance` reason also carries the test file as it is on disk and what running it at base printed |
 
 ## A note on what belongs here
 

@@ -289,6 +289,29 @@ Version spread matters as much as the repository. pytest 3.3 prints no short-sum
 section at all, so `-v` is passed as well and the per-test line is parsed; `--no-header`
 arrived in pytest 6.0 and is a usage error in the 4.5 that pytest's own repository runs.
 
+**Reading what django and sympy print** (`runners.parse_output`, reworked after
+experiments-v2; every saved log of both series was replayed through the old and new
+parser, 2,305 runs, and no YES verdict changed):
+
+- *A status on a later line.* A test that prints between `name ...` and its status --
+  argparse usage, a warning -- gets the status when it arrives alone. django since the v2
+  audit; sympy now too (`test_x <printed text>` ... `ok [OK]`), where 15 of the agent's
+  `run_tests` calls in v2 had read "no tests ran".
+- *The id, not the docstring.* django 3+ prints `test_x (mod.Class)` on one line and the
+  docstring with the status on the next. Keyed on the docstring, tests sharing one
+  collapsed (django-14765: three tests, two counted). The id is the key now; the docstring
+  is kept as an alias, so a FAIL_TO_PASS recorded as a docstring still resolves in
+  `outcome_of` (several tests behind one docstring answer with the worst of them).
+- *subTests.* A test whose subTests fail prints `name ... ` and no status, and the next
+  test's name runs on after it. Its status is taken from its `FAIL:` / `ERROR:` traceback
+  header (django-13023, 14792).
+- *A module that does not import is not a test.* django reports it as one erroring test,
+  `unittest.loader._FailedTest`; it is dropped, so the file reads as collecting nothing --
+  the same as pytest's collection error. Replayed, 3 v2 runs and 11 v1 runs (plus their retries)
+  move from NO to BROKEN ("nothing collected"); all are test files django could not
+  import, 10 of the 14 under −repo-facts, where the agent put the file at the repository
+  root. The published v2 numbers were not re-scored.
+
 ## Which model answers
 
 Everything a model needs is data in `models.json`, the way `features.py` holds what the
@@ -349,39 +372,60 @@ That makes every shared resource a hazard, and two were real:
 - Two 3 GB image pulls sharing a slow link finished neither. Pulls are serialised behind
   a lock file, and one attempt gets the whole link.
 
+### On the laptop (since 2026-09-27)
+
+There is no server any more. Runs are on the laptop at `--parallel 20`, over the 36
+instances whose images are cached locally: 26 in `image-cache/` (the development set) and
+10 in `image-cache-evaluation/` (the evaluation set). `F2P_IMAGE_CACHE` takes several
+directories separated like `PATH`, relative to the project root; archives are looked up in
+each and new ones go to the first. The combined list is `evaluation/local-36-prs.json`
+(each entry marks its `set`):
+
+```bash
+cd openhands-f2p
+F2P_PRS_FILE=../evaluation/local-36-prs.json \
+F2P_IMAGE_CACHE=image-cache:image-cache-evaluation \
+  uv run python ../experiments-v2/run_arms.py --parallel 20 --dry-run +second-chance
+```
+
+Leave archiving on (no `F2P_NO_ARCHIVE`): the laptop link is what the cache exists for.
+Thirty-six paired instances detect less than seventy -- a gap of three or four runs between
+two arms is inside the noise on seventy already (see the v2 comparison), so a single arm
+pair on 36 should be read as direction, not effect.
+
 ## Modules
 
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1146 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
-| `checks.py` | 160 | What the agent actually did, checked rather than assumed. |
+| `agent.py` | 1164 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `checks.py` | 167 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 296 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 424 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
 | `features.py` | 255 | What the agent is given, as one registry that everything else reads. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
-| `image_cache.py` | 278 | Instance images kept on the host disk, so each one is pulled from the registry once. |
+| `image_cache.py` | 292 | Instance images kept on the host disk, so each one is pulled from the registry once. |
 | `images.py` | 404 | Prepared SWE-bench images, and the disk they compete for. |
 | `layout.py` | 29 | Where the project is on disk, and the environment it runs with. |
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 187 | One place the model connection is configured, shared by every caller. |
 | `models.py` | 338 | Which model answers, and what it needs, read from `models.json`. |
-| `mutants.py` | 512 | Does the test notice when the fix is subtly wrong? |
+| `mutants.py` | 522 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
 | `parallel.py` | 253 | Running several pull requests at once, as separate processes. |
 | `prompt.py` | 251 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
-| `runners.py` | 404 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 498 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
+| `runners.py` | 512 | Three test-runner conventions, and how to read what they print. |
+| `runs.py` | 513 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 355 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 866 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sandbox_tools.py` | 893 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
-| `trajectory.py` | 362 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 665 | The F2P decision. One implementation, used by every arm. |
+| `trajectory.py` | 364 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
+| `verify.py` | 772 | The F2P decision. One implementation, used by every arm. |
 | `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
 <!-- /generated:modules -->
 
@@ -457,6 +501,30 @@ where the model's pattern under refusal was *write → verify → finish* every 
   `mutation` cannot change its verdict, and two tests were refused five times each while
   already passing.
 
+Four more, from reading all 700 experiments-v2 runs (2026-09-27):
+
+- **Only answers about the scored file count.** `loop_gap`, `verify_settled` and
+  `verify_unscoreable` read the last `verify` / `coverage` / `mutation` *on the scored
+  test* (`V.same_file` accepts `/testbed/…`, `./…`, `path::test`, a path without `.py` and
+  a dotted label), and "you edited the test since" counts writes to that file only. A
+  verify on a side file had closed the loop in six runs, four of them NO, and a scratch
+  file written after a passing verify had reopened it in two. When every verify went to
+  another file the refusal says so and names both files. The `verify` tool itself adds a
+  note when its target is not the file carrying the scored name.
+- **A test skipped at base is refused like one passing there** (`skipped_at_base`, under
+  `--second-chance`), and counts toward the two-rounds-running limit (`V.UNSCOREABLE`).
+  django-16560 had every test skipped and nothing refused it.
+- **A tree off base stops the loop.** Only reachable under `--no-guard`: a library file the
+  agent changed makes `verify` answer "unexpected state" to every call, and the loop kept
+  asking for one. Telling the agent to put the file back would be the guard the arm
+  removes, so the loop ends and the verdict reports the tree.
+- **The second chance hands back the file and the run.** A `--second-chance` refusal
+  (`no_test` aside) now carries the test file as it is on disk and what running it at
+  base printed, both clipped. The refused v2 runs rewrote a median of five times and
+  converted 1 in 20, working from a file and a run far up the context. Both are base-side
+  facts the agent could fetch itself, so the line `shortfall` keeps is not crossed; the
+  arm without the flag does not get them.
+
 Replayed over that run's recorded refusals, the last two rules drop 25 of 55 rounds without
 losing any of the three conversions. (One of those three, django-13406, later turned out to
 be a source-text test -- see below.)
@@ -483,6 +551,15 @@ sets `name`.
 headline lists the flipping ones and says to keep them, and the refusal says the same; "the
 test is wrong" alone sent one run into deleting its only flipping test. A refusal after an
 edit no longer claims the test "has not changed since".
+
+**Without `coverage`, `verify` says nothing about coverage.** Its "runs every changed line"
+/ "some lines never run" sentence used to go out in every arm, so −coverage got that
+yes/no as often as base (42 times in 18 runs against 45 in 16) and lost only *which*
+lines; the arm measured "no line detail", not "no coverage feedback". The sentence, and the
+"you cannot finish having read that" that went with it under `require-tools` -- enforced by
+nothing in an arm without `coverage` -- now go out only when `coverage` is registered.
+A skipped-at-base file gets its own headline, and a call that cannot run (tree off base) is
+logged in `tool_log` like any other.
 
 ### `mutation`
 

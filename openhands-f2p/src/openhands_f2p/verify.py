@@ -40,6 +40,10 @@ from openhands_f2p.swebench_env import REPO_DIR, Sandbox
 # collection error means the file never ran at all and shows up as no outcomes.
 BEHAVIOURAL = {"FAILED", "ERROR"}
 
+# `shortfall` reasons for a test that cannot be scored whatever the head run says: it has
+# nothing failing at base. The refusal loop caps these at two rounds running.
+UNSCOREABLE = ("passes_at_base", "collects_nothing", "skipped_at_base")
+
 
 @dataclass
 class Verdict:
@@ -177,16 +181,50 @@ def shortfall(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str, st
     flow.record(flow.VERIFY, "second-chance probe",
                 f"{rel}: " + (", ".join(sorted(set(outcomes.values()))) or "nothing collected"))
     if not outcomes:
-        return ("collects_nothing",
-                f"`{rel}` exists but running it collects no tests. Either the file has "
-                f"no test function this project's runner recognises, or it fails to "
-                f"import. Run it yourself and read the error.")
-    if all(st == "PASSED" for st in outcomes.values()):
-        return ("passes_at_base",
-                f"Every test in `{rel}` passes on this code. The bug is still present "
-                f"here, so a test that already passes is not testing the change -- "
-                f"whatever it checks was true before the fix as well.")
-    return None
+        found = ("collects_nothing",
+                 f"`{rel}` exists but running it collects no tests. Either the file has "
+                 f"no test function this project's runner recognises, or it fails to "
+                 f"import. Read the error in the run below.")
+    elif any(st in BEHAVIOURAL for st in outcomes.values()):
+        return None
+    elif all(st == "SKIPPED" for st in outcomes.values()):
+        # django-16560 (no-cov+mut+require): every test skipped at base, and nothing
+        # refused the stop -- the check above only knew "all PASSED".
+        found = ("skipped_at_base",
+                 f"Every test in `{rel}` is skipped on this code. A skipped test neither "
+                 f"fails nor passes, so it cannot show the bug. Find what skips it in the "
+                 f"run below -- a skip decorator, a feature this database backend lacks, "
+                 f"an optional package that is not installed -- and write the test so it "
+                 f"runs here.")
+    else:
+        found = ("passes_at_base",
+                 f"Every test in `{rel}` passes on this code. The bug is still present "
+                 f"here, so a test that already passes is not testing the change -- "
+                 f"whatever it checks was true before the fix as well.")
+    return found[0], found[1] + _evidence(box, rel, r.output)
+
+
+# What a refusal under --second-chance hands back. The refused runs rewrote their test a
+# median of five times after the refusal and converted 1 in 20 (experiments-v2): they
+# were told what was wrong and asked to recall a file and a run from far up a long
+# context. Both are base-side facts the agent could fetch itself with one `cat` and one
+# `run_tests`, so giving them does not cross the line `shortfall` keeps; it saves the
+# agent from working on its memory of the file instead of the file.
+EVIDENCE_TEST_CHARS = 3000
+EVIDENCE_RUN_CHARS = 2000
+
+
+def _evidence(box: Sandbox, rel: str, run_output: str) -> str:
+    text = box.read(rel) or ""
+    if len(text) > EVIDENCE_TEST_CHARS:
+        text = text[:EVIDENCE_TEST_CHARS] + f"\n# ... [{len(text) - EVIDENCE_TEST_CHARS} more characters]"
+    out = run_output.strip()
+    if len(out) > EVIDENCE_RUN_CHARS:
+        half = EVIDENCE_RUN_CHARS // 2
+        out = out[:half] + "\n... [clipped] ...\n" + out[-half:]
+    return (f"\n\nThe file as it is on disk now:\n\n```python\n{text.rstrip()}\n```"
+            f"\n\nRunning it on this code (the code before the fix) printed:\n\n"
+            f"```\n{out}\n```")
 
 
 def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
@@ -253,8 +291,13 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
 # dotted or class-named target counts, a bare local name does not.
 SOURCE_READING = re.compile(
     r"\bgetsource(?:lines|file)?\s*\(\s*(?:[A-Za-z_]\w*\.[\w.]+|[A-Z]\w*)\s*\)"
-    r"|\bopen\s*\([^)\n]*(?:__file__|\.py['\"])"
+    r"|\bopen\s*\([^\n]*(?:__file__|\.py['\"])"
     r"|(?:__file__|\.py['\"])[^\n]*\.read_(?:text|bytes)\s*\(")
+# `open(conf_py, 'w')` writes a fixture -- sphinx tests build a `conf.py` for the project
+# under test -- and reads nothing. Matched as source reading in no-second-chance
+# sphinx-9591 and no-require-tools sphinx-8459. A write, append or create mode anywhere
+# in the call exempts the line.
+WRITE_MODE = re.compile(r"""\bopen\s*\(.*?,\s*(?:mode\s*=\s*)?['"][rb+]*[wax]""")
 
 
 def reads_source(text: str) -> str | None:
@@ -262,7 +305,7 @@ def reads_source(text: str) -> str | None:
     for line in (text or "").splitlines():
         if line.lstrip().startswith("#"):
             continue
-        if SOURCE_READING.search(line):
+        if SOURCE_READING.search(line) and not WRITE_MODE.search(line):
             return line.strip()[:120]
     return None
 
@@ -313,28 +356,68 @@ def no_reach_gap(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str,
             f"say so in one sentence and finish.")
 
 
-def verify_settled(tool_log: list) -> bool:
+def same_file(named: str, rel: str) -> bool:
+    """Whether a path or target the agent gave names the test file `rel`.
+
+    Tolerates the forms a target arrives in: `/testbed/...`, `./...`, a pytest node id
+    (`path::test`), a dotted django label (`auth_tests.test_x`). Anything else is another
+    file."""
+    t = _relative((named or "").split("::")[0])
+    if not t or not rel:
+        return False
+    if not t.endswith(".py"):
+        # `tests/test_x` (no-coverage-tool django-14725 verified it that way) or a
+        # dotted label, `auth_tests.test_x`.
+        t = (t if "/" in t else t.replace(".", "/")) + ".py"
+    return t == rel or (Path(t).name == Path(rel).name
+                        and (rel.endswith("/" + t) or t.endswith("/" + rel)))
+
+
+def _verifies_of(tool_log: list, rel: str | None) -> list[tuple[int, dict]]:
+    """The `verify` calls that ran, on `rel` when it is given.
+
+    On `rel` because a verify on another file says nothing about the one that is scored:
+    in six experiments-v2 runs a `verify` on a side file closed the loop for the real one,
+    and four of them ended NO -- no-second-chance sklearn-10297 verified `..._simple.py`
+    as fail-to-pass while the scored file still failed after the fix. A call that could not
+    run (tree not at base) answered nothing and is left out too."""
+    return [(i, e) for i, e in enumerate(tool_log)
+            if e.get("tool") == "verify" and "error" not in e
+            and (rel is None or same_file(e.get("target", ""), rel))]
+
+
+def wrote_test_after(tool_log: list, i: int, rel: str | None) -> bool:
+    """Whether the test file was written after entry `i`. Only `rel` counts: a scratch
+    file written after a passing verify produced "you edited the test since" in two runs
+    that had not touched it (no-mutation-tool django-14915, no-coverage+mutation
+    matplotlib-20859)."""
+    return any(e.get("tool") == "write_file" and "error" not in e
+               and (rel is None or same_file(e.get("path", ""), rel))
+               for e in tool_log[i + 1:])
+
+
+def verify_settled(tool_log: list, rel: str | None = None) -> bool:
     """Whether the test is fail-to-pass by the agent's own last `verify`, unchanged since."""
-    found = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == "verify"]
+    found = _verifies_of(tool_log, rel)
     if not found:
         return False
     i, e = found[-1]
     still = [n for n, st in (e.get("after") or {}).items() if st in BEHAVIOURAL]
-    wrote = any(x.get("tool") == "write_file" for x in tool_log[i + 1:])
-    return bool(e.get("flipped")) and not still and not wrote
+    return bool(e.get("flipped")) and not still and not wrote_test_after(tool_log, i, rel)
 
 
-def verify_unscoreable(tool_log: list) -> bool:
+def verify_unscoreable(tool_log: list, rel: str | None = None) -> bool:
     """Whether the agent's own last `verify` showed a test that cannot be scored: every test
-    passing before the fix, or nothing collected. What `passes_at_base` and
-    `collects_nothing` report under --second-chance, read here from what the agent was
-    itself shown -- so a run without that flag is held to the same limit, no more and no
-    less. A test that fails on both sides is not this: it is broken, not aimed wrong, and
-    those rounds do convert (four runs recovered after a third such refusal)."""
-    found = [e for e in tool_log if e.get("tool") == "verify"]
+    passing (or skipped) before the fix, or nothing collected. What `passes_at_base`,
+    `skipped_at_base` and `collects_nothing` report under --second-chance, read here from
+    what the agent was itself shown -- so a run without that flag is held to the same
+    limit, no more and no less. A test that fails on both sides is not this: it is broken,
+    not aimed wrong, and those rounds do convert (four runs recovered after a third such
+    refusal)."""
+    found = _verifies_of(tool_log, rel)
     if not found:
         return False
-    before = found[-1].get("before") or {}
+    before = found[-1][1].get("before") or {}
     return not before or all(st not in BEHAVIOURAL for st in before.values())
 
 
@@ -382,11 +465,15 @@ def loop_gap(tool_log: list, instruments: tuple[str, ...],
     Returns `(reason, what_to_say)` or `None` when the loop is closed.
     """
     def last(tool: str) -> tuple[int, dict] | None:
-        found = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool]
+        # On the scored file only, for all three: an answer about another file is not
+        # an answer about this one.
+        found = (_verifies_of(tool_log, rel) if tool == "verify" else
+                 [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
+                  and same_file(e.get("target", ""), rel)])
         return found[-1] if found else None
 
     def wrote_after(i: int) -> bool:
-        return any(e.get("tool") == "write_file" for e in tool_log[i + 1:])
+        return wrote_test_after(tool_log, i, rel)
 
     # One obligation at a time, in the order the goal imposes. Until the test is
     # fail-to-pass there is nothing for `coverage` or `mutation` to be about: coverage
@@ -400,7 +487,14 @@ def loop_gap(tool_log: list, instruments: tuple[str, ...],
     settled = "verify" not in instruments      # nothing to establish if it was withheld
     if "verify" in instruments:
         got = last("verify")
-        if got is None:
+        elsewhere = [e.get("target") for _, e in _verifies_of(tool_log, None)
+                     if not same_file(e.get("target", ""), rel)]
+        if got is None and elsewhere:
+            gaps.append(f"Your `verify` calls ran on `{elsewhere[-1]}`, but the test this "
+                        f"run is scored on is `{rel}`, and nothing has verified that file. "
+                        f"Only `{rel}` counts: put the test there, call `verify` on it, and "
+                        f"keep going until it says fail-to-pass.")
+        elif got is None:
             gaps.append(f"You never called `verify`, so nothing has established the one "
                         f"property the test must have. Write a test, call `verify`, and "
                         f"keep going until it says fail-to-pass.")
@@ -526,20 +620,33 @@ def _decide(iid: str, repo: str, base: dict, head: dict, targets: list[str],
     else:
         still_failing = [n for n, s in head.items() if s in BEHAVIOURAL]
 
+    # Passed before the fix and fails after it: the test found the behaviour and asserts
+    # the side the fix removes. "Still failing" was false of these -- they never failed.
+    backwards = [n for n in still_failing if E.outcome_of(base, n) == "PASSED"]
     if not base and not head:
         v.f2p, v.why = "BROKEN", "nothing collected on either side -- the file never ran"
     elif missing:
         v.f2p = "BROKEN"
         v.why = (f"{len(missing)} expected test(s) never appeared in the output "
                  f"({missing[:2]}) -- runner or parser problem, not a result")
+    elif not head:
+        v.f2p = "NO"
+        v.why = "nothing collected after the fix -- the file stops importing once it is applied"
+    elif still_failing and len(backwards) == len(still_failing):
+        v.f2p = "NO"
+        v.why = (f"backwards: passes before the fix and fails after ({backwards[:2]}) -- "
+                 f"it asserts the behaviour the fix removes")
     elif still_failing:
         v.f2p = "NO"
-        v.why = (f"still failing after the fix ({still_failing[:2]}) -- "
+        first = [n for n in still_failing if n not in backwards] + backwards
+        v.why = (f"still failing after the fix ({first[:2]}) -- "
                  f"the test is wrong, not the code")
     elif not flipped:
         v.f2p = "NO"
         v.why = ("passes before the fix too, so it does not test the change"
                  if any(s == "PASSED" for s in base.values())
+                 else "skipped before the fix, so it never ran against the bug"
+                 if base and all(s == "SKIPPED" for s in base.values())
                  else "produced no usable failure before the fix")
     else:
         v.f2p = "YES"

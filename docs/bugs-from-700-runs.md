@@ -287,45 +287,82 @@ verdict in `rescored_from`):
 Checked over all 1,292 django logs in v1 and v2: every status-on-a-later-line case now
 parses. No v1 verdict was affected.
 
-### Pending, deliberately not fixed yet (decided 2026-09-26)
+### Fixed after the audit (2026-09-27; left in place for the v2 results)
 
-These reached the agent during the run, so fixing them means rerunning; each touches a
-handful of runs spread across arms, and the v2 results are reported with them in place.
+These reached the agent during the v2 runs, so the v2 results stand with them in place;
+the system as it ran is on branch `final-state-of-second-runs`. Every fix below was
+checked offline against the saved v1 and v2 runs; none of it has run live yet.
 
-- The same parser shape inside `verify` / `run_tests` misled the agent in a few django
-  runs; sympy tests that print showed "no tests ran" to the agent (verdicts unaffected --
-  all 220 final sympy logs parse).
-- `reads_source` fires on a test that *writes* a fixture with `open(path, 'w')`
-  (no-second-chance sphinx-9591, no-require-tools sphinx-8459).
-- `loop_gap.wrote_after` counts any `write_file`, so a scratch file after a passing
-  `verify` produced "you edited the test since" (no-mutation-tool django-14915,
-  no-coverage+mutation matplotlib-20859; both YES).
-- `loop_gap` reads the last `verify` whatever file it ran on: a verify on another file
-  closed the loop in 6 runs (4 NO).
-- A test at the repository root that django cannot import is scored as a failing test
-  (`unittest.loader._FailedTest`), not as "collects nothing" (−repo-facts django-14534,
-  13449, 16454, 16560).
-- A corrupted library file (tree state unknown) under −guard kept being refused with
-  "call `verify`", which cannot run there (sklearn-10297).
-- `verify` says "you cannot finish having read that" about missed changed lines in arms
-  without the coverage tool, where nothing enforces it (`sandbox_tools._reach` keys on
-  `require_tools` only).
-- A test whose status is SKIPPED at base got no refusal (no-cov+mut+require django-16560).
-- Django tests sharing a docstring collapse into one node, and subTest lines can merge
-  (counts wrong, verdicts right: django-14765, 16667, 13023).
-- Cosmetic: the mutation tool's own cleanup is logged as "patch left applied by the agent";
-  "no mutations" is reported when the single mutant went to the agent's half; `guard` is
-  counted among the agent's tools in refusal recaps; a moved test's old path is listed as
-  a stray write; `verify` calls on a tree not at base are missing from `tool_log`; the
-  "still failing after the fix" reason is shown for tests that pass before and fail after;
-  the no-verify-tool RUNS.md labels `no_test` as from require-tools.
+**Verdict path**
+
+- *A django test file that does not import counted as a failing test.* django reports a
+  module it cannot import as one erroring test, `unittest.loader._FailedTest`; it is now
+  dropped, so the file reads as collecting nothing, like pytest's collection error, and
+  `--second-chance` refuses it as `collects_nothing`. Replayed: 3 v2 runs (−repo-facts
+  django-14534, 16454, 16560) and 11 v1 runs move NO -> BROKEN; no YES changes.
+- *The django parser in the agent's `verify` / `run_tests`.* Both call the same
+  `parse_output`, so the v2 fix already covers them.
+- *sympy tests that print showed "no tests ran" to the agent.* The status arrives alone
+  on a later line, as in django; now read. 15 of the 29 such `run_tests` outputs in v2
+  parse; the other 14 genuinely ran 0 tests.
+- *A test skipped at base got no refusal* (no-cov+mut+require django-16560). New
+  `skipped_at_base` reason, capped with `passes_at_base` / `collects_nothing`; `verify`
+  and the verdict say "skipped" rather than "passes before the fix".
+- *django tests sharing a docstring collapsed, subTest lines merged* (django-14765, 16667,
+  13023, and v1 14792). Keyed on the test id with the docstring as an alias; a test left
+  open by failing subTests takes its status from its traceback header.
+
+**Refusal loop**
+
+- *`loop_gap` trusted the last `verify` whatever file it ran on* (6 runs, 4 NO). All three
+  instruments are now read on the scored file only, and a refusal names the file verified
+  and the file scored. The `verify` tool notes when its target is not the scored file.
+  Replayed over v2's final tool logs: the loop is now open at the end in 7 runs -- the 4
+  side-file cases, 2 −repo-facts runs whose `mutation` only ever ran on a side file, and
+  sphinx-7757, whose loop had looked closed only because a scratch file came after
+  `coverage`.
+- *`wrote_after` counted any `write_file`* (2 runs). Writes to the scored file only.
+- *A corrupted library file under −guard kept drawing "call `verify`"* (sklearn-10297).
+  The loop stops when the tree is off base; telling the agent to restore the file would be
+  the guard the arm removes.
+- *`reads_source` fired on a fixture write* (`open(path, 'w')`; sphinx-9591, 8459). A
+  write, append or create mode exempts the line. The 19 final tests it flagged across both
+  series are unchanged.
+
+**Features not cleanly removed**
+
+- *Without `coverage`, `verify` still reported whether every changed line ran* (the
+  design note below). That sentence now goes out only with `coverage` registered.
+- *"You cannot finish having read that" went out in arms without `coverage`*, where nothing
+  enforced it. Gone with the sentence above.
+
+**Reports**
+
+- The mutation tool's own revert is no longer logged as "patch left applied by the agent".
+- A held-out pool emptied because its one mutant went to the agent's half says so, instead
+  of "mutmut offers no mutations".
+- `guard` reverts are listed apart from the agent's tools in the refusal recap.
+- A test written and then moved is `test_moved_from` in the audit, not a stray write.
+- A `verify` call on a tree off base is in `tool_log` (with `error`).
+- "Still failing after the fix" is no longer said of a test that passed before and fails
+  after: it reads "backwards". A file that stops importing once the fix is applied reads
+  "nothing collected after the fix".
+- RUNS.md labels each refusal reason by its source: `no_test` and `skipped_at_base` are the
+  second chance's, `reads_source` every configuration's, `runs_no_change` the coverage
+  tool's.
+
+**The second chance hands back the file and the run.** Under `--second-chance` a refusal
+now carries the test file as it is on disk and what running it at base printed. This is
+the "hand the agent its own failing test" item below, done within the same conversation
+and budget.
 
 ### A design point the coverage arms should be read with
 
-`verify` measures changed-line coverage itself and says whether every changed line ran
-(`_reach`). Arms without the coverage tool get that yes/no as often as base (−coverage:
-42 outputs in 18 runs; base 45 in 16); what they lose is *which* lines and their code. So
-−coverage measures "no line-level detail", not "no coverage feedback".
+`verify` measured changed-line coverage itself and said whether every changed line ran
+(`_reach`). Arms without the coverage tool got that yes/no as often as base (−coverage:
+42 outputs in 18 runs; base 45 in 16); what they lost was *which* lines and their code. So
+v1's and v2's −coverage measured "no line-level detail", not "no coverage feedback". Fixed
+for future runs (above); the published v1/v2 comparisons are to be read this way.
 
 ## Changed after the fact
 
@@ -335,9 +372,9 @@ handful of runs spread across arms, and the v2 results are reported with them in
 
 ## Not changed yet, on purpose
 
-- **A second chance that hands the agent its own failing test** with the remaining budget,
-  rather than asking it to recall the file. To be tested on its own. Discarding the
-  conversation, as a fresh retry does, is ruled out.
+- ~~A second chance that hands the agent its own failing test~~ -- done 2026-09-27 (see
+  "Fixed after the audit"). Not yet tested on its own; a base-twice run on the laptop's 36
+  instances is the planned noise-floor check before any arm comparison.
 
 ## What this does to the ten-arm results
 

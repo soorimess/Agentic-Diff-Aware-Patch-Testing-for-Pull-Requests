@@ -64,6 +64,12 @@ def audit(box: E.Sandbox, tool_log: list, test_file: str) -> dict:
     target = _norm(test_file)
     wrote_elsewhere = sorted({_norm(e["path"]) for e in tool_log
                               if e["tool"] == "write_file" and _norm(e.get("path")) != target})
+    # The test itself, written first under another directory and then moved to where it
+    # is scored: same name, no longer on disk. It was listed as a stray write.
+    name = target.rsplit("/", 1)[-1]
+    moved_from = [p for p in wrote_elsewhere
+                  if p.rsplit("/", 1)[-1] == name and not box.exists(p)]
+    wrote_elsewhere = [p for p in wrote_elsewhere if p not in moved_from]
     # Against the snapshot taken before the agent started, not against the checkout's
     # own git -- that was deleted by `strip_git`, which made the previous version of this
     # line structurally dead: it asked `git status`, always got "not a repository", and
@@ -94,6 +100,7 @@ def audit(box: E.Sandbox, tool_log: list, test_file: str) -> dict:
     existed = box.tracked(wrote_elsewhere)
     return {"network_attempts": tried_network,
             "files_written_outside_test": wrote_elsewhere,
+            "test_moved_from": moved_from,
             "scratch_files": [p for p in wrote_elsewhere if p not in existed],
             "preexisting_written": [p for p in wrote_elsewhere if p in existed],
             "isolation": box.audit_isolation(),

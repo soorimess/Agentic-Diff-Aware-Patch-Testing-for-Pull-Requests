@@ -217,9 +217,24 @@ def _second_chance_table(retried: list[dict]) -> list[str]:
     second chance was offered, so counting its conversions as the flag's work credits it
     with runs it did not cause. `passes_at_base` and `collects_nothing` are the two
     reasons `--second-chance` adds, and they are the only rows that answer whether it
-    earned its place.
+    earned its place. `no_test` and `skipped_at_base` are the flag's too; `reads_source`
+    is checked in every configuration and `runs_no_change` comes with the coverage tool.
+    The no-verify-tool table labelled `no_test` as from `require-tools`.
     """
-    OWN = ("passes_at_base", "collects_nothing")
+    OWN = ("passes_at_base", "collects_nothing", "no_test", "skipped_at_base")
+
+    def owner(reason: str) -> str:
+        parts = []
+        if any(k in reason for k in OWN):
+            parts.append("**added by the flag**")
+        if "loop_open" in reason:
+            parts.append("from `require-tools`")
+        if "reads_source" in reason:
+            parts.append("every configuration")
+        if "runs_no_change" in reason:
+            parts.append("from the coverage tool")
+        return " + ".join(parts) or "—"
+
     by_reason: dict[str, list[dict]] = {}
     for r in retried:
         by_reason.setdefault(r["second_chance"]["reason"], []).append(r)
@@ -233,7 +248,7 @@ def _second_chance_table(retried: list[dict]) -> list[str]:
     for reason in sorted(by_reason):
         rs = by_reason[reason]
         tally = {v: sum(1 for r in rs if r["f2p"] == v) for v in ("YES", "NO", "BROKEN")}
-        own = "**added by the flag**" if any(k in reason for k in OWN) else "from `require-tools`"
+        own = owner(reason)
         lines.append(f"| `{reason}` | {len(rs)} | {tally['YES']} | {tally['NO']} | "
                      f"{tally['BROKEN']} | {own} |")
     flag_rows = [r for r in retried

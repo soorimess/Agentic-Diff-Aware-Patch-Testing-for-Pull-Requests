@@ -333,8 +333,10 @@ def probe(box: Sandbox, patch: str, test_path: str, n: int) -> dict:
     finally:
         # The tree goes back whatever happened. A tree left at head would make the
         # harness's "before the fix" run actually be the after run, and the verdict
-        # would invert silently.
-        box.ensure_base(patch)
+        # would invert silently. Reverted here rather than through `ensure_base`, which
+        # logs a patch at head as "left applied by the agent" -- it was this tool's own.
+        if box.patch_state(patch) == "head":
+            box.apply_patch(patch, revert=True)
 
 
 def _fails(box: Sandbox, targets: list[str], expected: list[str]) -> bool:
@@ -469,11 +471,19 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
         # `held_out` when the agent had the `mutation` tool: it was shown one half of
         # the pool and is scored on the other, so the number says whether the test
         # generalises rather than whether it memorised the sample.
-        mutants = (split_pool(box, instance["patch"], n)[1] if held_out
-                   else generate(box, instance["patch"], n))
+        shown: list = []
+        if held_out:
+            shown, mutants = split_pool(box, instance["patch"], n)
+        else:
+            mutants = generate(box, instance["patch"], n)
         if not mutants:
             score.measured = True
-            score.why = "mutmut offers no mutations on the lines this patch changed"
+            # A pool of one goes to the agent's half, and "offers no mutations" was false
+            # of it: there was a mutant, and the agent's `mutation` tool had shown it.
+            score.why = ("the only mutant(s) on these lines went to the half the agent's "
+                         "`mutation` tool showed it; none were left to score on"
+                         if shown else
+                         "mutmut offers no mutations on the lines this patch changed")
             return score
 
         originals = {m.file: box.read(m.file) or "" for m in mutants}

@@ -30,6 +30,8 @@ Three tools, deliberately not more:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import ConfigDict, Field
 
 from openhands.sdk.tool import (
@@ -588,8 +590,13 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
 
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
                  reveal_missed: bool = True, point_at_mutation: bool = False,
-                 require_tools: bool = False):
+                 require_tools: bool = False, scored_name: str = ""):
         self.box = box
+        # The file name the run is scored on. A verify on any other file answers about
+        # that file only: three -repo-facts django runs verified a test under
+        # `tests/<app>/` as fail-to-pass and stopped, while the file carrying the scored
+        # name sat at the repository root, where django cannot import it.
+        self.scored_name = scored_name
         self.repo = repo
         self.patch = patch
         # See CoverageExecutor: the obligation is stated where the answer arrives.
@@ -611,6 +618,10 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
     def __call__(self, action: VerifyAction, conversation=None) -> VerifyObservation:
         state = self.box.ensure_base(self.patch)
         if state != "base":
+            # Logged like any other call -- it was missing from `tool_log`, so a run that
+            # hit this read as though the agent had never tried.
+            self.log.append({"tool": "verify", "target": action.target,
+                             "error": f"tree not at base ({state})"})
             return VerifyObservation.from_text(
                 f"cannot verify: the working tree is in an unexpected state ({state})",
                 is_error=True)
@@ -632,7 +643,12 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             # a working test's feedback, attached to a NO.
             flips = ({n for n, v in base_out.items() if v in ("FAILED", "ERROR")}
                      & {n for n, v in head_out.items() if v == "PASSED"})
-            if flips and not any(v in ("FAILED", "ERROR") for v in head_out.values()):
+            # Only when `coverage` is registered. Without it this line was the whole of
+            # the coverage feedback -- "not every changed line runs" -- and the
+            # -coverage arm lost only *which* lines (42 such lines in 18 of its runs,
+            # against 45 in 16 for base). Removing the tool now removes the feedback.
+            if (self.reveal_missed and flips
+                    and not any(v in ("FAILED", "ERROR") for v in head_out.values())):
                 missed = self._reach(action.target)
         finally:
             self.box.apply_patch(self.patch, revert=True)
@@ -670,6 +686,10 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         elif still_failing:
             head = (f"NOT fail-to-pass: {still_failing[:3]} still fail after the change "
                     f"is applied. The test is wrong, not the code.")
+        elif not flipped and base_out and all(v == "SKIPPED" for v in base_out.values()):
+            head = ("NOT fail-to-pass: every test was skipped before the change, so none "
+                    "of them ran against the bug. Find what skips them in the output "
+                    "below and make the test run here.")
         elif not flipped:
             head = ("NOT fail-to-pass: the test already passes before the change, so it "
                     "does not exercise this pull request.")
@@ -721,7 +741,12 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # "[An error occurred during execution.]" -- a median of five of them already in
         # context by the time a second chance began. `is_error` is kept for the cases
         # where the tool genuinely could not run (the tree in an unexpected state).
-        return VerifyObservation.from_text(head + duty + missed + nxt + body,
+        elsewhere = ""
+        if self.scored_name and Path(action.target.split("::")[0]).name != self.scored_name:
+            elsewhere = (f"\n\nNote: this run is scored on the file named "
+                         f"`{self.scored_name}`, and `{action.target}` is not it. This "
+                         f"answer is about `{action.target}` only.")
+        return VerifyObservation.from_text(head + elsewhere + duty + missed + nxt + body,
                                            is_error=False)
 
     def _reach(self, target: str) -> str:
@@ -746,16 +771,15 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         missed = len(cov.get("missed") or [])
         if not missed:
             return "\n\nIt runs every line this pull request changed."
+        # Called only with `coverage` registered, so there is always a tool to point at.
+        # The duty sentence was keyed on `require_tools` alone and went out in arms with
+        # no `coverage`, where no check enforced it -- a rule nothing carried out.
         head = ("\n\nSome lines this pull request changed never run under this test."
                 + (" You cannot finish having read that and left it alone: either make "
                    "them run, or establish that a line cannot be reached from a test."
                    if self.require_tools else ""))
         where = (" Call `coverage` on this file to see which they are, the code on each "
-                 "one and the conditions above it."
-                 if self.reveal_missed else
-                 " Which ones is not something you can be shown here, so work back from "
-                 "the behaviour: the change has more than one path through it and your "
-                 "input took one.")
+                 "one and the conditions above it.")
         return (head + where +
                 " Then decide: part of the behaviour you set out to pin down and worth "
                 "another assertion, a separate case that deserves its own test "
@@ -770,7 +794,8 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, reveal_missed: bool = True,
-               point_at_mutation: bool = False, require_tools: bool = False, **params):
+               point_at_mutation: bool = False, require_tools: bool = False,
+               scored_name: str = "", **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="verify",
@@ -781,7 +806,8 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
             observation_type=VerifyObservation,
             annotations=ToolAnnotations(readOnlyHint=False),
             executor=_Shown(VerifyExecutor(box, repo, patch, log, reveal_missed,
-                                           point_at_mutation, require_tools), "verify"),
+                                           point_at_mutation, require_tools,
+                                           scored_name), "verify"),
         )]
 
 
@@ -823,7 +849,8 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
             box=box, repo=repo, patch=patch, log=log,
             reveal_missed=("coverage-tool" in features),
             point_at_mutation=("mutation-tool" in features),
-            require_tools=require_tools)[0]
+            require_tools=require_tools,
+            scored_name=Path(gen_path).name if gen_path else "")[0]
         register_tool("verify", made["verify"])
         names.append("verify")
         if "coverage-tool" in features:

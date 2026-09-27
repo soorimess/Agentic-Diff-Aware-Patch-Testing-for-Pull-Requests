@@ -86,7 +86,11 @@ def _recap(counts: dict[str, int], tool_log: list) -> str:
         lines.append("* " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
                      + f" -- {sum(counts.values())} actions in total")
     used: dict[str, int] = {}
+    # `guard` entries are the harness putting a file back, not a tool the agent called.
+    reverted = sum(1 for e in tool_log if e.get("tool") == "guard")
     for e in tool_log:
+        if e.get("tool") == "guard":
+            continue
         used[e.get("tool") or "?"] = used.get(e.get("tool") or "?", 0) + 1
     if used:
         lines.append("* tools: " + ", ".join(f"`{k}` x{v}" for k, v in
@@ -95,6 +99,8 @@ def _recap(counts: dict[str, int], tool_log: list) -> str:
              if e.get("tool") == "write_file" and e.get("path")]
     lines.append("* files written: " + (", ".join(f"`{w}`" for w in dict.fromkeys(wrote))
                                         if wrote else "**none**"))
+    if reverted:
+        lines.append(f"* edits to pre-existing files put back by the harness: {reverted}")
     return "\n".join(lines)
 
 
@@ -123,6 +129,7 @@ MAX_REFUSALS = 5
 # left it after the first. `collects_nothing` joined after eval5-arms, where one run spent
 # five rounds on a file that never collected; the one collects_nothing conversion on
 # record left it after the second. A third identical refusal has not converted anything.
+# `skipped_at_base` joined after experiments-v2: the same state -- nothing fails at base.
 MAX_PASSES_AT_BASE_ROUNDS = 2
 
 
@@ -302,7 +309,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             # A test that flips while running none of the changed lines: asked once, and
             # only when nothing else is open and the agent holds `coverage`.
             if (left > 0 and not gaps and "coverage-tool" in features
-                    and V.verify_settled(tool_log)
+                    and V.verify_settled(tool_log, rel)
                     and not any("runs_no_change" in r["reason"] for r in rounds)):
                 found = V.no_reach_gap(box, instance, rel)
                 if found:
@@ -311,6 +318,17 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 "+".join(r for r, _ in gaps), "\n\n".join(say for _, say in gaps))
             if left <= 0:
                 flow.record(flow.AGENT, "second chance", "no budget left at the cap")
+                break
+            # A tree off base -- only reachable under --no-guard, where a library edit is
+            # left in place -- cannot be verified by the agent or scored by the harness.
+            # Refusing there asked for a `verify` that answers only "unexpected state"
+            # (sklearn-10297 under -guard, refused until the cap). Telling the agent to
+            # put the file back would be the guard the arm removes, so the loop stops and
+            # the verdict reports the tree.
+            if gap is not None and box.ensure_base(instance["patch"]) != "base":
+                flow.record(flow.AGENT, "second chance",
+                            "tree not at base (a pre-existing file was changed); "
+                            "not refusing")
                 break
             if gap is None:
                 flow.record(flow.AGENT, "second chance",
@@ -334,7 +352,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             # has not been answered. One reminder is worth sending; after that the
             # refusals cannot change the verdict and only spend tokens -- xarray-7233 and
             # scikit-learn-10908 were refused five times each while already passing.
-            settled = V.verify_settled(tool_log)
+            settled = V.verify_settled(tool_log, rel)
             if settled and reason == "loop_open" and any(r.get("settled") for r in rounds):
                 flow.record(flow.AGENT, "second chance",
                             "test already fail-to-pass; its one reminder about the "
@@ -349,10 +367,10 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             # collected -- stands in for the flag's check, so removing the flag removes
             # help rather than adding rounds. A test failing on both sides is capped in
             # neither configuration.
-            not_f2p = V.verify_unscoreable(tool_log)
+            not_f2p = V.verify_unscoreable(tool_log, rel)
 
             def stuck(why: str, short: bool) -> bool:
-                return ("passes_at_base" in why or "collects_nothing" in why or (
+                return (any(k in why for k in V.UNSCOREABLE) or (
                     not second_chance and "loop_open" in why and short))
 
             streak = 0
@@ -362,7 +380,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 streak += 1
             if stuck(reason, not_f2p) and streak >= MAX_PASSES_AT_BASE_ROUNDS:
                 flow.record(flow.AGENT, "second chance",
-                            f"{'not scoreable (passes at base or collects nothing)' if second_chance else 'not scoreable by its own verify (passes before the fix or collects nothing)'}"
+                            f"{'not scoreable (passes or is skipped at base, or collects nothing)' if second_chance else 'not scoreable by its own verify (passes or is skipped before the fix, or collects nothing)'}"
                             f" after {streak} refusals running; not refusing again")
                 break
             # Which of the two mistakes a passing-at-base test is making. Only with the

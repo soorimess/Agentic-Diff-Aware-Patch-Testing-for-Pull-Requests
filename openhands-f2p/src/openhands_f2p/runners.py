@@ -192,9 +192,26 @@ SYMPY_LINE = re.compile(r"^(test_\w+)\s+(ok|F|E|fail|Fail|exception|skipped|w|s|
 # A django verbose line whose status did not follow on the same line: the test printed
 # something (argparse usage, a warning traceback) between `name ...` and `ok`. The status
 # then arrives alone on a later line and belongs to the name still pending.
-DJANGO_OPEN = re.compile(r"^(.*?) \.\.\. ")
+DJANGO_OPEN = re.compile(r"^(.*?) \.\.\.(?: |$)")
 DJANGO_STATUS_ALONE = re.compile(r"^(ok|FAIL|ERROR|skipped.*|expected failure"
                                  r"|unexpected success)\s*$")
+# Django 3+ at verbosity 2, for a test with a docstring: the id on a line of its own, then
+# the docstring's first line carrying the status. Keyed on the docstring, two tests
+# sharing one collapsed into a single outcome (django-14765: three tests, two counted).
+DJANGO_ID_ALONE = re.compile(r"^(\w+ \([\w.]+\))$")
+# The traceback header after the run. The only place a test with failing subTests gets
+# its status: its own line is left open (`name ... ` and then the next test's name).
+DJANGO_HEADER = re.compile(r"^(FAIL|ERROR): (\w+ \([\w.]+\))")
+# A django load failure: the module never imported. It is reported as one erroring
+# "test", but nothing of the file ran -- the same fact as pytest's collection error,
+# which produces no outcome at all, and it is counted the same way.
+DJANGO_LOAD_FAILURE = "unittest.loader._FailedTest"
+# sympy's verbose runner writes the name, runs the test, then writes the status. A test
+# that prints puts its output between the two, and the status arrives alone on a later
+# line -- `ok` or `F`, with the file's `[OK]` / `[FAIL]` marker when it is the last one.
+SYMPY_OPEN = re.compile(r"^(test_\w+)\s+\S")
+SYMPY_STATUS_ALONE = re.compile(r"^(ok|F|E|fail|Fail|exception|skipped|w|s|X|f)"
+                                r"(?:\s+\[[A-Z]+\])?\s*$")
 
 _NORMAL = {"ok": "PASSED", "PASSED": "PASSED", "XPASS": "PASSED",
            "expected failure": "PASSED", "F": "FAILED", "FAIL": "FAILED",
@@ -204,6 +221,23 @@ _NORMAL = {"ok": "PASSED", "PASSED": "PASSED", "XPASS": "PASSED",
 
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+class Outcomes(dict):
+    """Per-test outcomes, plus the docstrings django printed for some of them.
+
+    A plain dict to everything that reads it -- json, `.items()`, `len`. `aliases` maps a
+    docstring line to the ids it stood for, so a FAIL_TO_PASS entry recorded as the
+    docstring (which is what SWE-bench stored) still finds its test in `outcome_of`.
+    """
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.aliases: dict[str, list[str]] = {}
+
+
+def _status(word: str) -> str:
+    return _NORMAL.get(word, "SKIPPED" if "skip" in word else word)
 
 
 def parse_output(output: str) -> dict[str, str]:
@@ -223,12 +257,39 @@ def parse_output(output: str) -> dict[str, str]:
     For django the key is whatever the runner printed, which is exactly what
     FAIL_TO_PASS/PASS_TO_PASS contain -- docstrings included.
     """
-    out: dict[str, str] = {}
+    out = Outcomes()
     # experiments-v2: django-16454 printed argparse usage between `name ...` and `ERROR`,
     # the test was dropped, and a test still failing after the fix scored YES in two
     # arms; django-16136's coroutine warning did the same to a passing test and scored a
     # real YES as NO.
-    pending: str | None = None
+    pending: str | None = None          # a django test whose status has not come yet
+    sympy_pending: str | None = None    # the same for sympy
+    named: str | None = None            # a django id printed alone, docstring to follow
+    unresolved: list[str] = []          # django tests whose own line never got a status
+    headers: dict[str, str] = {}        # django traceback headers, id -> FAIL/ERROR
+    sympy = "test process starts" in output
+
+    def django(shown: str, status: str | None) -> None:
+        """Record one django line: `shown ... status`, or an open one if status is None.
+
+        `shown` can hold several tests: one whose subTests failed prints `name ... ` and
+        nothing more, so the next test's name runs on after it. Each earlier part is a
+        test whose status comes only from its traceback header."""
+        nonlocal pending, named
+        if pending is not None:
+            unresolved.append(pending)
+        keys = [p.strip() for p in shown.split(" ... ")]
+        if named is not None and keys[0] != named:
+            out.aliases.setdefault(keys[0], []).append(named)
+            keys[0] = named
+        named = None
+        unresolved.extend(keys[:-1])
+        if status is None:
+            pending = keys[-1]
+        else:
+            out[keys[-1]] = _status(status)
+            pending = None
+
     for raw in output.splitlines():
         # Stripped even with --color=no: some runners colour regardless of the flag,
         # and the escape sequences sit *inside* the node id, not just around it.
@@ -246,27 +307,65 @@ def parse_output(output: str) -> dict[str, str]:
         if m:
             out[m.group(1)] = _NORMAL.get(m.group(2), m.group(2))
             continue
+        m = DJANGO_HEADER.match(line)
+        if m:
+            headers.setdefault(m.group(2), m.group(1))
+            continue
         m = DJANGO_LINE.match(line)
         if m:
-            name, status = m.group(1).strip(), m.group(2)
-            out[name] = _NORMAL.get(status, "SKIPPED" if "skip" in status else status)
-            pending = None
+            django(m.group(1), m.group(2))
             continue
         if pending is not None:
             m = DJANGO_STATUS_ALONE.match(line)
             if m:
-                status = m.group(1)
-                out[pending] = _NORMAL.get(status, "SKIPPED" if "skip" in status
-                                           else status)
+                out[pending] = _status(m.group(1))
                 pending = None
                 continue
         m = DJANGO_OPEN.match(line)
         if m and not line.startswith(("Ran ", "FAILED", "OK")):
-            pending = m.group(1).strip()
+            django(m.group(1), None)
+            # What follows an open test on its line: the next test's id when the open
+            # one had failing subTests (django-14792), else whatever the test printed.
+            rest = line[m.end():].strip()
+            if DJANGO_ID_ALONE.match(rest):
+                named = rest
+            elif (m := DJANGO_LINE.match(rest)):
+                django(m.group(1), m.group(2))
             continue
-        m = SYMPY_LINE.match(line)
-        if m:
-            out[m.group(1)] = _NORMAL.get(m.group(2), "SKIPPED")
+        m = DJANGO_ID_ALONE.match(line)
+        if m and not sympy:
+            named = m.group(1)
+            continue
+        if sympy:
+            m = SYMPY_LINE.match(line)
+            if m:
+                out[m.group(1)] = _NORMAL.get(m.group(2), "SKIPPED")
+                sympy_pending = None
+                continue
+            if sympy_pending is not None:
+                m = SYMPY_STATUS_ALONE.match(line)
+                if m:
+                    out[sympy_pending] = _NORMAL.get(m.group(1), "SKIPPED")
+                    sympy_pending = None
+                    continue
+            m = SYMPY_OPEN.match(line)
+            if m:
+                sympy_pending = m.group(1)
+                continue
+        else:
+            m = SYMPY_LINE.match(line)
+            if m:
+                out[m.group(1)] = _NORMAL.get(m.group(2), "SKIPPED")
+                continue
+        named = None                    # the docstring line comes straight after its id
+    if pending is not None:
+        unresolved.append(pending)
+    for name in unresolved:
+        if name not in out and name in headers:
+            out[name] = _NORMAL[headers[name]]
+    # A module that failed to import: not a test, and not a failure of one.
+    for name in [n for n in out if DJANGO_LOAD_FAILURE in n]:
+        del out[name]
     return out
 
 
@@ -274,6 +373,15 @@ def outcome_of(outcomes: dict[str, str], node_id: str) -> str | None:
     """Look a node id up in parsed output, tolerating the formats' small differences."""
     if node_id in outcomes:
         return outcomes[node_id]
+    # A docstring django printed for one or more tests. Several tests sharing it answer
+    # together, and the worst of them is the answer: one failing is a failure.
+    ids = getattr(outcomes, "aliases", {}).get(node_id)
+    if ids:
+        got = [outcomes[i] for i in ids if i in outcomes]
+        for bad in ("ERROR", "FAILED"):
+            if bad in got:
+                return bad
+        return got[0] if got else None
     # 'test_x (a.b.C.test_x)' may be printed as just 'test_x (a.b.C)' by some versions.
     # Tried unconditionally: the shape of the id says whether this applies, and asking
     # the repository's name whether it is django was the coupling this module shed.

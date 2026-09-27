@@ -38,7 +38,15 @@ from openhands_f2p.layout import PROJECT_ROOT
 
 # In the project, git-ignored, because that is where the disk is. `F2P_IMAGE_CACHE`
 # points it elsewhere -- an external drive is the obvious use.
-CACHE_DIR = Path(os.getenv("F2P_IMAGE_CACHE") or PROJECT_ROOT / "image-cache")
+#
+# Several directories, separated like PATH (`image-cache:image-cache-evaluation`), are
+# searched in order for an archive, and new archives go to the first. Since 2026-09-27
+# every run is on the laptop over the 36 instances cached locally, 26 in `image-cache/`
+# and 10 in `image-cache-evaluation/`, and one run has to see both. A relative entry is
+# relative to the project root, wherever the command was started from.
+CACHE_DIRS = [PROJECT_ROOT / p for p in (os.getenv("F2P_IMAGE_CACHE") or "").split(os.pathsep)
+              if p] or [PROJECT_ROOT / "image-cache"]
+CACHE_DIR = CACHE_DIRS[0]
 
 # A stored archive smaller than this is a truncated save, not a small image: the
 # smallest of these images compresses to about 300 MB.
@@ -57,9 +65,16 @@ ARCHIVING = (os.getenv("F2P_NO_ARCHIVE") or "").strip().lower() not in ("1", "tr
 
 
 def archive_for(image: str) -> Path:
-    """One file per image, named after it. `/` and `:` are not filename characters."""
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", image)
-    return CACHE_DIR / f"{safe}.tar.gz"
+    """One file per image, named after it. `/` and `:` are not filename characters.
+
+    The first cache directory holding a plausible archive of it; the first directory
+    when none does, which is where a new one is written."""
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", image) + ".tar.gz"
+    for d in CACHE_DIRS:
+        p = d / name
+        if p.exists() and p.stat().st_size >= MIN_PLAUSIBLE_BYTES:
+            return p
+    return CACHE_DIR / name
 
 
 def have_archive(image: str) -> bool:
@@ -202,10 +217,8 @@ def release(image: str, quiet: bool = True) -> bool:
 
 
 def stored() -> list[tuple[str, int]]:
-    if not CACHE_DIR.exists():
-        return []
-    return sorted(((p.name, p.stat().st_size) for p in CACHE_DIR.glob("*.tar.gz")),
-                  key=lambda t: -t[1])
+    return sorted(((p.name, p.stat().st_size) for d in CACHE_DIRS if d.exists()
+                   for p in d.glob("*.tar.gz")), key=lambda t: -t[1])
 
 
 def _cli() -> int:
@@ -228,7 +241,8 @@ def _cli() -> int:
     if a.action == "list":
         rows = stored()
         total = sum(n for _, n in rows)
-        print(f"{CACHE_DIR}  --  {len(rows)} archive(s), {total / 1e9:.1f} GB\n")
+        print(f"{', '.join(map(str, CACHE_DIRS))}  --  {len(rows)} archive(s), "
+              f"{total / 1e9:.1f} GB\n")
         for name, n in rows:
             print(f"  {n / 1e9:5.1f} GB  {name}")
         if not rows:
