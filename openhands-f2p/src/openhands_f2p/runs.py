@@ -168,7 +168,13 @@ def _row(pr: dict, root: Path) -> dict:
             "mutation": r.get("mutation") or {},
             "tokens": (r.get("usage") or {}).get("total_tokens") or 0,
             "cost": (r.get("usage") or {}).get("cost_usd") or 0.0,
-            "second_chance": r.get("second_chance"),
+            # Stop refusals; results before 2026-09-28 kept them under `second_chance`,
+            # which since holds the restart record (it has `first_verdict`).
+            "refusals": r.get("refusals") or (
+                r.get("second_chance")
+                if "reason" in (r.get("second_chance") or {}) else None),
+            "restart": (r.get("second_chance")
+                        if "first_verdict" in (r.get("second_chance") or {}) else None),
             "lost": _lost_turns(d)}
 
 
@@ -224,42 +230,40 @@ def _brief(why: str | None) -> str:
     return why if len(why) <= 120 else why[:117] + "..."
 
 
-def _second_chance_table(retried: list[dict]) -> list[str]:
+def _refusal_table(retried: list[dict]) -> list[str]:
     """Which refusals converted, split by what the agent was told.
 
-    Worth its own table because the totals mislead: each reason belongs to one gate, and
-    counting another gate's conversions as this one's credits it with runs it did not
-    cause. Since 2026-09-28 the second chance is the stop gate -- the harness's base run
-    (`no_test`, `collects_nothing`, `passes_at_base`, `skipped_at_base`) and the agent's
-    own last `verify` (`verify_open`) -- and `require-tools` is the checks after
-    fail-to-pass (`duties_open`). `reads_source` is checked in every configuration and
-    `runs_no_change` comes with the coverage tool. Runs from before that date carry
-    `loop_open`, which was `require-tools`' verify loop and duties together.
+    Every stop refusal is `require-tools`' since 2026-09-28 (second revision): the
+    harness's base run (`no_test`, `collects_nothing`, `passes_at_base`,
+    `skipped_at_base`), the agent's own last `verify` (`verify_open`), the source-text
+    check (`reads_source`), and once the test flips the coverage/mutation duties
+    (`duties_open`) and the no-reach question (`runs_no_change`, coverage tool only).
+    The column says which part of the check each reason is. Older results carry
+    `loop_open`, `require-tools`' verify loop and duties together.
     """
     OWN = ("passes_at_base", "collects_nothing", "no_test", "skipped_at_base", "verify_open")
 
     def owner(reason: str) -> str:
         parts = []
         if any(k in reason for k in OWN):
-            parts.append("**second chance** (stop gate)")
+            parts.append("not fail-to-pass yet")
         if "duties_open" in reason:
-            parts.append("`require-tools` (checks after fail-to-pass)")
+            parts.append("checks after fail-to-pass")
         if "loop_open" in reason:
-            parts.append("`require-tools` (before 2026-09-28)")
+            parts.append("verify loop or duties (before 2026-09-28)")
         if "reads_source" in reason:
-            parts.append("every configuration")
+            parts.append("reads source as text")
         if "runs_no_change" in reason:
-            parts.append("the coverage tool")
+            parts.append("flips without reaching the change")
         return " + ".join(parts) or "—"
 
     by_reason: dict[str, list[dict]] = {}
     for r in retried:
-        by_reason.setdefault(r["second_chance"]["reason"], []).append(r)
+        by_reason.setdefault(r["refusals"]["reason"], []).append(r)
 
     lines = ["", "### What the refused runs did next", "",
-             "Each reason belongs to one gate, named in the last column: the second "
-             "chance refuses a stop whose test is not fail-to-pass yet, `require-tools` "
-             "one whose checks after fail-to-pass were left unanswered.", "",
+             "Every refusal is `require-tools`'; the last column says which part of the "
+             "check the first reason was.", "",
              "| told | runs | ended YES | ended NO | ended BROKEN | |",
              "|---|---|---|---|---|---|"]
     for reason in sorted(by_reason):
@@ -269,10 +273,10 @@ def _second_chance_table(retried: list[dict]) -> list[str]:
         lines.append(f"| `{reason}` | {len(rs)} | {tally['YES']} | {tally['NO']} | "
                      f"{tally['BROKEN']} | {own} |")
     flag_rows = [r for r in retried
-                 if any(k in r["second_chance"]["reason"] for k in OWN)]
+                 if any(k in r["refusals"]["reason"] for k in OWN)]
     flag_yes = sum(1 for r in flag_rows if r["f2p"] == "YES")
     if flag_rows:
-        lines += ["", f"Of the **{len(flag_rows)}** refused by the stop gate, "
+        lines += ["", f"Of the **{len(flag_rows)}** first refused as not fail-to-pass yet, "
                       f"**{flag_yes}** ended fail-to-pass.", ""]
     return lines
 
@@ -398,14 +402,22 @@ def build(root: Path = OUT) -> str:
                     f"bounded by its transport rather than by the model, and the verdicts "
                     f"below should be read with that in mind", ""]
 
-    retried = [r for r in rows if r.get("second_chance")]
+    retried = [r for r in rows if r.get("refusals")]
     if retried:
         won = [r for r in retried if r["f2p"] == "YES"]
-        out[-1:] = [f"- **{len(retried)}** of these were sent a second-chance message "
-                    f"after stopping with nothing to score, and **{len(won)}** of them "
-                    f"ended fail-to-pass; the other {len(rows) - len(retried)} finished "
-                    f"or failed for a reason the agent could not have seen at base", ""]
-        out += _second_chance_table(retried)
+        out[-1:] = [f"- **{len(retried)}** of these had a stop refused at least once, and "
+                    f"**{len(won)}** of them ended fail-to-pass", ""]
+        out += _refusal_table(retried)
+    restarted = [r for r in rows if r.get("restart") and not r["restart"].get("skipped")]
+    if restarted:
+        first_no = sum(1 for r in restarted if r["restart"]["first_verdict"] == "NO")
+        won = [r for r in restarted if r["f2p"] == "YES"]
+        out += ["", "### The second chance", "",
+                f"**{len(restarted)}** run(s) ended without a YES and were restarted with "
+                f"the record of their first attempt ({first_no} after a NO, "
+                f"{len(restarted) - first_no} after a BROKEN); **{len(won)}** ended "
+                f"fail-to-pass on the second attempt: "
+                + (", ".join(f"`{r['id']}`" for r in won) or "none") + ".", ""]
 
     # The column only exists when something filled it. A `mutants` column of dashes on
     # every row of every table describes nothing and pushes the rest sideways.

@@ -39,11 +39,32 @@ behaviour is part of what the change fixes -- and if it is, assert it. If it is 
 survivor is an answer, not an outstanding item.
 {/mutation-tool}
 {?coverage-tool}
+{?!require-tools-with-score-report}
 None of these is a score to push up. They are the same question asked from different
 angles — is the behaviour I asserted really the behaviour this pull request changed — and
 each answer is only worth what the test behind it is worth. Adding a call with no assertion
 behind it answers nothing.
+{/!require-tools-with-score-report}
 {/coverage-tool}
+{?require-tools-with-score-report}
+**In this run your test is scored, and you are shown the score:**
+{?coverage-tool}
+- changed-line coverage, the share of the lines this pull request changed that your test
+  runs, reported by `coverage`. **Its target is 100%**: raise it until every changed line
+  runs, or until the lines left cannot be reached from a test;
+{/coverage-tool}
+{?mutation-tool}
+- mutation score, the share of wrong versions of the fix your test catches, reported by
+  `mutation`. **Higher is better, but it has no target**: try hard, understand each
+  survivor, and catch the ones that break behaviour this pull request fixes -- not at any
+  cost.
+{/mutation-tool}
+
+Raise a score the way a better test raises it: an input that takes the test somewhere it
+did not go, an assertion about behaviour a wrong fix would break. A call with no assertion
+behind it, or an assertion on an exact expression written only to move the number, is not
+a better test.
+{/require-tools-with-score-report}
 
 **Then: did you change the test after any check?** If you did, the checks above describe
 a file that no longer exists. Run them again on what is actually on disk — that is the
@@ -53,7 +74,7 @@ The last thing you run before finishing should be `verify`: an assertion added t
 anything else can quietly stop the test failing on the old code.
 {/verify-tool}
 
-{?second-chance}
+{?require-tools}
 {?verify-tool}
 **Before you can stop, the last `verify` must say fail-to-pass, and you must not have
 edited the test since** — an answer about a file you have changed is an answer about a
@@ -62,22 +83,34 @@ action on: rewrite the test and call `verify` again, as many times as it takes. 
 checked by its answer, not by whether you called it; a stop before it says fail-to-pass
 is sent back with the reason.
 {/verify-tool}
-{/second-chance}
-{?require-tools}
 
 **Once `verify` says fail-to-pass, the checks after it are checked by their answers, in
 this order.** Each is a question about a test that already flips, so work them in
 sequence:
 {?coverage-tool}
+{?!require-tools-with-score-report}
 - `coverage`: aim for a test that runs every line the change touched. If it lists lines
   your test never runs, you must have acted on that — either made them run, or
   established that a line cannot be reached from a test. An assertion added only to
   execute a line is worth less than an honest reason the line stays unreached;
+{/!require-tools-with-score-report}
+{?require-tools-with-score-report}
+- `coverage`: your changed-line coverage score must reach 100%, or stop rising because
+  the lines left cannot be reached from a test. While it is below 100% and your last
+  change raised it, you will be sent back to raise it further;
+{/require-tools-with-score-report}
 {/coverage-tool}
 {?mutation-tool}
+{?!require-tools-with-score-report}
 - `mutation`: every survivor answered — an assertion about the behaviour it breaks when
   that behaviour is part of what this pull request fixes, or one sentence saying why it
   is not.
+{/!require-tools-with-score-report}
+{?require-tools-with-score-report}
+- `mutation`: every survivor answered, as the score allows -- an assertion about the
+  behaviour it breaks when that behaviour is part of what this pull request fixes, or one
+  sentence saying why it is not. A higher mutation score is better; it is not a target.
+{/require-tools-with-score-report}
 {/mutation-tool}
 
 Calling a tool once and stopping on an answer you did nothing with does not satisfy this.

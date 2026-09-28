@@ -175,15 +175,16 @@ and its first stop is final.
 | `--no-patch` the pull request diff | `--add-coverage-tool` the `coverage` tool (needs verify-tool, patch) |
 | `--no-repo-facts` (`--repo-search`) the briefing on how this project tests | `--add-mutation-tool` the `mutation` tool (needs verify-tool, patch) |
 | | `--add-guard` edits to pre-existing files reverted between actions |
-| | `--add-second-chance` the stop gate: a stop is refused until the test is fail-to-pass |
-| | `--add-require-tools` the duties: once it flips, `coverage` / `mutation` answers must be acted on (needs verify-tool) |
+| | `--add-require-tools` the stop checks: a stop is refused until the test is fail-to-pass by its own `verify`, then until `coverage` / `mutation` answers are acted on (needs verify-tool) |
+| | `--add-require-tools-with-score-report` the same, with coverage and mutation scores shown and to be raised (implies `--add-require-tools`) |
+| | `--add-second-chance` a restart: a run that ended without a YES starts again with its first attempt's record and the rest of its budget |
 
 An add-on whose need is missing is refused with the flag that fixes it, never quietly
 dropped. The harness measures the same things in every configuration, so runs made with
 different flags are comparable:
 
 ```bash
-FULL="--add-verify-tool --add-coverage-tool --add-mutation-tool --add-guard --add-second-chance --add-require-tools"
+FULL="--add-verify-tool --add-coverage-tool --add-mutation-tool --add-guard --add-require-tools --add-second-chance"
 uv run openhands-f2p $FULL                              # everything: the reference configuration
 uv run openhands-f2p ${FULL/--add-coverage-tool /}      # the tool goes; the measurement stays
 uv run openhands-f2p $FULL --no-patch                   # refused: coverage and mutation need the diff

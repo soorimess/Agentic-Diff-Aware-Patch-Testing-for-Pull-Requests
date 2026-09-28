@@ -366,6 +366,11 @@ for future runs (above); the published v1/v2 comparisons are to be read this way
 
 ## Changed after the fact
 
+- **2026-09-28, second revision:** require-tools holds every stop refusal (the base run,
+  the `verify` loop, the duties); the second chance is a restart with the first attempt's
+  record; `--add-require-tools-with-score-report` adds scores to the duties; flags are
+  `--add-<add-on>` / `--no-<input>`; model calls go through `LLM_PROXY` (the gateway resets
+  direct connections from the laptop).
 - **2026-09-28, from the tool and gate analysis of experiments-v2** (details in
   system-design.md): the second chance is the stop gate (verify loop included) and a
   default-on feature; `require-tools` is only the coverage/mutation duties, and surviving

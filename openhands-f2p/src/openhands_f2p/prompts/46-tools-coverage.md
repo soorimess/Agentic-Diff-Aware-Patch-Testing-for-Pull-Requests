@@ -18,6 +18,11 @@ report: measure, add the case the missed lines point at, measure again. It appli
 change and reverts it itself, so calling it costs you nothing and leaves nothing behind,
 and there is no reason to save it for the end.
 
+{?require-tools-with-score-report}
+In this run it also reports your changed-line coverage as a percentage, and that number is
+one of the two your test is scored on. Aim for 100%.
+
+{/require-tools-with-score-report}
 This exists to make the test better, and there is a specific way it does that. A test can
 flip from failing to passing while running only part of what the change touched — it
 reaches the new code by a path that skips a branch. That test still passes today, and it

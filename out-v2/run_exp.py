@@ -7,7 +7,7 @@
         no-mutation=--add-verify-tool,--add-coverage-tool,--add-guard,--add-require-tools,--add-second-chance
 
 Each spec is `name` or `name=--flag,--flag`. A bare name runs the base configuration --
-every input shown, every add-on added (`BASE_FLAGS`); a name with flags runs exactly those
+every input shown, every add-on added except variants (`BASE_FLAGS`); a name with flags runs exactly those
 flags and nothing implied, so what an experiment has is written in its command. The folder
 `out-v2/<name>/` gets one directory per instance, `agent_summary.json` and `RUNS.md`,
 exactly as `agent all` writes them. The name says what changed in the system or the
@@ -47,9 +47,11 @@ from openhands_f2p.prs import PRS  # noqa: E402
 
 MODEL = "openrouter/qwen/qwen3-coder-30b-a3b-instruct"
 MUTANTS = "20"
-# The base configuration: every add-on added. Read off the registry, so an add-on added
-# to it later is in base without anyone editing this list.
-BASE_FLAGS = [flag(f.name) for f in FEATURES if f.added]
+# The base configuration: every add-on added, except variants of another add-on
+# (`require-tools-with-score-report` is require-tools with scores, an experiment of its
+# own). Read off the registry, so an add-on added later is in base without anyone
+# editing this list.
+BASE_FLAGS = [flag(f.name) for f in FEATURES if f.added and not f.implies]
 
 # Reasons the harness writes when a run never finished for reasons outside it.
 OUTSIDE = ("cut off after", "the agent run failed before a test was written",

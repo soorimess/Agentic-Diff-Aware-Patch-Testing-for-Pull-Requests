@@ -414,9 +414,7 @@ each and new ones go to the first. The combined list is `evaluation/local-36-prs
 
 ```bash
 cd openhands-f2p
-F2P_PRS_FILE=../evaluation/local-36-prs.json \
-F2P_IMAGE_CACHE=image-cache:image-cache-evaluation \
-  uv run python ../experiments-v2/run_arms.py --parallel 20 --dry-run +second-chance
+uv run python ../out-v2/run_exp.py --parallel 18 --dry-run base    # sets both variables
 ```
 
 Leave archiving on (no `F2P_NO_ARCHIVE`): the laptop link is what the cache exists for.
@@ -429,13 +427,13 @@ pair on 36 should be read as direction, not effect.
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1145 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1309 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 167 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 393 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 424 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
-| `features.py` | 315 | What the agent is given, as one registry that everything else reads. |
+| `features.py` | 344 | What the agent is given, as one registry that everything else reads. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
 | `image_cache.py` | 292 | Instance images kept on the host disk, so each one is pulled from the registry once. |
 | `images.py` | 424 | Prepared SWE-bench images, and the disk they compete for. |
@@ -449,14 +447,14 @@ pair on 36 should be read as direction, not effect.
 | `prompt.py` | 253 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 512 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 531 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
+| `runs.py` | 543 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 355 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 913 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sandbox_tools.py` | 938 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 364 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 757 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 812 | The F2P decision. One implementation, used by every arm. |
 | `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
 <!-- /generated:modules -->
 
@@ -495,27 +493,35 @@ point a stop was refused.
 
 ### Refusing a stop
 
-**Two gates, one objective each (since 2026-09-28).**
+**Who refuses a stop, and what the second chance is (2026-09-28, second revision).**
 
-| feature | refuses a stop when | reasons |
+| feature | what it does | reasons |
 |---|---|---|
-| `second-chance` (the stop gate) | the test is not fail-to-pass yet: no file, collects nothing, passes or is skipped at base (the harness runs it), or the agent's own last `verify` of the scored file did not say fail-to-pass or predates an edit | `no_test`, `collects_nothing`, `passes_at_base`, `skipped_at_base`, `verify_open` |
-| `require-tools` (the duties) | the test already flips, but `coverage` / `mutation` was never called on it, or its last answer listed missed lines / surviving mutants and the test has not changed since -- one reminder, then the stop is accepted | `duties_open` |
-| every configuration | the test reads project source as text | `reads_source` |
-| `coverage-tool` | the test flips while running none of the changed lines (asked once) | `runs_no_change` |
+| `require-tools` | refuses a stop while the test is not fail-to-pass: no file, collects nothing, passes or is skipped at base (the harness runs it), or the agent's own last `verify` of the scored file did not say fail-to-pass or predates an edit. Once it flips, refuses once more if `coverage` / `mutation` was never called on it or its last answer (missed lines, survivors) was left unanswered. Also refuses a test that reads project source as text, and (coverage tool) asks once about a test that flips without running the change | `no_test`, `collects_nothing`, `passes_at_base`, `skipped_at_base`, `verify_open`, `duties_open`, `reads_source`, `runs_no_change` |
+| `require-tools-with-score-report` | require-tools, plus scores: `coverage`, `mutation` and `verify` report changed-line coverage and mutation score. **Coverage has a target**: a stop is refused while it is below 100% -- until a change to the test leaves it where it was (`V._plateau`), which is taken as the agent's answer. **Mutation has none** (user, 2026-09-28: many survivors cannot be caught by any honest test): the score is shown, higher is better but not at any cost, and its survivors must be answered once as in the plain duty. Implies `require-tools` | as above; `duties_open[coverage]` repeats while coverage moves |
+| `second-chance` | not a refusal: after the run is scored, one that ended without a YES (and was not cut off by an outside failure) is restarted when actions remain -- a fresh conversation sent the same task and `followups/restart.md`: why the attempt was not accepted (the harness's verdict and what each test did before and after the fix), the test it left whatever the verdict, the record of the attempt (each tool call and what it returned, shortened, newest kept past 40,000 characters), and the remaining budget. The run is scored again; `second_chance` in the result keeps the first verdict | -- |
 
-Until then `require-tools` held the verify loop and the duties together, and
-`--second-chance` was an opt-in flag whose refusals were a subset of the verify loop's: in
-experiments-v2's base arm all 40 second-chance rounds fired together with `loop_open` and
-none alone, so the −second-chance arm removed a sentence, not a refusal. Now the second
-chance is a feature (`--add-second-chance`) and owns everything about reaching fail-to-pass -- the refusals, the prompt's
-"before you can stop" paragraph, and `verify`'s "you cannot finish while this is the
-answer" -- while `require-tools` owns what comes after. With the gate off, a test that
-never flips is never asked about coverage or mutation. When the harness's own base run
-finds the file missing, empty, passing or skipped, that message (with the file and the
-run) replaces the `verify` one rather than repeating it.
+For one day (2026-09-28, first revision) the verify loop belonged to the second chance and
+require-tools held only the duties; before that require-tools held the verify loop and the
+duties while `--second-chance` added refusals that, in experiments-v2's base arm, always
+fired together with the loop (40 of 40 rounds). The second chance is now what its name
+says: a second attempt, with the first one's record.
 
-With either gate on, every stop is checked, not just the first. A
+The restart tells the agent why its first attempt was not accepted, including what its
+tests did after the fix (user decision, 2026-09-28). That is the one place the head run
+reaches the agent directly -- the stop checks still say only what the agent could have
+established at base. With the `verify` tool the agent could have learned the same itself.
+
+Model limits, checked 2026-09-28: the gateway serves qwen3-coder with 262,144 input and
+235,929 output tokens; the harness asks for at most 32,000 output tokens per call. In the
+first live runs of this design (597 calls, restarts included) the largest prompt was
+58,738 tokens, the largest completion 1,562, and every call ended with `tool_calls`, none
+with `length`; no v2 run hit a context error. A restart note adds about 16k tokens.
+
+The stop checks' refusals are recorded as `refusals` in the result (`second_chance` before
+2026-09-28) and log as `stop check` in `flow.log`.
+
+With `require-tools` on, every stop is checked, not just the first. A
 stop that leaves a gap -- no test, a file that collects nothing, a test that passes on the
 unfixed code, a finishing loop left open -- is refused with the current reason, and the
 agent carries on with what is left of the budget. It ends when the gap closes, the budget
@@ -541,9 +547,9 @@ where the model's pattern under refusal was *write → verify → finish* every 
   would have cut four conversions. `collects_nothing` joined the limit after an
   `eval5-arms` run spent five rounds on a file that never collected. (From 2026-09-26 to
   -28 the −second-chance arm also capped `loop_open` rounds whose own `verify` showed the
-  same state; with the verify loop now part of the second chance, that arm has no such
-  rounds.)
-- **A test that already flips gets one reminder** (`duties_open`). Refusals over an unanswered `coverage` or
+  same state; every refusal is require-tools' now, so there is one rule.)
+- **A test that already flips gets one reminder** (`duties_open`) -- with scores
+  (`--add-require-tools-with-score-report`), reminders instead go on while the scores rise. Refusals over an unanswered `coverage` or
   `mutation` cannot change its verdict, and two tests were refused five times each while
   already passing.
 
@@ -557,19 +563,17 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   file written after a passing verify had reopened it in two. When every verify went to
   another file the refusal says so and names both files. The `verify` tool itself adds a
   note when its target is not the file carrying the scored name.
-- **A test skipped at base is refused like one passing there** (`skipped_at_base`, under
-  `--add-second-chance`), and counts toward the two-rounds-running limit (`V.UNSCOREABLE`).
+- **A test skipped at base is refused like one passing there** (`skipped_at_base`), and counts toward the two-rounds-running limit (`V.UNSCOREABLE`).
   django-16560 had every test skipped and nothing refused it.
 - **A tree off base stops the loop.** Only reachable without `--add-guard`: a library file the
   agent changed makes `verify` answer "unexpected state" to every call, and the loop kept
   asking for one. Telling the agent to put the file back would be the guard the arm
   removes, so the loop ends and the verdict reports the tree.
-- **The second chance hands back the file and the run.** A second-chance refusal
-  (`no_test` aside) now carries the test file as it is on disk and what running it at
-  base printed, both clipped. The refused v2 runs rewrote a median of five times and
-  converted 1 in 20, working from a file and a run far up the context. Both are base-side
-  facts the agent could fetch itself, so the line `shortfall` keeps is not crossed; the
-  arm without the flag does not get them.
+- **A refusal from the base run hands back the file and the run.** Such a refusal
+  (`no_test` aside) carries the test file as it is on disk and what running it at base
+  printed, both clipped. The refused v2 runs rewrote a median of five times and converted
+  1 in 20, working from a file and a run far up the context. Both are base-side facts the
+  agent could fetch itself, so the line `shortfall` keeps is not crossed.
 
 Replayed over that run's recorded refusals, the last two rules drop 25 of 55 rounds without
 losing any of the three conversions. (One of those three, django-13406, later turned out to
@@ -643,8 +647,9 @@ one arm and kept for another.
 
 `prompts/followups/` holds messages sent *after* the task rather than pieces of it, and
 the table above does not list them because `pieces()` globs `prompts/*.md` and joins
-everything it finds into the opening prompt. There is one: `second-chance.md`, sent by
-`--add-second-chance` when a run stops with nothing a judge could score.
+everything it finds into the opening prompt. There are two: `second-chance.md`, the
+refusal `--add-require-tools` sends when a stop leaves a gap (named for its history), and
+`restart.md`, the second chance's opening after the task in a fresh conversation.
 
 Some of it is load-bearing for the *measurement*: `50-rules.md` forbids editing anything
 but the test file, without which an agent can make any test pass by changing the library
@@ -834,8 +839,9 @@ uv run openhands-f2p --out-root out/nocov --add-verify-tool --add-mutation-tool 
 | `--add-coverage-tool` | add the `coverage` tool: which changed lines the test never runs, with their code and the conditions above them. The harness measures changed-line coverage either way |
 | `--add-mutation-tool` | add the `mutation` tool, which runs the agent's test against small wrong variants of the fix and reports which ones it fails to notice. The harness measures a mutation score either way, on mutants the agent was never shown |
 | `--add-guard` | add the guard: edits the agent makes to files that were already here are reverted between actions. Without it the prohibition stays in the prompt and the audit still reports a dirty tree as BROKEN, but an agent that applies the fix to the library keeps it |
-| `--add-second-chance` | add the stop gate: a stop is sent back while there is no test file, it collects nothing, it passes or is skipped on the unfixed code (the harness runs it), or the agent's own last `verify` of it did not say fail-to-pass. The run carries on with what is left of its budget |
-| `--add-require-tools` | add the duties after fail-to-pass: a test that already flips is sent back once if `coverage` or `mutation` was never called on it, or if the last answer listed missed lines or surviving mutants and the test was not changed since |
+| `--add-require-tools` | add the stop checks: a stop is sent back while there is no test file, it collects nothing, it passes or is skipped on the unfixed code (the harness runs it), or the agent's own last `verify` of it did not say fail-to-pass; once it flips, sent back once more if `coverage` or `mutation` was never called on it or its last answer was left unanswered |
+| `--add-require-tools-with-score-report` | add the stop checks of --add-require-tools, with scores: `coverage` and `mutation` report changed-line coverage and mutation score. Coverage has a target -- a stop is sent back while it is below 100 percent and the last round raised it; the mutation score has none -- its survivors must be answered, not caught at any cost. Implies --add-require-tools |
+| `--add-second-chance` | add a restart: when the run ends without a test that scores fail-to-pass and actions remain, the agent starts a fresh conversation with the task, the record of its first attempt, the test it left (unless the run was BROKEN) and the rest of its budget. The run is scored again at the end |
 
 **which model answers**
 

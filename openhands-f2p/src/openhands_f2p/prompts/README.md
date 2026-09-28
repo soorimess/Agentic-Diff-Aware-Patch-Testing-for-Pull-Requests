@@ -100,7 +100,8 @@ the same conversation, and only in the configurations that ask for one.
 
 | file | job |
 |---|---|
-| `second-chance.md` | refuses a stop that leaves a gap -- sent by the `second-chance` stop gate (no test, collects nothing, passes or is skipped at base, own last `verify` not fail-to-pass) and by `require-tools` (coverage / mutation answers left unanswered on a test that flips). Says only what the agent could have established at base -- never that the test failed against the fix, which exists only in the head run. A base-run reason also carries the test file as it is on disk and what running it at base printed |
+| `second-chance.md` | the stop refusal, sent by `require-tools` (no test, collects nothing, passes or is skipped at base, own last `verify` not fail-to-pass; then coverage / mutation answers left unanswered on a test that flips). Named for its history. Says only what the agent could have established at base -- never that the test failed against the fix, which exists only in the head run. A base-run reason also carries the test file as it is on disk and what running it at base printed |
+| `restart.md` | the second chance (`--add-second-chance`): sent after the task in a fresh conversation, when the run ended without a YES and actions remain -- why the attempt was not accepted (verdict, and each test before and after the fix), the test it left whatever the verdict, the first attempt's record, the remaining budget |
 
 ## A note on what belongs here
 

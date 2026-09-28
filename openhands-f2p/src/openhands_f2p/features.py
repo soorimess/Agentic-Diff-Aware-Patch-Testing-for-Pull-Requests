@@ -70,6 +70,12 @@ class Feature:
     """An add-on: off unless `--add-<name>` asks for it. An input (False) is on unless
     `--no-<name>` withholds it."""
 
+    implies: tuple[str, ...] = ()
+    """Add-ons this one's flag turns on as well, because it is a variant of them rather
+    than a separate component: `--add-require-tools-with-score-report` is require-tools
+    with scores. Part of what the flag means, stated here, not a repair of a missing
+    flag."""
+
     needs: tuple[str, ...] = ()
     """Features that must be on for this one to mean anything."""
 
@@ -108,23 +114,32 @@ FEATURES: tuple[Feature, ...] = (
                      "stays in the prompt and the audit still reports a dirty tree as "
                      "BROKEN, but an agent that applies the fix to the library keeps it",
             added=True),
-    # The two stop checks, one objective each (split 2026-09-28). Until then
-    # `require-tools` held the verify loop as well as the coverage/mutation duties, and
-    # `--second-chance` refused only states the verify loop refused anyway: in
-    # experiments-v2's base arm all 40 second-chance rounds fired together with the loop,
-    # none alone, so removing the second chance removed wording and nothing else.
-    Feature("second-chance", "add the stop gate: a stop is sent back while there is no "
+    # The stop checks and the restart (2026-09-28, second revision). `require-tools` holds
+    # every refusal of a stop: the harness's own base run of the file, the agent's
+    # `verify` loop until fail-to-pass, then the coverage/mutation duties. The second
+    # chance is no longer a refusal at all -- it is a restart after the run has ended
+    # without a test that scores YES.
+    Feature("require-tools", "add the stop checks: a stop is sent back while there is no "
                              "test file, it collects nothing, it passes or is skipped on "
                              "the unfixed code (the harness runs it), or the agent's own "
-                             "last `verify` of it did not say fail-to-pass. The run "
-                             "carries on with what is left of its budget",
-            added=True),
-    Feature("require-tools", "add the duties after fail-to-pass: a test that already "
-                             "flips is sent back once if `coverage` or `mutation` was "
-                             "never called on it, or if the last answer listed missed "
-                             "lines or surviving mutants and the test was not changed "
-                             "since",
+                             "last `verify` of it did not say fail-to-pass; once it "
+                             "flips, sent back once more if `coverage` or `mutation` was "
+                             "never called on it or its last answer was left unanswered",
             added=True, needs=("verify-tool",)),
+    Feature("require-tools-with-score-report",
+            "add the stop checks of --add-require-tools, with scores: `coverage` and "
+            "`mutation` report changed-line coverage and mutation score. Coverage has a "
+            "target -- a stop is sent back while it is below 100 percent and the last "
+            "round raised it; the mutation score has none -- its survivors must be "
+            "answered, not caught at any cost. Implies --add-require-tools",
+            added=True, needs=("verify-tool", "require-tools"),
+            implies=("require-tools",)),
+    Feature("second-chance", "add a restart: when the run ends without a test that scores "
+                             "fail-to-pass and actions remain, the agent starts a fresh "
+                             "conversation with the task, the record of its first "
+                             "attempt, the test it left (unless the run was BROKEN) and "
+                             "the rest of its budget. The run is scored again at the end",
+            added=True),
     Feature("repo-facts", "withhold the briefing on how this project tests: the target "
                           "convention, where a new test file has to live to be "
                           "collected, the neighbouring tests and the test "
@@ -225,6 +240,7 @@ class FeatureSet:
         that fixes it -- no cascade here: a configuration someone typed must be the one
         that runs, and the one the result records."""
         given = {f.name for f in FEATURES if getattr(args, dest(f.name), False)}
+        given |= {i for f in FEATURES if f.name in given for i in f.implies}
         off = {f.name for f in FEATURES if (f.name in given) != f.added}
         problems = []
         for f in FEATURES:
@@ -264,15 +280,17 @@ class FeatureSet:
     def slug(self) -> str:
         """A short name for this configuration, for labelling a series of runs.
 
-        In the terms of the flags: `full` is everything; otherwise the add-ons present
-        (`bare` when there are none) and the inputs withheld -- `verify-tool+guard`,
-        `bare no-issue`, `full no-repo-facts`. Before 2026-09-28 it was `no-<withheld>`,
-        which recorded results still carry."""
-        if self.default:
-            return "full"
-        added = [f.name for f in FEATURES if f.added and f.name in self.on]
-        every = [f.name for f in FEATURES if f.added]
-        head = "full" if added == every else "+".join(added) or "bare"
+        In the terms of the flags: `full` is every add-on; otherwise the add-ons present
+        (`bare` when there are none). A variant add-on (one that `implies` another, like
+        `require-tools-with-score-report`) is a suffix, not part of `full`:
+        `full+require-tools-with-score-report`. Withheld inputs follow: `full no-repo-facts`,
+        `bare no-issue`. Before 2026-09-28 names were `no-<withheld>`, which recorded
+        results still carry."""
+        core = [f.name for f in FEATURES if f.added and not f.implies]
+        variants = [f.name for f in FEATURES if f.added and f.implies and f.name in self.on]
+        present = [n for n in core if n in self.on]
+        head = ("full" if present == core else "+".join(present) or "bare")
+        head += "".join(f"+{v}" for v in variants)
         withheld = [f.name for f in FEATURES if not f.added and f.name in self.off]
         return head + "".join(f" no-{n}" for n in withheld)
 
@@ -285,7 +303,7 @@ class FeatureSet:
 
     def describe(self) -> str:
         """One line for the run header."""
-        if self.default:
+        if not self.off:
             return "everything: every input shown, every add-on added"
         added = [f.name for f in FEATURES if f.added and f.name in self.on]
         withheld = []

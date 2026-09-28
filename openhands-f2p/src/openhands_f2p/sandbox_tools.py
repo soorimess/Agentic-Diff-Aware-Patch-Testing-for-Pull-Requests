@@ -391,10 +391,13 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
     """
 
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
-                 require_tools: bool = False):
+                 require_tools: bool = False, scored: bool = False):
         self.box = box
         self.repo = repo
         self.patch = patch
+        # `--add-require-tools-with-score-report`: the percentage is shown and is a target.
+        # Everywhere else it is withheld, for the reason the class docstring gives.
+        self.scored = scored
         # Whether the run will refuse a stop that leaves this unanswered. When it will,
         # the tool says so itself -- the rule is otherwise only in the prompt the agent
         # read once at the start and in the refusal it gets after deciding it is done.
@@ -418,10 +421,13 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
             return CoverageObservation.from_text(
                 f"could not measure change coverage: {cov.get('reason')}", is_error=True)
 
+        score = (f"Changed-line coverage: {cov['percent']}% ({cov['covered']} of "
+                 f"{cov['executable_changed_lines']} executable changed lines).\n\n"
+                 if self.scored else "")
         if not cov["missed"]:
             return CoverageObservation.from_text(
-                "Your test runs every executable line this pull request changed.")
-        lines = ["Some lines this pull request changed never ran under your test."]
+                score + "Your test runs every executable line this pull request changed.")
+        lines = [score + "Some lines this pull request changed never ran under your test."]
 
         # The source and the guards, not just the numbers. "line 1631 is uncovered" is
         # not something an agent can act on; "line 1631 is `Q *= q.p`, and it sits under
@@ -447,7 +453,12 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         # hatch: some changed lines cannot be reached from a test at all, and an
         # assertion written only to execute one buys a number and costs a reviewer's
         # trust. Saying why a line is unreachable satisfies this as fully as reaching it.
-        if self.require_tools:
+        if self.scored:
+            lines += ["",
+                      "Raise the score: you cannot finish while it is below 100% and your "
+                      "last change raised it. Lines that cannot be reached from a test "
+                      "end this once a change leaves the score where it was."]
+        elif self.require_tools:
             lines += ["",
                       "You cannot finish having read this and changed nothing. Either "
                       "make these lines run, or be able to say which of them is "
@@ -461,7 +472,7 @@ class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, require_tools: bool = False,
-               **params):
+               scored: bool = False, **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="coverage",
@@ -470,7 +481,7 @@ class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
             action_type=CoverageAction,
             observation_type=CoverageObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
-            executor=_Shown(CoverageExecutor(box, repo, patch, log, require_tools),
+            executor=_Shown(CoverageExecutor(box, repo, patch, log, require_tools, scored),
                                   "coverage"),
         )]
 
@@ -499,12 +510,13 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
     """
 
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
-                 n: int = 5, require_tools: bool = False):
+                 n: int = 5, require_tools: bool = False, scored: bool = False):
         self.box = box
         self.repo = repo
         self.patch = patch
         self.log = log if log is not None else []
         self.n = n
+        self.scored = scored
         # See CoverageExecutor: the obligation is stated where the answer arrives.
         self.require_tools = require_tools
 
@@ -531,6 +543,9 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
                          "survived": [m.operator for m in lived]})
         lines = [f"{len(killed)} of {len(got)} wrong variants of the fix were caught by "
                  f"{action.target}."]
+        if self.scored:
+            lines[0] = (f"Mutation score: {round(100.0 * len(killed) / len(got), 1)}% -- "
+                        + lines[0])
         if lived:
             lines += ["", "Not caught -- each of these is a broken version of the fix "
                           "that your test still passes on:"]
@@ -545,7 +560,13 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
                       "observable at all -- say so in one sentence and leave it. Never "
                       "assert on the exact expression a variant changed just to make it "
                       "fail."]
-            if self.require_tools:
+            if self.scored:
+                lines += ["",
+                          "A higher score is better, but not at any cost, and it has no "
+                          "target: answer each survivor -- catch the ones that break "
+                          "behaviour this pull request fixes, give a reason for the ones "
+                          "that do not."]
+            elif self.require_tools:
                 lines += ["",
                           "You cannot finish with these unanswered: change the test for "
                           "the ones that are part of the fix, and give a reason for the "
@@ -561,7 +582,7 @@ class SandboxMutationTool(ToolDefinition[MutationAction, MutationObservation]):
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, n: int = 5,
-               require_tools: bool = False, **params):
+               require_tools: bool = False, scored: bool = False, **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="mutation",
@@ -573,7 +594,8 @@ class SandboxMutationTool(ToolDefinition[MutationAction, MutationObservation]):
             observation_type=MutationObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
             executor=_Shown(MutationExecutor(box, repo, patch, log, n=n,
-                                             require_tools=require_tools), "mutation"),
+                                             require_tools=require_tools, scored=scored),
+                            "mutation"),
         )]
 
 
@@ -604,11 +626,12 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
                  reveal_missed: bool = True, point_at_mutation: bool = False,
                  require_tools: bool = False, scored_name: str = "",
-                 gated: bool = False):
+                 gated: bool = False, scored: bool = False):
         self.box = box
-        # Whether a stop is refused while this says not fail-to-pass -- the stop gate,
-        # `--second-chance`'s since 2026-09-28. `require_tools` now covers only the checks
-        # after fail-to-pass, so it keys the coverage sentence in `_reach` and not this.
+        self.scored = scored
+        # Whether a stop is refused while this says not fail-to-pass -- `require-tools`'
+        # stop checks. Kept apart from `require_tools` only so the two sentences can be
+        # read separately; both come from the same feature.
         self.gated = gated
         # The file name the run is scored on. A verify on any other file answers about
         # that file only: three -repo-facts django runs verified a test under
@@ -787,12 +810,13 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         if not cov.get("measured"):
             return ""
         missed = len(cov.get("missed") or [])
+        pct = (f" Changed-line coverage: {cov['percent']}%." if self.scored else "")
         if not missed:
-            return "\n\nIt runs every line this pull request changed."
+            return "\n\nIt runs every line this pull request changed." + pct
         # Called only with `coverage` registered, so there is always a tool to point at.
         # The duty sentence was keyed on `require_tools` alone and went out in arms with
         # no `coverage`, where no check enforced it -- a rule nothing carried out.
-        head = ("\n\nSome lines this pull request changed never run under this test."
+        head = ("\n\nSome lines this pull request changed never run under this test." + pct
                 + (" You cannot finish having read that and left it alone: either make "
                    "them run, or establish that a line cannot be reached from a test."
                    if self.require_tools else ""))
@@ -813,7 +837,7 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, reveal_missed: bool = True,
                point_at_mutation: bool = False, require_tools: bool = False,
-               scored_name: str = "", gated: bool = False, **params):
+               scored_name: str = "", gated: bool = False, scored: bool = False, **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="verify",
@@ -825,7 +849,7 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
             annotations=ToolAnnotations(readOnlyHint=False),
             executor=_Shown(VerifyExecutor(box, repo, patch, log, reveal_missed,
                                            point_at_mutation, require_tools,
-                                           scored_name, gated), "verify"),
+                                           scored_name, gated, scored), "verify"),
         )]
 
 
@@ -850,6 +874,7 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     briefed = "repo-facts" in features
     guard = "guard" in features
     require_tools = "require-tools" in features
+    scored = "require-tools-with-score-report" in features
     made = {"run": SandboxRunTool.create(box=box, log=log, guard=guard)[0],
             "write_file": SandboxWriteTool.create(box=box, log=log, guard=guard)[0],
             "run_tests": SandboxTestTool.create(box=box, repo=repo, log=log,
@@ -869,13 +894,13 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
             point_at_mutation=("mutation-tool" in features),
             require_tools=require_tools,
             scored_name=Path(gen_path).name if gen_path else "",
-            gated="second-chance" in features)[0]
+            gated="require-tools" in features, scored=scored)[0]
         register_tool("verify", made["verify"])
         names.append("verify")
         if "coverage-tool" in features:
             made["coverage"] = SandboxCoverageTool.create(
                 box=box, repo=repo, patch=patch, log=log,
-                require_tools=require_tools)[0]
+                require_tools=require_tools, scored=scored)[0]
             register_tool("coverage", made["coverage"])
             names.append("coverage")
         # Beside `coverage` and for the same reason: it reports on the lines the change
@@ -884,7 +909,7 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
         if "mutation-tool" in features:
             made["mutation"] = SandboxMutationTool.create(
                 box=box, repo=repo, patch=patch, log=log, n=probe_mutants,
-                require_tools=require_tools)[0]
+                require_tools=require_tools, scored=scored)[0]
             register_tool("mutation", made["mutation"])
             names.append("mutation")
     _check_no_leak(made, box, features)

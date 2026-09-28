@@ -27,6 +27,15 @@ by one{?coverage-tool} — coverage says the line *ran*, this says whether you w
 wrong{/coverage-tool}. That is the difference between a test that documents the fix and a test that
 merely accompanies it.
 
+{?require-tools-with-score-report}
+In this run it also reports your mutation score -- the share of wrong versions caught --
+and that number is one of the two your test is scored on. A higher score is better, but not
+at any cost, and unlike coverage it has no target: many survivors break nothing a test can
+observe, or break something this pull request is not about, and no honest test catches
+them. Try hard, understand each survivor, and decide -- catch it when it breaks behaviour
+the fix is about, leave it when it does not. That judgement is what is being asked for.
+
+{/require-tools-with-score-report}
 Every survivor gets an answer. Read each one as a question, not as a defect to clear:
 
 - **Would a reviewer call the behaviour it breaks part of what this pull request fixes?**

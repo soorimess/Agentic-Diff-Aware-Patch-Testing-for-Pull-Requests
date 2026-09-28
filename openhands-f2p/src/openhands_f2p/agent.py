@@ -119,6 +119,124 @@ def _elsewhere(run: dict, test_file: str) -> str:
     return f" (it wrote {', '.join(tests[:3])} instead)" if tests else ""
 
 
+def _clip(text: str, n: int) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= n else text[:n] + f" ... [{len(text) - n} more characters]"
+
+
+# How much of the first attempt the restart carries. Its record is the agent's own tool
+# calls and the text each returned (`shown` is exactly what the model read), clipped per
+# step and, past the cap, kept from the end: the last steps are the ones nearest the
+# state the restart begins in. About 10k tokens at the cap.
+HISTORY_CHARS = 40000
+
+
+def _history(run: dict) -> str:
+    """The first attempt, step by step, in the terms the agent saw it."""
+    refusals: dict[int, list[str]] = {}
+    for m in run.get("injected") or []:
+        refusals.setdefault(m.get("at_tool", 0), []).append(m.get("text", ""))
+    steps: list[str] = []
+    log = run.get("tool_log") or []
+    for i, e in enumerate(log + [{}]):
+        for text in refusals.get(i, []):
+            steps.append("[the harness refused your stop]\n" + _clip(text, 900))
+        tool = e.get("tool")
+        if not tool:
+            continue
+        if tool == "run":
+            steps.append(f"run: {_clip(e.get('command', ''), 300)}\n"
+                         f"{_clip(e.get('shown') or e.get('output', ''), 700)}")
+        elif tool == "write_file":
+            steps.append(f"write_file {e.get('path', '')} ({e.get('lines', '?')} lines)"
+                         + (f" -- failed: {e['error']}" if e.get("error") else
+                            f"\n{_clip(e.get('content', ''), 1500)}"))
+        elif tool == "guard":
+            steps.append(f"[the harness put back pre-existing files you changed: "
+                         f"{', '.join(e.get('reverted') or [])}]")
+        else:
+            steps.append(f"{tool} {e.get('target', '')}\n"
+                         f"{_clip(e.get('shown') or e.get('error', ''), 900)}")
+    last = next((r for r in reversed(run.get("transcript") or [])
+                 if r.get("action") == "FinishAction"), None)
+    if last:
+        steps.append(f"finish: {_clip(last.get('detail', ''), 500)}")
+    out, total = [], 0
+    for step in reversed(steps):
+        if total + len(step) > HISTORY_CHARS:
+            out.append(f"[... {len(steps) - len(out)} earlier step(s) left out ...]")
+            break
+        out.append(step)
+        total += len(step)
+    return "\n\n".join(reversed(out)) or "(no tool calls)"
+
+
+def _outcomes(side: dict) -> str:
+    """`test_a FAILED, test_b PASSED` -- one side of the harness's run, short names."""
+    if not side:
+        return "nothing collected"
+    shown = [f"{n.split('::')[-1].split(' (')[0]} {st}" for n, st in list(side.items())[:8]]
+    more = f", and {len(side) - 8} more" if len(side) > 8 else ""
+    return ", ".join(shown) + more
+
+
+def _restart_note(run: dict, verdict: V.Verdict, test_file: str, code: str | None,
+                  cap: int, budget: int) -> str:
+    """The second chance's message: why the first attempt was not accepted, the test it
+    left, and its record.
+
+    The test goes in whenever there is one, whatever the verdict -- a BROKEN run's test
+    is still the agent's own work to start from. The reason is the harness's verdict in
+    full, with what each test did before and after the fix (user decision, 2026-09-28):
+    the agent could learn it with `verify`, and at the start of a second attempt it is
+    the most useful thing to know. It is also the one place the head run reaches the
+    agent directly."""
+    why = [f"The harness's verdict was **{verdict.f2p}**: {verdict.why}."]
+    if verdict.base or verdict.head:
+        why.append(f"Before the fix: {_outcomes(verdict.base)}.")
+        why.append(f"After the fix: {_outcomes(verdict.head)}.")
+    if code:
+        block = (f"The test it left at `{test_file}` is still there. As it is on disk now:"
+                 f"\n\n```python\n{_clip(code, 6000)}\n```")
+    else:
+        block = f"It left no test at `{test_file}`."
+    return prompt.followup("restart", used=run.get("actions", 0), cap=cap,
+                           why="\n".join(why), test_block=block,
+                           history=_history(run), budget=budget)
+
+
+def _joined(first: dict, second: dict, note: str) -> dict:
+    """One record for a run the second chance restarted: both conversations in order.
+
+    The tool log and transcript are concatenated so the test path, the audit and the
+    trajectory see the whole run; the restart message joins the injected ones at the
+    point it was sent; refusal rounds of both conversations are kept, each marked with
+    the attempt it belongs to. Status, error and cap are the second conversation's --
+    they describe how the run ended."""
+    at = len(first.get("tool_log") or [])
+    shifted = [{**m, "at_tool": m.get("at_tool", 0) + at}
+               for m in second.get("injected") or []]
+    rounds = ([{**r, "attempt": 1} for r in ((first.get("retry") or {}).get("rounds") or [])]
+              + [{**r, "attempt": 2} for r in ((second.get("retry") or {}).get("rounds") or [])])
+    retry = None
+    if rounds:
+        retry = {"reason": rounds[0]["reason"], "said": rounds[0]["said"],
+                 "budget": rounds[0]["budget"],
+                 "actions": sum(r["actions"] for r in rounds), "rounds": rounds}
+    invented = dict(first.get("invented") or {})
+    for k, v in (second.get("invented") or {}).items():
+        invented[k] = invented.get(k, 0) + v
+    return {**second,
+            "tool_log": (first.get("tool_log") or []) + (second.get("tool_log") or []),
+            "transcript": (first.get("transcript") or []) + (second.get("transcript") or []),
+            "injected": ((first.get("injected") or [])
+                         + [{"at_tool": at, "after_action": first.get("actions", 0),
+                             "reason": "restart", "text": note}] + shifted),
+            "retry": retry, "invented": invented,
+            "actions": first.get("actions", 0) + second.get("actions", 0),
+            "task": first.get("task")}
+
+
 # How many times a stop may be refused. The budget bounds a run anyway; this bounds the
 # number of times the same kind of message is appended to the context, and a run still
 # open after five refusals has usually stopped moving.
@@ -136,7 +254,14 @@ MAX_PASSES_AT_BASE_ROUNDS = 2
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
               out_dir: Path, features: FeatureSet, n_mutants: int = 0,
               model: str | None = None, provider: str | None = None,
-              temperature: float | None = M.DEFAULT_TEMPERATURE) -> dict:
+              temperature: float | None = M.DEFAULT_TEMPERATURE,
+              restart_note: str = "") -> dict:
+    """One conversation with the agent, and the stop checks that answer its stops.
+
+    `restart_note` makes this the second chance's conversation: a fresh one, sent the
+    same task with the note after it -- the record of the first attempt, the test it
+    left, the budget that remains (see `_restart_note`). `max_iterations` is then what
+    remains, not the run's cap."""
     from openhands.sdk import Agent, Conversation, Tool
     from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
 
@@ -229,14 +354,18 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     # trajectory.json covers the same events in the format the visualizer wants -- but
     # dropping persistence_dir entirely makes the SDK warn about an in-memory store on
     # every run, so it is redirected rather than disabled.
+    # Its own store for the restart, so the SDK cannot pick the first conversation back up.
     conversation = Conversation(agent=agent, workspace=str(CACHE / "ws"),
                                 persistence_dir=str(CACHE / "openhands"
-                                                    / instance["instance_id"]),
+                                                    / (instance["instance_id"]
+                                                       + ("-restart" if restart_note else ""))),
                                 callbacks=[on_event],
                                 max_iteration_per_run=max_iterations, visualizer=None)
     flow.record(flow.AGENT, "tools registered", ", ".join(names))
-    flow.record(flow.AGENT, "task sent", f"{len(task)} chars, max_iter={max_iterations}")
-    conversation.send_message(task)
+    opening = task + (f"\n\n{restart_note}" if restart_note else "")
+    flow.record(flow.AGENT, "restart sent" if restart_note else "task sent",
+                f"{len(opening)} chars, max_iter={max_iterations}")
+    conversation.send_message(opening)
     # Every message the harness sends after the task, in order. The trajectory export is
     # rebuilt from disk and used to show the opening task alone -- so a run that was
     # refused twice read, in the trajectory, as an agent that simply kept going.
@@ -271,20 +400,19 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     # terminal action. It ends when the gap closes, the budget is spent, the round cap is
     # reached, or the agent stops doing anything between refusals.
     #
-    # Two gates with one objective each (since 2026-09-28). `second-chance` refuses a stop
-    # whose test is not fail-to-pass yet: `V.shortfall` (the harness runs the file at
-    # base) and `V.verify_gap` (the agent's own last `verify`). `require-tools` refuses
-    # one whose test flips but whose `coverage` / `mutation` answers were left unanswered
-    # (`V.duty_gap`). All of them say only base-observable facts and return None when
-    # there is nothing to say.
-    second_chance = "second-chance" in features
+    # All of it is `require-tools` (2026-09-28): `V.shortfall` (the harness runs the file
+    # at base), `V.verify_gap` (the agent's own last `verify`), then `V.duty_gap`
+    # (coverage and mutation answers once it flips). All of them say only base-observable
+    # facts and return None when there is nothing to say. The second chance is not here:
+    # it is a restart after the run is scored, in `do_pr`.
+    scored = "require-tools-with-score-report" in features
     retry: dict | None = None
     # The cap is a fact about the first stop. Counting the continuation's actions into it
     # would report a run as capped because the two stretches together passed the limit,
     # when neither did.
     first_run_actions = sum(counts.values())
     rounds: list[dict] = []
-    if (second_chance or "require-tools" in features) and error is None:
+    if "require-tools" in features and error is None:
         while True:
             spent = sum(counts.values())
             left = max_iterations - spent
@@ -292,17 +420,20 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             # Independent grounds for refusing the stop, each with its own flag. They share
             # one message because sending two would spend two turns saying one thing.
             gaps: list[tuple[str, str]] = []
-            if left > 0 and second_chance:
+            if left > 0:
                 # The harness's own base run first: when it finds the file missing, empty
                 # or passing, that is the whole story, told with the file and its output,
-                # and the agent's last `verify` would only repeat it.
-                found = V.shortfall(box, instance, rel)
-                if found is None and "verify-tool" in features:
-                    found = V.verify_gap(tool_log, rel)
-                if found:
-                    gaps.append(found)
-            if left > 0 and "require-tools" in features:
-                found = V.duty_gap(tool_log, instruments(features), rel)
+                # and the agent's last `verify` would only repeat it. The duties only
+                # start once the test flips by its own verify.
+                # Duties already sent once: the mutation duty is sent once even when
+                # scores keep the coverage duty open round after round.
+                reminded = frozenset(
+                    n for r in rounds if r["reason"].startswith("duties_open[")
+                    for n in r["reason"][len("duties_open["):-1].split("+"))
+                found = (V.shortfall(box, instance, rel)
+                         or V.verify_gap(tool_log, rel)
+                         or V.duty_gap(tool_log, instruments(features), rel, scored=scored,
+                                       reminded=reminded))
                 if found:
                     gaps.append(found)
             # A test that asserts on the project's source text rather than on behaviour.
@@ -323,7 +454,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             gap = None if not gaps else (
                 "+".join(r for r, _ in gaps), "\n\n".join(say for _, say in gaps))
             if left <= 0:
-                flow.record(flow.AGENT, "second chance", "no budget left at the cap")
+                flow.record(flow.AGENT, "stop check", "no budget left at the cap")
                 break
             # A tree off base -- only reachable without --add-guard, where a library edit is
             # left in place -- cannot be verified by the agent or scored by the harness.
@@ -332,24 +463,24 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             # put the file back would be the guard the arm removes, so the loop stops and
             # the verdict reports the tree.
             if gap is not None and box.ensure_base(instance["patch"]) != "base":
-                flow.record(flow.AGENT, "second chance",
+                flow.record(flow.AGENT, "stop check",
                             "tree not at base (a pre-existing file was changed); "
                             "not refusing")
                 break
             if gap is None:
-                flow.record(flow.AGENT, "second chance",
+                flow.record(flow.AGENT, "stop check",
                             "not needed" if not rounds else
                             f"gap closed after {len(rounds)} refusal(s)")
                 break
             if len(rounds) >= MAX_REFUSALS:
-                flow.record(flow.AGENT, "second chance",
+                flow.record(flow.AGENT, "stop check",
                             f"stopped refusing after {MAX_REFUSALS} rounds; gap still open")
                 break
             # Two rounds in a row where the agent did nothing but stop again. Refusing a
             # third time buys another identical stop and another few thousand tokens of
             # the same message; the gap stays recorded in `rounds`.
             if len(rounds) >= 2 and rounds[-1]["actions"] <= 1 and rounds[-2]["actions"] <= 1:
-                flow.record(flow.AGENT, "second chance",
+                flow.record(flow.AGENT, "stop check",
                             "agent stopped acting between refusals; not refusing again")
                 break
 
@@ -359,8 +490,11 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             # refusals cannot change the verdict and only spend tokens -- xarray-7233 and
             # scikit-learn-10908 were refused five times each while already passing.
             settled = V.verify_settled(tool_log, rel)
-            if settled and reason == "duties_open" and any(r.get("settled") for r in rounds):
-                flow.record(flow.AGENT, "second chance",
+            # With scores the reminders go on while the scores move (`V._plateau` ends
+            # them), so the one-reminder rule is the plain duties' only.
+            if (settled and reason.startswith("duties_open") and not scored
+                    and any(r.get("settled") for r in rounds)):
+                flow.record(flow.AGENT, "stop check",
                             "test already fail-to-pass; its one reminder about the "
                             "remaining checks was given; not refusing again")
                 break
@@ -376,7 +510,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                     break
                 streak += 1
             if stuck(reason) and streak >= MAX_PASSES_AT_BASE_ROUNDS:
-                flow.record(flow.AGENT, "second chance",
+                flow.record(flow.AGENT, "stop check",
                             f"not scoreable (passes or is skipped at base, or collects "
                             f"nothing) after {streak} refusals running; not refusing again")
                 break
@@ -391,7 +525,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             nudge = prompt.followup("second-chance", shortfall=say,
                                     recap=_recap(counts, tool_log), test_file=rel,
                                     budget=left, cap=max_iterations)
-            flow.record(flow.AGENT, "second chance",
+            flow.record(flow.AGENT, "stop check",
                         f"round {len(rounds) + 1}: {reason}; {left} actions left")
             if not rounds:
                 field("retry", f"{reason} -- carrying on with {left} of "
@@ -416,7 +550,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             after = sum(counts.values())
             rounds.append({"reason": reason, "said": say, "budget": left,
                            "actions": after - before, "settled": settled})
-            flow.record(flow.AGENT, "second chance done",
+            flow.record(flow.AGENT, "stop check done",
                         f"round {len(rounds)}: {after - before} more actions, {status}")
             if error:
                 break
@@ -456,7 +590,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             "injected": injected,
             "transcript": transcript,
             "tool_log": tool_log, "model": model, "temperature": temperature,
-            "task": task,
+            "task": task, "opening": opening,
             "actions": sum(1 for r in transcript if "action" in r)}
 
 
@@ -638,142 +772,169 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
 
         run = run_agent(inst, box, test_file, max_iterations, d, features, n_mutants,
                         model=model, provider=provider, temperature=temperature)
-        # Resolved before `audit`, which flags every write that is not the test file:
-        # left unresolved, the agent's own chosen path would be reported as a stray
-        # write on every run of this configuration.
-        #
-        # In every configuration, not only when the agent chose the directory: the
-        # refusal loop and the agent's own `verify` already follow the file wherever it
-        # was written, and scoring a different path made them disagree. django-14915
-        # (experiments-v2) moved its test into tests/forms_tests/tests/, verified it
-        # there as fail-to-pass, had its stop accepted on that file -- and was scored
-        # "wrote no test" at the path it had been given. `test_path_default` keeps the
-        # path the harness named.
         default_path = test_file
-        test_file = V.written_test_path(box, run["tool_log"], default_path)
-        if "repo-facts" not in features or test_file != default_path:
-            flow.record(flow.AGENT, "test path chosen", test_file)
-            field("chose", f"{test_file}"
-                           + ("" if test_file == default_path
-                              else f"   (the harness would have used {default_path})"))
-        code = box.read(test_file)
-        flow.record(flow.AGENT, "test written" if code else "no test",
-                    f"{test_file} ({code.count(chr(10)) + 1} lines)" if code
-                    else f"nothing at {test_file}")
-        checks = audit(box, run["tool_log"], test_file)
-        flow.record(flow.AUDIT, "isolation",
-                    f"dns={checks['isolation']['dns_resolves']} "
-                    f"git={checks['isolation']['git_present']} vcs={checks['vcs'][:40]}")
-        flow.record(flow.AUDIT, "agent behaviour",
-                    f"network_attempts={checks['network_attempts'] or 'none'}  "
-                    f"stray_writes={checks['files_written_outside_test'] or 'none'}  "
-                    f"tree_changed={checks['tree_changed'] or 'nothing but the test'}")
 
-        starved = budget_exhausted(d) if run["actions"] == 0 else None
-        if code is None and starved:
-            verdict = V.Verdict(pr["id"], "BROKEN",
-                                f"the model spent its whole output budget on reasoning "
-                                f"({starved['reasoning_tokens']} of "
-                                f"{starved['completion_tokens']} tokens) and had none "
-                                f"left to call a tool -- raise max_output_tokens on this "
-                                f"model's entry in models.json")
-        elif code is None and run.get("error"):
-            verdict = V.Verdict(pr["id"], "BROKEN",
-                                f"the agent run failed before a test was written: "
-                                f"{run['error'][:180]}")
-        elif code is None:
-            verdict = V.Verdict(pr["id"], "NO",
-                                ("the agent never called a tool -- the model returned no "
-                                 "tool_calls, so OpenHands read its reply as final"
-                                 if run["actions"] == 0
-                                 else (f"hit the {max_iterations}-action cap after "
-                                       f"{run['actions']} actions without writing a test"
-                                       if run.get("capped") else
-                                       f"took {run['actions']} action(s) but wrote no "
-                                       f"test at {test_file}" + _elsewhere(run, test_file))))
-        else:
-            (d / Path(test_file).name).write_text(code)
-            field("test", f"{code.count(chr(10)) + 1} lines written")
-            verdict = V.verify(inst, box, generated_test=code, quiet=True,
-                               test_path=test_file)
-            # A run stopped at the cap still has its test scored, and the verdict then
-            # reads like a considered judgement -- "passes before the fix too" -- with
-            # nothing to say the agent was cut off mid-revision. `sphinx-10614` recorded
-            # exactly that at 100 actions, having written once and verified once, where
-            # the runs that pass it write three or four times. The verdict stays what the
-            # test earned; the reason says the test may not be finished.
-            # Cut off by something outside the agent -- the gateway ran out of credit,
-            # a rate limit, a 5xx, a dropped connection. The test on disk is whatever the
-            # agent had when the call failed, and the stop was never checked, so scoring
-            # it records the outage as a finding about the instance. experiments-v2's
-            # first pass lost 35 runs this way to an exhausted OpenRouter key (22 scored
-            # NO, 13 YES) before this line existed; v1 had none. BROKEN is what
-            # --retry-broken picks up. A context window overflow is not in this list: it
-            # is the run's own length, like the action cap, and keeps its verdict.
-            if run.get("error") and _outside_failure(run["error"]):
+        def score(run: dict) -> tuple:
+            """Resolve the test, audit the tree and decide the verdict for `run` as it
+            stands. Called once, and again after a second chance."""
+            # Resolved before `audit`, which flags every write that is not the test file:
+            # left unresolved, the agent's own chosen path would be reported as a stray
+            # write on every run of this configuration.
+            #
+            # In every configuration, not only when the agent chose the directory: the
+            # refusal loop and the agent's own `verify` already follow the file wherever
+            # it was written, and scoring a different path made them disagree.
+            # django-14915 (experiments-v2) moved its test into tests/forms_tests/tests/,
+            # verified it there as fail-to-pass, had its stop accepted on that file -- and
+            # was scored "wrote no test" at the path it had been given.
+            # `test_path_default` keeps the path the harness named.
+            test_file = V.written_test_path(box, run["tool_log"], default_path)
+            if "repo-facts" not in features or test_file != default_path:
+                flow.record(flow.AGENT, "test path chosen", test_file)
+                field("chose", f"{test_file}"
+                               + ("" if test_file == default_path
+                                  else f"   (the harness would have used {default_path})"))
+            code = box.read(test_file)
+            flow.record(flow.AGENT, "test written" if code else "no test",
+                        f"{test_file} ({code.count(chr(10)) + 1} lines)" if code
+                        else f"nothing at {test_file}")
+            checks = audit(box, run["tool_log"], test_file)
+            flow.record(flow.AUDIT, "isolation",
+                        f"dns={checks['isolation']['dns_resolves']} "
+                        f"git={checks['isolation']['git_present']} vcs={checks['vcs'][:40]}")
+            flow.record(flow.AUDIT, "agent behaviour",
+                        f"network_attempts={checks['network_attempts'] or 'none'}  "
+                        f"stray_writes={checks['files_written_outside_test'] or 'none'}  "
+                        f"tree_changed={checks['tree_changed'] or 'nothing but the test'}")
+
+            starved = budget_exhausted(d) if run["actions"] == 0 else None
+            if code is None and starved:
+                verdict = V.Verdict(pr["id"], "BROKEN",
+                                    f"the model spent its whole output budget on reasoning "
+                                    f"({starved['reasoning_tokens']} of "
+                                    f"{starved['completion_tokens']} tokens) and had none "
+                                    f"left to call a tool -- raise max_output_tokens on this "
+                                    f"model's entry in models.json")
+            elif code is None and run.get("error"):
+                verdict = V.Verdict(pr["id"], "BROKEN",
+                                    f"the agent run failed before a test was written: "
+                                    f"{run['error'][:180]}")
+            elif code is None:
+                verdict = V.Verdict(pr["id"], "NO",
+                                    ("the agent never called a tool -- the model returned no "
+                                     "tool_calls, so OpenHands read its reply as final"
+                                     if run["actions"] == 0
+                                     else (f"hit the {max_iterations}-action cap after "
+                                           f"{run['actions']} actions without writing a test"
+                                           if run.get("capped") else
+                                           f"took {run['actions']} action(s) but wrote no "
+                                           f"test at {test_file}" + _elsewhere(run, test_file))))
+            else:
+                (d / Path(test_file).name).write_text(code)
+                field("test", f"{code.count(chr(10)) + 1} lines written")
+                verdict = V.verify(inst, box, generated_test=code, quiet=True,
+                                   test_path=test_file)
+                # Cut off by something outside the agent -- the gateway ran out of credit,
+                # a rate limit, a 5xx, a dropped connection. The test on disk is whatever
+                # the agent had when the call failed, and the stop was never checked, so
+                # scoring it records the outage as a finding about the instance.
+                # experiments-v2's first pass lost 35 runs this way to an exhausted
+                # OpenRouter key (22 scored NO, 13 YES) before this line existed. BROKEN is
+                # what --retry-broken picks up. A context window overflow is not in this
+                # list: it is the run's own length, like the action cap, and keeps its
+                # verdict.
+                if run.get("error") and _outside_failure(run["error"]):
+                    verdict = replace(
+                        verdict, f2p="BROKEN",
+                        why=f"the agent was cut off after {run['actions']} actions by a "
+                            f"failure outside it ({run['error'][:160]}); the test on disk "
+                            f"scored {verdict.f2p}, but it is not the agent's finished answer")
+                # A run stopped at the cap still has its test scored, and the verdict then
+                # reads like a considered judgement with nothing to say the agent was cut
+                # off mid-revision (`sphinx-10614` at 100 actions). The verdict stays what
+                # the test earned; the reason says the test may not be finished.
+                if run.get("capped") and verdict.f2p != "YES":
+                    verdict = replace(
+                        verdict,
+                        why=f"{verdict.why} -- and the agent was stopped at the "
+                            f"{max_iterations}-action cap, so this may be an unfinished test "
+                            f"rather than a wrong one")
+
+                def tally(o):
+                    c = {}
+                    for st in o.values():
+                        c[st] = c.get(st, 0) + 1
+                    return ", ".join(f"{k.lower()}={v}" for k, v in sorted(c.items())) \
+                        or "nothing collected"
+                field("verify", f"before fix: {tally(verdict.base)}"
+                                f"   ->   after fix: {tally(verdict.head)}")
+                cov = verdict.changed_line_coverage
+                if cov.get("measured"):
+                    field("coverage", f"{cov['percent']}% of the lines this PR changed "
+                                      f"({cov['covered']}/{cov['executable_changed_lines']})"
+                                      + (f"   missed {cov['missed'][:3]}"
+                                         if cov["missed"] else ""))
+                elif cov:
+                    field("coverage", f"not measured: {cov['reason']}")
+
+            # Creating files is allowed; editing one that was already here is not, and
+            # this is the check that lets the first be true safely. A new file is present
+            # in the before run and the after run alike, so it cannot manufacture a flip.
+            # An edited one can. Outside the branch that scores a written test, so an agent
+            # that wrote none and patched the library instead is caught too
+            # (`scikit-learn-10297` without the guard).
+            if checks["tree_altered"]:
                 verdict = replace(
                     verdict, f2p="BROKEN",
-                    why=f"the agent was cut off after {run['actions']} actions by a failure "
-                        f"outside it ({run['error'][:160]}); the test on disk scored "
-                        f"{verdict.f2p}, but it is not the agent's finished answer")
-            if run.get("capped") and verdict.f2p != "YES":
-                verdict = replace(
-                    verdict,
-                    why=f"{verdict.why} -- and the agent was stopped at the "
-                        f"{max_iterations}-action cap, so this may be an unfinished test "
-                        f"rather than a wrong one")
-            def tally(o):
-                c = {}
-                for st in o.values():
-                    c[st] = c.get(st, 0) + 1
-                return ", ".join(f"{k.lower()}={v}" for k, v in sorted(c.items())) \
-                    or "nothing collected"
-            field("verify", f"before fix: {tally(verdict.base)}"
-                            f"   ->   after fix: {tally(verdict.head)}")
-            cov = verdict.changed_line_coverage
-            if cov.get("measured"):
-                field("coverage", f"{cov['percent']}% of the lines this PR changed "
-                                  f"({cov['covered']}/{cov['executable_changed_lines']})"
-                                  + (f"   missed {cov['missed'][:3]}"
-                                     if cov["missed"] else ""))
-            elif cov:
-                field("coverage", f"not measured: {cov['reason']}")
-            # Inside the sandbox, because every mutant has to be applied to the code and
-            # the test run against it -- the container is gone a few lines below. After
-            # the verdict, because a test that does not flip cannot be asked what it
-            # would notice about a wrong fix. And it reads the developer's test, so it
-            # belongs on this side of the line with the judge, never before it.
-            # `not tree_altered` because the void below will overturn this verdict
-            # anyway, and mutation is twenty test-suite runs spent on a result that
-            # is about to stop existing.
-            if n_mutants and verdict.f2p == "YES" and not checks["tree_altered"]:
-                mut = mutants.measure(inst, box, code, test_file, n_mutants,
-                                      out_dir=d, quiet=True,
-                                      held_out=("mutation-tool" in features))
-                mutation = mut.as_dict()
-                field("mutants", mutants.line(mutation))
+                    why=f"the agent changed {len(checks['tree_altered'])} file(s) that "
+                        f"already existed, so the before-the-fix run is not a fact about "
+                        f"this pull request: {', '.join(checks['tree_altered'][:4])}")
+                field("audit", f"VOID -- pre-existing files changed: "
+                               f"{', '.join(checks['tree_altered'][:4])}")
+            return test_file, code, checks, verdict
 
-        # Creating files is allowed; editing one that was already here is not, and this
-        # is the check that lets the first be true safely. A new file is present in the
-        # before run and the after run alike, so it cannot manufacture a flip. An edited
-        # one can -- library source most obviously, but an edited fixture also risks
-        # rejecting the maintainer's test when it is applied later. The instruction says
-        # so; an instruction cannot be what the measurement rests on.
-        #
-        # Out here rather than beside the verify call, where it used to sit: that branch
-        # runs only when a test was written, so an agent that wrote none and patched the
-        # library instead fell through to an ordinary NO and the audit missed exactly the
-        # case it exists to catch. `scikit-learn-10297` did that without the guard -- it
-        # edited sklearn/linear_model/ridge.py, wrote no test, and was recorded as a
-        # plain failure. The tree is the tree whether or not a test came out of the run.
-        if checks["tree_altered"]:
-            verdict = replace(
-                verdict, f2p="BROKEN",
-                why=f"the agent changed {len(checks['tree_altered'])} file(s) that "
-                    f"already existed, so the before-the-fix run is not a fact about "
-                    f"this pull request: {', '.join(checks['tree_altered'][:4])}")
-            field("audit", f"VOID -- pre-existing files changed: "
-                           f"{', '.join(checks['tree_altered'][:4])}")
+        test_file, code, checks, verdict = score(run)
+
+        # The second chance: a restart, not a refusal (2026-09-28). A run that ended
+        # without a YES, with actions left and not cut off by an outside failure, gets a
+        # fresh conversation carrying the task, the record of its first attempt, the test
+        # it left (unless BROKEN) and the rest of its budget -- then is scored again. The
+        # first verdict is kept in `second_chance`.
+        restart = None
+        remaining = max_iterations - run["actions"]
+        if ("second-chance" in features and verdict.f2p != "YES"
+                and not (run.get("error") and _outside_failure(run["error"]))):
+            restart = {"first_verdict": verdict.f2p, "first_why": verdict.why,
+                       "first_actions": run["actions"], "budget": max(remaining, 0),
+                       "first_tool_calls": len(run["tool_log"])}
+            if remaining <= 0:
+                restart["skipped"] = "no actions left"
+                flow.record(flow.AGENT, "second chance", "no actions left for a restart")
+            else:
+                note = _restart_note(run, verdict, test_file, code, max_iterations, remaining)
+                field("restart", f"{verdict.f2p} after {run['actions']} actions -- starting "
+                                 f"again with {remaining} left")
+                again = run_agent(inst, box, default_path, remaining, d, features, n_mutants,
+                                  model=model, provider=provider, temperature=temperature,
+                                  restart_note=note)
+                run = _joined(run, again, note)
+                test_file, code, checks, verdict = score(run)
+                restart["final_verdict"] = verdict.f2p
+                flow.record(flow.AGENT, "second chance done",
+                            f"{restart['first_verdict']} -> {verdict.f2p}")
+
+        # Inside the sandbox, because every mutant has to be applied to the code and the
+        # test run against it -- the container is gone a few lines below. After the final
+        # verdict, because a test that does not flip cannot be asked what it would notice
+        # about a wrong fix. And it reads the developer's test, so it belongs on this side
+        # of the line with the judge, never before it. `not tree_altered` because such a
+        # verdict is void anyway.
+        if n_mutants and code and verdict.f2p == "YES" and not checks["tree_altered"]:
+            mut = mutants.measure(inst, box, code, test_file, n_mutants,
+                                  out_dir=d, quiet=True,
+                                  held_out=("mutation-tool" in features))
+            mutation = mut.as_dict()
+            field("mutants", mutants.line(mutation))
 
     iso = checks["isolation"]
     field("audit", f"network {checks['network_attempts'] or 'none'}, "
@@ -816,10 +977,13 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               # Parameters the model invented and the schema dropped. Before this was
               # tolerated the same calls were hard errors -- see ToolArgs.
               "invented_parameters": run.get("invented") or {},
-              # None when the flag was off or nothing base-observable was wrong. Its
-              # presence is what separates a second-chance arm from a control one in a
-              # table, so it is recorded even when the retry changed nothing.
-              "second_chance": run.get("retry"),
+              # Every stop require-tools refused, round by round (both conversations
+              # when the run was restarted); None when none was. Before 2026-09-28 this
+              # record was called `second_chance`.
+              "refusals": run.get("retry"),
+              # The restart: the first verdict and why, the budget it had, and the final
+              # verdict; None when the second chance was off or not needed.
+              "second_chance": restart,
               # Edits to files that existed at base -- the guard's subject. Scratch
               # files the agent created for itself are listed separately.
               "files_edited_outside_test": checks["preexisting_written"],

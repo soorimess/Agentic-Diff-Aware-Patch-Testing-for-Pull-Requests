@@ -418,8 +418,8 @@ def _last(tool_log: list, tool: str, rel: str) -> tuple[int, dict] | None:
 def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
     """Whether the agent's own `verify` has established fail-to-pass for the file on disk.
 
-    The verify half of the stop gate, which `--second-chance` owns since 2026-09-28 (it
-    was `require-tools`' until then; see `features.py`). Judged by what `verify` last
+    Part of `require-tools`' stop checks (for one day, 2026-09-28, the second chance's;
+    see `features.py`). Judged by what `verify` last
     *said*, not by whether it was called: the first version of this check counted calls,
     and four of five failures in the run that introduced it ended immediately after
     `verify` reported NOT fail-to-pass -- requirement satisfied, goal unmet -- while
@@ -479,81 +479,136 @@ def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
                            f"* {say}")
 
 
-def duty_gap(tool_log: list, instruments: tuple[str, ...],
-             rel: str) -> tuple[str, str] | None:
+def _plateau(tool_log: list, tool: str, rel: str, score) -> bool:
+    """Whether the agent already tried to raise this score and could not: an earlier call
+    of `tool` on the scored file gave the same score, and the test was written between
+    that call and the last one. A score that stays put after a real attempt is an
+    answer; asking again would only ask for padding."""
+    calls = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
+             and same_file(e.get("target", ""), rel)]
+    if len(calls) < 2:
+        return False
+    (i_prev, prev), (i_last, _) = calls[-2], calls[-1]
+    tried = any(e.get("tool") == "write_file" and same_file(e.get("path", ""), rel)
+                for e in tool_log[i_prev + 1:i_last])
+    return tried and score(prev) == score(calls[-1][1])
+
+
+def coverage_score(e: dict) -> float | None:
+    cov = e.get("result") or {}
+    return cov.get("percent") if cov.get("measured") else None
+
+
+def mutation_score(e: dict) -> float | None:
+    return round(100.0 * e["killed"] / e["total"], 1) if e.get("total") else None
+
+
+def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
+             scored: bool = False,
+             reminded: frozenset = frozenset()) -> tuple[str, str] | None:
     """Whether the checks that come after fail-to-pass were answered. `require-tools`.
 
     Only for a test that already flips by its own last `verify` -- until then `coverage`
     and `mutation` are questions about a test that does not exist yet, and asking them
     early told the qwen run to go measure something it had not built: eight such calls
     before `verify` had ever flipped, one of which `mutation` answered with "your test
-    does not pass on the fixed code yet". Without the stop gate (no `--add-second-chance`) a
-    test that never flips is therefore never asked about either.
+    does not pass on the fixed code yet".
 
     `coverage` must have been called, and if it last listed missed lines the agent must
-               have edited the test after seeing them. The agent is shown lines, never a
-               percentage: a number it is told to push up stops measuring anything. What
-               is enforced is that missed lines were answered rather than read and
-               passed over; a line can be genuinely unreachable, and saying why is an
-               answer.
+               have edited the test after seeing them. What is enforced is that missed
+               lines were answered rather than read and passed over; a line can be
+               genuinely unreachable, and saying why is an answer.
     `mutation` must have been called, and if it last reported survivors the agent must
                have edited the test after seeing them (since 2026-09-28; before, calling
                it was all). In experiments-v2 34 of 47 base runs saw survivors and only 3
                of the 23 that called it again had fewer; the held-out mutation score
                matched the arm without the tool. A survivor outside what the change fixes
-               is answered by saying so -- the refusal loop sends this reminder once for
-               a test that already flips, and the next stop is accepted. Read
-               `astropy-13398` before hardening that: mutation reported 0 of 10 killed,
-               the agent added a second test to answer it, the new test failed on both
-               sides, and a file whose first test flipped correctly scored NO.
+               is answered by saying so: the loop sends this reminder once for a test that
+               already flips, and the next stop is accepted. Read `astropy-13398` before
+               hardening that: mutation reported 0 of 10 killed, the agent added a second
+               test to answer it, the new test failed on both sides, and a file whose
+               first test flipped correctly scored NO.
+
+    `scored` (`--add-require-tools-with-score-report`): the agent is shown both scores.
+    Coverage then has a target -- below 100% is open whether or not the test was edited,
+    until an attempt to raise it leaves it where it was (`_plateau`), which is the agent's
+    answer -- and the loop keeps refusing while it moves. Mutation does not (user,
+    2026-09-28): many survivors cannot be caught by any honest test, so its score is shown
+    and its survivors must be answered as in the plain duty, once, and then the agent's
+    judgement stands. `reminded` names the duties already sent once, so a scored run is
+    not re-asked about mutation on every round the coverage duty keeps open.
+
+    The reason is `duties_open[coverage+mutation]`, naming the open duties.
 
     Pure, reads only the agent's own record. Returns `(reason, what_to_say)` or `None`.
     """
     if not verify_settled(tool_log, rel):
         return None
-    gaps = []
+    gaps: list[tuple[str, str]] = []
     if "coverage" in instruments:
         got = _last(tool_log, "coverage", rel)
         if got is None:
-            gaps.append("Your test is fail-to-pass. Now call `coverage`: how much of the "
-                        "change it reaches is the next question, and it is currently "
-                        "unknown.")
+            gaps.append(("coverage",
+                         "Your test is fail-to-pass. Now call `coverage`: how much of the "
+                         "change it reaches is the next question, and it is currently "
+                         "unknown."))
         else:
             i, e = got
             cov = e.get("result") or {}
-            if cov.get("measured") and cov.get("missed") and not wrote_test_after(tool_log, i, rel):
-                gaps.append("`coverage` last listed lines of the change your test never "
-                            "runs, and you changed nothing after reading it. Keep "
-                            "changing the test and calling `coverage` until every changed "
-                            "line runs or you can say why a line is out of reach. Work the "
-                            "missed lines one at a time: decide for each whether it is the "
-                            "same behaviour by another route, a separate case that "
-                            "deserves its own test, or genuinely outside this test -- then "
-                            "act on that and call `coverage` again. An assertion added only "
-                            "to execute a line is worth less than an honest reason it stays "
-                            "unreached.")
+            pct = coverage_score(e)
+            if (scored and pct is not None and pct < 100
+                    and not _plateau(tool_log, "coverage", rel, coverage_score)):
+                gaps.append(("coverage",
+                             f"Changed-line coverage is {pct}% ({cov.get('covered')} of "
+                             f"{cov.get('executable_changed_lines')} lines). Raise it: work "
+                             f"the missed lines `coverage` listed, reach each through the "
+                             f"behaviour you assert, and call `verify` and `coverage` again. "
+                             f"If a line cannot be reached from a test, a change that leaves "
+                             f"the score where it was ends this; an assertion-free call added "
+                             f"only to run a line does not count as raising it."))
+            elif (not scored and cov.get("measured") and cov.get("missed")
+                  and not wrote_test_after(tool_log, i, rel)):
+                gaps.append(("coverage",
+                             "`coverage` last listed lines of the change your test never "
+                             "runs, and you changed nothing after reading it. Keep changing "
+                             "the test and calling `coverage` until every changed line runs "
+                             "or you can say why a line is out of reach. Work the missed "
+                             "lines one at a time: decide for each whether it is the same "
+                             "behaviour by another route, a separate case that deserves its "
+                             "own test, or genuinely outside this test -- then act on that "
+                             "and call `coverage` again. An assertion added only to execute "
+                             "a line is worth less than an honest reason it stays "
+                             "unreached."))
     if "mutation" in instruments:
         got = _last(tool_log, "mutation", rel)
         if got is None:
-            gaps.append("You never called `mutation`. Call it and answer each survivor: "
-                        "each is a wrong version of this change your test cannot tell "
-                        "from the right one.")
+            gaps.append(("mutation",
+                         "You never called `mutation`. Call it and answer each survivor: "
+                         "each is a wrong version of this change your test cannot tell from "
+                         "the right one."))
         else:
             i, e = got
-            if e.get("survived") and not wrote_test_after(tool_log, i, rel):
-                gaps.append(f"`mutation` last reported {len(e['survived'])} wrong "
-                            f"version(s) of the fix your test does not notice, and you "
-                            f"changed nothing after reading it. Answer each one. Where the "
-                            f"behaviour it breaks is part of what this pull request fixes, "
-                            f"add an assertion about that behaviour -- what the code "
-                            f"returns, raises or does -- then call `verify` and `mutation` "
-                            f"again. Where it is not, say so in one sentence per survivor "
-                            f"and finish. Never assert on the exact expression a variant "
-                            f"changed just to make it fail.")
+            ms = mutation_score(e)
+            if ("mutation" not in reminded and e.get("survived")
+                    and not wrote_test_after(tool_log, i, rel)):
+                score = (f"Mutation score is {ms}% ({e['killed']} of {e['total']} caught). "
+                         f"A higher score is better, but not at any cost. " if scored else "")
+                gaps.append(("mutation",
+                             f"{score}`mutation` last reported {len(e['survived'])} wrong "
+                             f"version(s) of the fix your test does not notice, and you "
+                             f"changed nothing after reading it. Answer each one. Where the "
+                             f"behaviour it breaks is part of what this pull request fixes, "
+                             f"add an assertion about that behaviour -- what the code "
+                             f"returns, raises or does -- then call `verify` and `mutation` "
+                             f"again. Where it is not, say so in one sentence per survivor "
+                             f"and finish. Never assert on the exact expression a variant "
+                             f"changed just to make it fail."))
     if not gaps:
         return None
-    return ("duties_open", f"`{rel}` is fail-to-pass; the checks after that are not "
-                           f"answered.\n\n" + "\n\n".join(f"* {g}" for g in gaps))
+    names = "+".join(dict.fromkeys(n for n, _ in gaps))
+    return (f"duties_open[{names}]",
+            f"`{rel}` is fail-to-pass; the checks after that are not answered.\n\n"
+            + "\n\n".join(f"* {g}" for _, g in gaps))
 
 
 def targets_for_gold(box: Sandbox, instance: dict[str, Any]) -> list[str]:
