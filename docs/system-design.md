@@ -205,8 +205,14 @@ handed the *same* mutants, and an agent that tunes its test until those ten die 
 be scored on those ten. Testing on the training set.
 
 So `split_pool` draws a pool and halves it — the agent sees one half, the harness scores
-the other, and `held_out: true` goes into the result because a score on a fresh sample and
-a score on a tuned-against sample are different quantities that must not share a column.
+the other, and `held_out: true` goes into the result when the agent held the tool.
+
+**Every configuration is scored on that held-out half** since 2026-09-28. Before, runs
+without the tool were scored on the whole pool (often 10 mutants) and runs with it on the
+half (often 1-3), so the per-instance scores of two arms were different quantities and
+the "mutation tool" comparison could not be paired. `--mutants N` caps *each half* at N;
+the default is 20, which enlarges the scored half only where a patch offers more than 20
+candidates -- a small patch stays small whatever the cap.
 
 The halving happens at the *candidate* level, inside each `(file, line)` group, and the
 side each group starts on rotates with its position. Both details are load-bearing and
@@ -231,38 +237,55 @@ score. A score in front of the agent is a score to raise.
 
 ## The judge
 
-One call per instance to a stronger model that wrote none of these tests, after the F2P
-verdict is settled. It answers three questions and they are kept apart, because a test can
-be about the right behaviour and still be unreadable, or read well and miss half the bug.
+One call per instance to a model that wrote none of these tests, after the F2P verdict is
+settled. It compares the generated test with the developer's on three questions and keeps
+them apart, because a test can pin the right behaviour and be hard to read, or read well
+and miss half the fix.
 
-Each is a **level from 1 to 5**, and each level has one label:
+**Comparative since 2026-09-28 (scale 6).** Each question is a level on one symmetric
+scale -- 1 the developer's test clearly better, 2 somewhat better, 3 on a par, 4 the
+generated test somewhat better, 5 clearly better:
 
 | scale | 1 | 2 | 3 | 4 | 5 |
 |---|---|---|---|---|---|
-| concept — the same behaviour as the maintainer's test? | different | tangential | narrower | close | equivalent |
-| issue coverage — every behaviour the pull request settles? | none | minor only | main only | nearly complete | complete |
-| readability — would it pass review in this project? | reject | poor | acceptable | good | exemplary |
+| concept — which pins the behaviour the fix establishes better? | developer's clearly better | developer's better | on a par | generated better | generated clearly better |
+| issue coverage — which covers more of what the fix settles? | developer's covers clearly more | developer's covers more | same coverage | generated covers more | generated covers clearly more |
+| readability — which reads better, in this project? | clearly less readable | less readable | as readable | more readable | clearly more readable |
 
-The model writes only the number. The label is looked up in `compare.SCALES`, so it cannot
-be spelled two ways or drift from the definition the model was given, and reports print
-both -- `narrower (3)` -- under a legend generated from the same table. The stored shape
-keeps a `verdict` word where every earlier reader looked for one and adds `level` beside
-it, plus `"scale": 5`; a missing or out-of-range level makes the whole answer `unparsed`
-rather than guessed. The three-category judge (`same / narrower / broader / different`,
-`complete / partial / misses_the_point`, `good / acceptable / poor`) was replaced on
-2026-09-25 because its concept answer was not ordinal -- `narrower` and `broader` are
-different directions, not better and worse -- and three coarse bins could not show a
-movement smaller than a whole category.
+The absolute scale before it (scale 5: `different … equivalent`, `none … complete`,
+`reject … exemplary`) had no level for a generated test that was *better* than the
+developer's; an equivalent test and a stronger one both scored 5. Its labels stay in
+`compare.SCALES_V5`, and RUNS.md prints whichever legend its rows were judged on.
 
-`issue_coverage` is judged against the **issue and the fix**, not against the maintainer's
-test: that test is evidence of what mattered, not the definition of it, so a test covering
-one branch of a two-branch fix is incomplete even where the maintainer tested only that
-branch too.
+How the prompt is built to come close to a human reviewer (`compare.SYSTEM`):
 
-It reads independently of changed-line coverage, and the two have agreed on the same gap
-by different routes ([decisions.md](decisions.md)).
+- **The judge knows which test is the developer's**, deliberately. A maintainer's choice
+  that looks odd -- an escaping path a django fix must not reopen, a compatibility case --
+  can carry experience the generated test's author did not have. Blinding the judge would
+  make it read those as defects. It is told to look for such a reason before ranking the
+  generated test higher on a point where the two differ, to name it
+  (`developer_reasons`), and not to invent one.
+- **Concept** is judged against the contract the fix implements (what the changed code now
+  returns, raises or does), worked out from the report and the fix first; each anchor says
+  what makes one test pin it better -- an exact value against a weak proxy, the contract
+  against one example of it, a deliberate case the other misses.
+- **Issue coverage** lists the behaviours the pull request settles from the report *and
+  the fix*, never from either test -- including a hazard the fix handles that the report
+  never mentioned -- and, for each, quotes the asserting line from each test or says
+  `none`. A behaviour is covered only with a quotable assertion on its outcome; the level
+  follows from the two columns (one more behaviour = 2 or 4, two or more = 1 or 5).
+- **Readability** gives each test an absolute review outcome first (`accept`, `nits`,
+  `changes`, `reject`) with its concrete problems, then compares. Length, docstrings and
+  comments are named as not readability in themselves -- generated tests are longer and
+  more commented, and a judge rewards that unless told not to.
+- Every level must follow from the evidence written beside it; thin evidence goes into
+  `confidence`, not toward 3. The model writes only numbers; labels come from
+  `compare.SCALES`. `uncovered` (the behaviours the generated test has no assertion for)
+  is derived for the reports. A missing or out-of-range level makes the whole answer
+  `unparsed`; it is re-asked once.
 
-None of the three feeds the F2P verdict.
+None of the three feeds the F2P verdict. Scale-6 levels are not comparable with scale-5
+levels from v1 and v2.
 
 ## Three test-runner conventions
 
@@ -374,6 +397,14 @@ That makes every shared resource a hazard, and two were real:
 
 ### On the laptop (since 2026-09-27)
 
+Experiments go in **`out-v2/<name>/`**, one folder per experiment, named after the change
+it tests, run by `out-v2/run_exp.py` (the 36 local instances, both caches, `--mutants 20`,
+the model and temperature fixed; see its docstring). `out-v2/base/` is the reference.
+
+The free-space guard reads the smaller of the Docker VM's free space and the host's:
+Docker Desktop's disk is a sparse file on the host, and on the laptop the VM reported
+79 GB free while the host had 52.
+
 There is no server any more. Runs are on the laptop at `--parallel 20`, over the 36
 instances whose images are cached locally: 26 in `image-cache/` (the development set) and
 10 in `image-cache-evaluation/` (the evaluation set). `F2P_IMAGE_CACHE` takes several
@@ -398,34 +429,34 @@ pair on 36 should be read as direction, not effect.
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1164 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1145 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 167 | What the agent actually did, checked rather than assumed. |
-| `compare.py` | 296 | Does the generated test check the same thing the developer's test checks? |
+| `compare.py` | 393 | Does the generated test check the same thing the developer's test checks? |
 | `coverage_metric.py` | 424 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
-| `features.py` | 255 | What the agent is given, as one registry that everything else reads. |
+| `features.py` | 315 | What the agent is given, as one registry that everything else reads. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
 | `image_cache.py` | 292 | Instance images kept on the host disk, so each one is pulled from the registry once. |
-| `images.py` | 404 | Prepared SWE-bench images, and the disk they compete for. |
+| `images.py` | 424 | Prepared SWE-bench images, and the disk they compete for. |
 | `layout.py` | 29 | Where the project is on disk, and the environment it runs with. |
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 187 | One place the model connection is configured, shared by every caller. |
 | `models.py` | 338 | Which model answers, and what it needs, read from `models.json`. |
-| `mutants.py` | 522 | Does the test notice when the fix is subtly wrong? |
+| `mutants.py` | 523 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
 | `parallel.py` | 253 | Running several pull requests at once, as separate processes. |
-| `prompt.py` | 251 | Assemble the agent's prompt from the pieces in prompts/. |
+| `prompt.py` | 253 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 512 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 513 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
+| `runs.py` | 531 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 355 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 893 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sandbox_tools.py` | 913 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 364 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 772 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 757 | The F2P decision. One implementation, used by every arm. |
 | `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
 <!-- /generated:modules -->
 
@@ -464,7 +495,27 @@ point a stop was refused.
 
 ### Refusing a stop
 
-With `--second-chance` or `require-tools`, every stop is checked, not just the first. A
+**Two gates, one objective each (since 2026-09-28).**
+
+| feature | refuses a stop when | reasons |
+|---|---|---|
+| `second-chance` (the stop gate) | the test is not fail-to-pass yet: no file, collects nothing, passes or is skipped at base (the harness runs it), or the agent's own last `verify` of the scored file did not say fail-to-pass or predates an edit | `no_test`, `collects_nothing`, `passes_at_base`, `skipped_at_base`, `verify_open` |
+| `require-tools` (the duties) | the test already flips, but `coverage` / `mutation` was never called on it, or its last answer listed missed lines / surviving mutants and the test has not changed since -- one reminder, then the stop is accepted | `duties_open` |
+| every configuration | the test reads project source as text | `reads_source` |
+| `coverage-tool` | the test flips while running none of the changed lines (asked once) | `runs_no_change` |
+
+Until then `require-tools` held the verify loop and the duties together, and
+`--second-chance` was an opt-in flag whose refusals were a subset of the verify loop's: in
+experiments-v2's base arm all 40 second-chance rounds fired together with `loop_open` and
+none alone, so the −second-chance arm removed a sentence, not a refusal. Now the second
+chance is a feature (`--add-second-chance`) and owns everything about reaching fail-to-pass -- the refusals, the prompt's
+"before you can stop" paragraph, and `verify`'s "you cannot finish while this is the
+answer" -- while `require-tools` owns what comes after. With the gate off, a test that
+never flips is never asked about coverage or mutation. When the harness's own base run
+finds the file missing, empty, passing or skipped, that message (with the file and the
+run) replaces the `verify` one rather than repeating it.
+
+With either gate on, every stop is checked, not just the first. A
 stop that leaves a gap -- no test, a file that collects nothing, a test that passes on the
 unfixed code, a finishing loop left open -- is refused with the current reason, and the
 agent carries on with what is left of the budget. It ends when the gap closes, the budget
@@ -483,28 +534,23 @@ where the model's pattern under refusal was *write → verify → finish* every 
   the assertion). The refusal says which, from the changed-line coverage at head. Only when
   the agent holds `coverage`, which reports exactly this, so the refusal adds nothing the
   agent could not ask for itself.
-- **A test that cannot be scored is refused at most twice in a row** -- `passes_at_base`
-  or `collects_nothing`. Seven of eight runs that reached it
-  stayed for all five rounds; the one that recovered left after the first. Without
-  `--second-chance` the harness cannot say "passes at base", and the same state reaches
-  the agent as `loop_open`. Those rounds count toward the same limit when the agent's own
-  last `verify` showed the same state -- every test passing before the fix, or nothing
-  collected (`V.verify_unscoreable`). A test failing on both sides is capped in neither
-  configuration: replayed over every recorded run, capping it would have cut four
-  conversions. Before this, the arm that removes the
-  second chance was refused five times where the arm that has it stopped at two: 20
-  refusals against 4 on `eval5-arms`, none converting after the second. `collects_nothing`
-  joined the limit after an `eval5-arms` run spent five rounds on a file that never
-  collected; the one `collects_nothing` conversion on record came in the round after its
-  second, on a different reason, which the limit still allows.
-- **A test that already flips gets one reminder.** Refusals over an unanswered `coverage` or
+- **A test that cannot be scored is refused at most twice in a row** -- `passes_at_base`,
+  `skipped_at_base` or `collects_nothing` (`V.UNSCOREABLE`). Seven of eight runs that
+  reached it stayed for all five rounds; the one that recovered left after the first. A
+  test failing on both sides is not capped: replayed over every recorded run, capping it
+  would have cut four conversions. `collects_nothing` joined the limit after an
+  `eval5-arms` run spent five rounds on a file that never collected. (From 2026-09-26 to
+  -28 the −second-chance arm also capped `loop_open` rounds whose own `verify` showed the
+  same state; with the verify loop now part of the second chance, that arm has no such
+  rounds.)
+- **A test that already flips gets one reminder** (`duties_open`). Refusals over an unanswered `coverage` or
   `mutation` cannot change its verdict, and two tests were refused five times each while
   already passing.
 
 Four more, from reading all 700 experiments-v2 runs (2026-09-27):
 
-- **Only answers about the scored file count.** `loop_gap`, `verify_settled` and
-  `verify_unscoreable` read the last `verify` / `coverage` / `mutation` *on the scored
+- **Only answers about the scored file count.** `verify_gap`, `duty_gap` and
+  `verify_settled` read the last `verify` / `coverage` / `mutation` *on the scored
   test* (`V.same_file` accepts `/testbed/…`, `./…`, `path::test`, a path without `.py` and
   a dotted label), and "you edited the test since" counts writes to that file only. A
   verify on a side file had closed the loop in six runs, four of them NO, and a scratch
@@ -512,13 +558,13 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   another file the refusal says so and names both files. The `verify` tool itself adds a
   note when its target is not the file carrying the scored name.
 - **A test skipped at base is refused like one passing there** (`skipped_at_base`, under
-  `--second-chance`), and counts toward the two-rounds-running limit (`V.UNSCOREABLE`).
+  `--add-second-chance`), and counts toward the two-rounds-running limit (`V.UNSCOREABLE`).
   django-16560 had every test skipped and nothing refused it.
-- **A tree off base stops the loop.** Only reachable under `--no-guard`: a library file the
+- **A tree off base stops the loop.** Only reachable without `--add-guard`: a library file the
   agent changed makes `verify` answer "unexpected state" to every call, and the loop kept
   asking for one. Telling the agent to put the file back would be the guard the arm
   removes, so the loop ends and the verdict reports the tree.
-- **The second chance hands back the file and the run.** A `--second-chance` refusal
+- **The second chance hands back the file and the run.** A second-chance refusal
   (`no_test` aside) now carries the test file as it is on disk and what running it at
   base printed, both clipped. The refused v2 runs rewrote a median of five times and
   converted 1 in 20, working from a file and a run far up the context. Both are base-side
@@ -590,7 +636,7 @@ one arm and kept for another.
 | `50-rules.md` | The constraints. The first one is load-bearing for the measurement rather than for the model -- an agent that edits the library can make any test pass, and then |
 | `55-check-runs.md` | Step one of the finishing sequence, and the only step that exists in every configuration -- `run_tests` is registered whether or not the diff was given. Split f |
 | `56-check-flips.md` | Step two. Dropped with the diff, since `verify` needs the patch to have a second state to run against. |
-| `57-check-reaches.md` | Step three, plus how to read a low figure. Dropped with the diff, and by `--no-coverage-tool` on its own. Rewritten twice. The first version said "iterate until |
+| `57-check-reaches.md` | Step three, plus how to read a low figure. Present only with `--add-coverage-tool`, which needs the diff. Rewritten twice. The first version said "iterate until |
 | `57b-check-notices.md` | The mutation step of the finishing sequence. Numbered between `coverage` and the stop condition because it is the last and strictest of the three questions, and |
 | `58-finish.md` | The stop condition, on its own so that changing when the agent stops does not mean editing what it checks. Rewritten twice. The first version ended the sequence |
 <!-- /generated:prompts -->
@@ -598,7 +644,7 @@ one arm and kept for another.
 `prompts/followups/` holds messages sent *after* the task rather than pieces of it, and
 the table above does not list them because `pieces()` globs `prompts/*.md` and joins
 everything it finds into the opening prompt. There is one: `second-chance.md`, sent by
-`--second-chance` when a run stops with nothing a judge could score.
+`--add-second-chance` when a run stops with nothing a judge could score.
 
 Some of it is load-bearing for the *measurement*: `50-rules.md` forbids editing anything
 but the test file, without which an agent can make any test pass by changing the library
@@ -624,7 +670,7 @@ Feature("coverage-tool",
         needs=("patch",), tools=("coverage",))
 ```
 
-That single entry produces a `--no-coverage-tool` flag, a line in `--help`, dependency
+That single entry produces an `--add-coverage-tool` flag, a line in `--help`, dependency
 handling, a place in every recorded result, and the ability to gate a prompt piece. There
 is nowhere else to edit.
 
@@ -745,7 +791,7 @@ more than one. A series is a directory ([decisions.md](decisions.md)):
 
 ```bash
 uv run openhands-f2p --out-root out/full
-uv run openhands-f2p --out-root out/nocov --no-coverage-tool
+uv run openhands-f2p --out-root out/nocov --add-verify-tool --add-mutation-tool --add-guard --add-second-chance --add-require-tools
 ```
 
 ## CLI
@@ -764,8 +810,7 @@ uv run openhands-f2p --out-root out/nocov --no-coverage-tool
 | `--max-iterations` | hard cap on agent steps per PR. Observed use ranges from 12 (sympy) to 65 (scikit-learn), so the headroom is deliberate. Default: `100`. |
 | `--dry-run` | show the target path and runner command, make no LLM call |
 | `--no-compare` | skip the concept judgement against the developer's test |
-| `--mutants` | after the verdict, mutate the lines the patch changed with mutmut and count how many mutants each test kills -- the generated one and the developer's, on the same set. Bare --mutants uses 10. Deterministic and offline; the diffs land in <run>/<id>/mutations/. 0 is off |
-| `--second-chance` | refuse a stop that leaves nothing to score. When a run ends for a reason the agent could have seen itself -- no file written, a file that collects nothing, a test that passes on the unfixed code -- say so and let it carry on, on whatever is left of --max-iterations, and check every later stop the same way: up to 5 refusals, ending early once the gap closes or the agent stops acting between refusals. The cap is not raised and not reset, so a run that stopped at 41 of 100 resumes with 59 and one that reached the cap gets nothing. Never quotes the run against the fixed code, so the agent still only knows what it could establish at base |
+| `--mutants` | after the verdict, mutate the lines the patch changed with mutmut and count how many mutants each test kills -- the generated one and the developer's, on the same set. Bare --mutants uses 20. Deterministic and offline; the diffs land in <run>/<id>/mutations/. 0 is off |
 | `--mutate-saved` | measure mutation on the tests already written, without running the agent again. Adds the `mutation` field and changes nothing else. Needs --mutants N |
 | `--recheck` | re-judge the saved tests under the current harness, without calling the model again |
 | `--retry-broken` | run only instances with no result, or whose result is BROKEN. A BROKEN verdict records that the harness or the connection failed and says nothing about the instance, so it is worth retrying; YES and NO are findings and are left alone |
@@ -773,18 +818,24 @@ uv run openhands-f2p --out-root out/nocov --no-coverage-tool
 | `--out-root` | write results here instead of out/default/. `out/` is a container of run folders -- one per run, e.g. out/out_full_run/ -- which is how a series stays separable |
 | `--label` | a name for this run, recorded in every result. Defaults to the configuration, e.g. no-coverage-tool |
 
-**what to withhold from the agent**
+**what the agent is shown (on unless withheld)**
 
 | flag | what it does |
 |---|---|
 | `--no-issue` | withhold the bug report; the agent has only the diff to work out what the change is for |
 | `--no-patch` | withhold the pull request diff from the prompt. The agent has to work out the intended behaviour from the report alone |
-| `--no-verify-tool` | withhold the `verify` tool, so the agent can watch its test fail on this code but never watch it pass. The harness still decides the verdict either way |
-| `--no-coverage-tool` | withhold the `coverage` tool. The harness still measures changed-line coverage; the agent just cannot see it while it works |
-| `--no-mutation-tool`, `--no-mutation` | withhold the `mutation` tool, which runs the agent's test against small wrong variants of the fix and reports which ones it fails to notice. The harness still measures a mutation score afterwards, on mutants the agent was never shown |
-| `--no-guard` | stop reverting edits the agent makes to files that were already here. The prohibition stays in the prompt and the audit still reports a dirty tree as BROKEN -- what goes away is the repair between actions, so an agent that applies the fix to the library keeps it. Withhold it to measure how often that happens rather than how often it is caught |
-| `--no-require-tools` | stop requiring the agent to have used the tools it was given. With this on -- the default -- a run that finishes without calling a registered instrument is sent back with the names of the ones it skipped, because a tool that is present and unused is a configuration we are not actually measuring |
 | `--no-repo-facts`, `--repo-search` | withhold the briefing on how this project tests: the target convention, where a new test file has to live to be collected, the neighbouring tests and the test configuration. The agent establishes those itself, and chooses the directory its test goes in |
+
+**what is added to the agent (off unless asked for)**
+
+| flag | what it does |
+|---|---|
+| `--add-verify-tool` | add the `verify` tool, which runs the agent's test before and after the fix and says whether it flips. Without it the agent can watch its test fail on this code but never watch it pass; the harness decides the verdict either way |
+| `--add-coverage-tool` | add the `coverage` tool: which changed lines the test never runs, with their code and the conditions above them. The harness measures changed-line coverage either way |
+| `--add-mutation-tool` | add the `mutation` tool, which runs the agent's test against small wrong variants of the fix and reports which ones it fails to notice. The harness measures a mutation score either way, on mutants the agent was never shown |
+| `--add-guard` | add the guard: edits the agent makes to files that were already here are reverted between actions. Without it the prohibition stays in the prompt and the audit still reports a dirty tree as BROKEN, but an agent that applies the fix to the library keeps it |
+| `--add-second-chance` | add the stop gate: a stop is sent back while there is no test file, it collects nothing, it passes or is skipped on the unfixed code (the harness runs it), or the agent's own last `verify` of it did not say fail-to-pass. The run carries on with what is left of its budget |
+| `--add-require-tools` | add the duties after fail-to-pass: a test that already flips is sent back once if `coverage` or `mutation` was never called on it, or if the last answer listed missed lines or surviving mutants and the test was not changed since |
 
 **which model answers**
 

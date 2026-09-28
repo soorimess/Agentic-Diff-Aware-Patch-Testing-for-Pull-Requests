@@ -57,8 +57,8 @@ def _child_argv(pr_id: str, args, features: FeatureSet, out_root: Path,
         argv.append("--no-compare")
     if getattr(args, "mutants", 0):
         argv += ["--mutants", str(args.mutants)]
-    if getattr(args, "second_chance", False):
-        argv.append("--second-chance")
+    # No `--second-chance`: it is a feature since 2026-09-28, forwarded with the others
+    # as `--add-second-chance` when present.
     # Which model answers is part of what the run *is*, so it has to reach the child.
     # Left off, a parallel run would quietly use the default while the header said
     # otherwise -- the same class of mistake as dropping --dry-run, which once forked

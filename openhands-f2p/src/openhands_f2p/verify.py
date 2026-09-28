@@ -406,169 +406,154 @@ def verify_settled(tool_log: list, rel: str | None = None) -> bool:
     return bool(e.get("flipped")) and not still and not wrote_test_after(tool_log, i, rel)
 
 
-def verify_unscoreable(tool_log: list, rel: str | None = None) -> bool:
-    """Whether the agent's own last `verify` showed a test that cannot be scored: every test
-    passing (or skipped) before the fix, or nothing collected. What `passes_at_base`,
-    `skipped_at_base` and `collects_nothing` report under --second-chance, read here from
-    what the agent was itself shown -- so a run without that flag is held to the same
-    limit, no more and no less. A test that fails on both sides is not this: it is broken,
-    not aimed wrong, and those rounds do convert (four runs recovered after a third such
-    refusal)."""
-    found = _verifies_of(tool_log, rel)
-    if not found:
-        return False
-    before = found[-1][1].get("before") or {}
-    return not before or all(st not in BEHAVIOURAL for st in before.values())
+def _last(tool_log: list, tool: str, rel: str) -> tuple[int, dict] | None:
+    """The last call of `tool` on the scored file. An answer about another file is not an
+    answer about this one."""
+    found = (_verifies_of(tool_log, rel) if tool == "verify" else
+             [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
+              and same_file(e.get("target", ""), rel)])
+    return found[-1] if found else None
 
 
-def loop_gap(tool_log: list, instruments: tuple[str, ...],
-             rel: str) -> tuple[str, str] | None:
-    """Whether the finishing loop actually closed, read off the agent's own actions.
+def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
+    """Whether the agent's own `verify` has established fail-to-pass for the file on disk.
 
-    The earlier version of this asked only whether each tool *appeared* in the log, and
-    that was the same Goodhart mistake the prompt rules are written to avoid: it measured
-    the call instead of the answer. Four of five failures in the run that introduced it
-    ended immediately after `verify` reported NOT fail-to-pass -- requirement satisfied,
-    goal unmet -- while `pylint-7277` called `verify` seventeen times and `matplotlib`
-    once. The count carried almost no information about whether the loop had closed.
+    The verify half of the stop gate, which `--second-chance` owns since 2026-09-28 (it
+    was `require-tools`' until then; see `features.py`). Judged by what `verify` last
+    *said*, not by whether it was called: the first version of this check counted calls,
+    and four of five failures in the run that introduced it ended immediately after
+    `verify` reported NOT fail-to-pass -- requirement satisfied, goal unmet -- while
+    `pylint-7277` called `verify` seventeen times and `matplotlib` once.
 
-    So each instrument is judged by what it last said and whether that answer still
-    describes the file on disk:
-
-    They are checked **in order**, and only the first open one is reported. Until the
-    test is fail-to-pass the other two are questions about a test that does not exist
-    yet, and asking all three at once told the qwen run to go measure something it had
-    not built -- eight `coverage` and `mutation` calls before `verify` had ever flipped,
-    one of which `mutation` answered with "your test does not pass on the fixed code
-    yet". The tool knew the demand was premature. The demand was made anyway.
-
-    `verify`   must have been called, must last have reported fail-to-pass, and nothing
-               may have been written since -- an answer about a file that has been edited
-               is an answer about a file that no longer exists. While this is open it is
-               the *only* thing said.
-    `coverage` must have been called, and if it last listed missed lines the agent must
-               have edited the test after seeing them. The agent is shown lines, never a
-               percentage: the percentage is what the report publishes, and a number the
-               agent is told to push up stops measuring anything. The demand enforced
-               here is that missed lines were answered rather than read and passed over,
-               since a line can be genuinely unreachable and an assertion written only to
-               execute one is worth less than saying why.
-    `mutation` must have been called, and that is all. Survivors are for the agent to
-               weigh -- some are genuinely outside what the change fixes -- and requiring
-               a response would be an instruction to close the list rather than to
-               understand it. Read `astropy-13398` before loosening this: mutation
-               reported 0 of 10 killed, the agent added a second test to answer it, the
-               new test failed on both sides, and a file whose first test flipped
-               correctly scored NO.
+    Open when `verify` was never called on the scored file, when its last answer was not
+    fail-to-pass, or when the test was written after that answer -- an answer about a
+    file that has been edited is an answer about a file that no longer exists.
 
     Pure, and reads only the agent's own record, so nothing here can leak the head run.
-    Returns `(reason, what_to_say)` or `None` when the loop is closed.
+    Returns `(reason, what_to_say)` or `None` when the test flips by its own last verify.
     """
-    def last(tool: str) -> tuple[int, dict] | None:
-        # On the scored file only, for all three: an answer about another file is not
-        # an answer about this one.
-        found = (_verifies_of(tool_log, rel) if tool == "verify" else
-                 [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
-                  and same_file(e.get("target", ""), rel)])
-        return found[-1] if found else None
-
-    def wrote_after(i: int) -> bool:
-        return wrote_test_after(tool_log, i, rel)
-
-    # One obligation at a time, in the order the goal imposes. Until the test is
-    # fail-to-pass there is nothing for `coverage` or `mutation` to be about: coverage
-    # asks how much of the change a working test reaches, and mutation asks what a
-    # working test would notice -- both are questions about a test that has already met
-    # the bar. Asking all three at once is what the qwen run did, and it produced eight
-    # calls to those two tools before `verify` had ever flipped, one of which `mutation`
-    # answered with "your test does not pass on the fixed code yet". The tool said the
-    # demand was premature; the demand was made anyway.
-    gaps = []
-    settled = "verify" not in instruments      # nothing to establish if it was withheld
-    if "verify" in instruments:
-        got = last("verify")
-        elsewhere = [e.get("target") for _, e in _verifies_of(tool_log, None)
-                     if not same_file(e.get("target", ""), rel)]
-        if got is None and elsewhere:
-            gaps.append(f"Your `verify` calls ran on `{elsewhere[-1]}`, but the test this "
-                        f"run is scored on is `{rel}`, and nothing has verified that file. "
-                        f"Only `{rel}` counts: put the test there, call `verify` on it, and "
-                        f"keep going until it says fail-to-pass.")
-        elif got is None:
-            gaps.append(f"You never called `verify`, so nothing has established the one "
-                        f"property the test must have. Write a test, call `verify`, and "
-                        f"keep going until it says fail-to-pass.")
-        else:
-            i, e = got
-            still = [n for n, st in (e.get("after") or {}).items() if st in BEHAVIOURAL]
-            flipped = e.get("flipped") or []
-            if (not flipped or still) and wrote_after(i):
-                # Said "the test has not changed since" here regardless, which was false
-                # for every run that had edited after its last verify -- three of the nine
-                # refusals in one 26-instance run.
-                gaps.append(f"The last `verify` said **not fail-to-pass**, and you have "
-                            f"edited the test since, so nothing has checked the file on "
-                            f"disk now. Call `verify` on it, and keep going until it says "
-                            f"fail-to-pass.")
-            elif not flipped or still:
-                if flipped and still:
-                    said = (f"{len(flipped)} test(s) already fail before the change and "
-                            f"pass after -- keep them -- but {len(still)} still fail after "
-                            f"it. Fix or delete the ones that still fail")
-                else:
-                    said = (f"{len(still)} test(s) still failing after the change"
-                            if still else "nothing flipped")
-                gaps.append(f"The last `verify` said **not fail-to-pass** -- {said}. That "
-                            f"is the answer to the only question that decides this run, "
-                            f"and the test has not changed since. Rewrite the test and "
-                            f"call `verify` again, and keep doing that until it says "
-                            f"fail-to-pass. Nothing else you could do with the remaining "
-                            f"budget counts for anything while this is the answer.")
-            elif wrote_after(i):
-                gaps.append(f"You edited the test after the last `verify`, so the "
-                            f"fail-to-pass result describes a file that no longer exists. "
-                            f"Call `verify` again on what is on disk now.")
+    got = _last(tool_log, "verify", rel)
+    elsewhere = [e.get("target") for _, e in _verifies_of(tool_log, None)
+                 if not same_file(e.get("target", ""), rel)]
+    if got is None and elsewhere:
+        say = (f"Your `verify` calls ran on `{elsewhere[-1]}`, but the test this run is "
+               f"scored on is `{rel}`, and nothing has verified that file. Only `{rel}` "
+               f"counts: put the test there, call `verify` on it, and keep going until it "
+               f"says fail-to-pass.")
+    elif got is None:
+        say = (f"You never called `verify`, so nothing has established the one property "
+               f"the test must have. Write a test, call `verify`, and keep going until it "
+               f"says fail-to-pass.")
+    else:
+        i, e = got
+        still = [n for n, st in (e.get("after") or {}).items() if st in BEHAVIOURAL]
+        flipped = e.get("flipped") or []
+        edited = wrote_test_after(tool_log, i, rel)
+        if (not flipped or still) and edited:
+            # Said "the test has not changed since" here regardless, which was false for
+            # every run that had edited after its last verify -- three of the nine
+            # refusals in one 26-instance run.
+            say = (f"The last `verify` said **not fail-to-pass**, and you have edited the "
+                   f"test since, so nothing has checked the file on disk now. Call "
+                   f"`verify` on it, and keep going until it says fail-to-pass.")
+        elif not flipped or still:
+            if flipped and still:
+                said = (f"{len(flipped)} test(s) already fail before the change and pass "
+                        f"after -- keep them -- but {len(still)} still fail after it. Fix "
+                        f"or delete the ones that still fail")
             else:
-                settled = True
+                said = (f"{len(still)} test(s) still failing after the change"
+                        if still else "nothing flipped")
+            say = (f"The last `verify` said **not fail-to-pass** -- {said}. That is the "
+                   f"answer to the only question that decides this run, and the test has "
+                   f"not changed since. Rewrite the test and call `verify` again, and keep "
+                   f"doing that until it says fail-to-pass. Nothing else you could do with "
+                   f"the remaining budget counts for anything while this is the answer.")
+        elif edited:
+            say = (f"You edited the test after the last `verify`, so the fail-to-pass "
+                   f"result describes a file that no longer exists. Call `verify` again on "
+                   f"what is on disk now.")
+        else:
+            return None
+    return ("verify_open", f"`{rel}` is not fail-to-pass yet by its own last `verify`.\n\n"
+                           f"* {say}")
 
-    # Below this line every obligation is about a test that already flips. When it does
-    # not, the message stays a single instruction rather than a list of three, two of
-    # which the agent cannot act on yet.
-    if not settled:
-        return ("loop_open", f"The finishing loop on `{rel}` is not closed.\n\n"
-                             + "\n\n".join(f"* {g}" for g in gaps)) if gaps else None
 
+def duty_gap(tool_log: list, instruments: tuple[str, ...],
+             rel: str) -> tuple[str, str] | None:
+    """Whether the checks that come after fail-to-pass were answered. `require-tools`.
+
+    Only for a test that already flips by its own last `verify` -- until then `coverage`
+    and `mutation` are questions about a test that does not exist yet, and asking them
+    early told the qwen run to go measure something it had not built: eight such calls
+    before `verify` had ever flipped, one of which `mutation` answered with "your test
+    does not pass on the fixed code yet". Without the stop gate (no `--add-second-chance`) a
+    test that never flips is therefore never asked about either.
+
+    `coverage` must have been called, and if it last listed missed lines the agent must
+               have edited the test after seeing them. The agent is shown lines, never a
+               percentage: a number it is told to push up stops measuring anything. What
+               is enforced is that missed lines were answered rather than read and
+               passed over; a line can be genuinely unreachable, and saying why is an
+               answer.
+    `mutation` must have been called, and if it last reported survivors the agent must
+               have edited the test after seeing them (since 2026-09-28; before, calling
+               it was all). In experiments-v2 34 of 47 base runs saw survivors and only 3
+               of the 23 that called it again had fewer; the held-out mutation score
+               matched the arm without the tool. A survivor outside what the change fixes
+               is answered by saying so -- the refusal loop sends this reminder once for
+               a test that already flips, and the next stop is accepted. Read
+               `astropy-13398` before hardening that: mutation reported 0 of 10 killed,
+               the agent added a second test to answer it, the new test failed on both
+               sides, and a file whose first test flipped correctly scored NO.
+
+    Pure, reads only the agent's own record. Returns `(reason, what_to_say)` or `None`.
+    """
+    if not verify_settled(tool_log, rel):
+        return None
+    gaps = []
     if "coverage" in instruments:
-        got = last("coverage")
+        got = _last(tool_log, "coverage", rel)
         if got is None:
-            gaps.append(f"Your test is fail-to-pass. Now call `coverage`: how much of "
-                        f"the change it reaches is the next question, and it is "
-                        f"currently unknown.")
+            gaps.append("Your test is fail-to-pass. Now call `coverage`: how much of the "
+                        "change it reaches is the next question, and it is currently "
+                        "unknown.")
         else:
             i, e = got
             cov = e.get("result") or {}
-            if cov.get("measured") and cov.get("missed") and not wrote_after(i):
-                gaps.append(f"`coverage` last listed lines of the change your test never "
-                            f"runs, and you changed nothing after reading it. Keep "
-                            f"changing the test and calling `coverage` until every "
-                            f"changed line runs or you can say why a line is out of "
-                            f"reach. Work the missed lines one at a time: decide for "
-                            f"each whether it is the same behaviour by another route, a "
-                            f"separate case that deserves its own test, or genuinely "
-                            f"outside this test -- then act on that and call `coverage` "
-                            f"again. An assertion added only to execute a line is worth "
-                            f"less than an honest reason it stays unreached.")
-    if "mutation" in instruments and last("mutation") is None:
-        gaps.append(f"You never called `mutation`. Call it and read the survivors: each "
-                    f"is a wrong version of this change your test cannot tell from the "
-                    f"right one. You are not required to close them -- some are outside "
-                    f"what the pull request fixes -- but you are required to have looked, "
-                    f"because it is the only check that asks whether your assertions "
-                    f"have force.")
+            if cov.get("measured") and cov.get("missed") and not wrote_test_after(tool_log, i, rel):
+                gaps.append("`coverage` last listed lines of the change your test never "
+                            "runs, and you changed nothing after reading it. Keep "
+                            "changing the test and calling `coverage` until every changed "
+                            "line runs or you can say why a line is out of reach. Work the "
+                            "missed lines one at a time: decide for each whether it is the "
+                            "same behaviour by another route, a separate case that "
+                            "deserves its own test, or genuinely outside this test -- then "
+                            "act on that and call `coverage` again. An assertion added only "
+                            "to execute a line is worth less than an honest reason it stays "
+                            "unreached.")
+    if "mutation" in instruments:
+        got = _last(tool_log, "mutation", rel)
+        if got is None:
+            gaps.append("You never called `mutation`. Call it and answer each survivor: "
+                        "each is a wrong version of this change your test cannot tell "
+                        "from the right one.")
+        else:
+            i, e = got
+            if e.get("survived") and not wrote_test_after(tool_log, i, rel):
+                gaps.append(f"`mutation` last reported {len(e['survived'])} wrong "
+                            f"version(s) of the fix your test does not notice, and you "
+                            f"changed nothing after reading it. Answer each one. Where the "
+                            f"behaviour it breaks is part of what this pull request fixes, "
+                            f"add an assertion about that behaviour -- what the code "
+                            f"returns, raises or does -- then call `verify` and `mutation` "
+                            f"again. Where it is not, say so in one sentence per survivor "
+                            f"and finish. Never assert on the exact expression a variant "
+                            f"changed just to make it fail.")
     if not gaps:
         return None
-    return ("loop_open", f"The finishing loop on `{rel}` is not closed.\n\n"
-                         + "\n\n".join(f"* {g}" for g in gaps))
+    return ("duties_open", f"`{rel}` is fail-to-pass; the checks after that are not "
+                           f"answered.\n\n" + "\n\n".join(f"* {g}" for g in gaps))
 
 
 def targets_for_gold(box: Sandbox, instance: dict[str, Any]) -> list[str]:

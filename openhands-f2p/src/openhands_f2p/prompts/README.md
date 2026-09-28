@@ -83,7 +83,7 @@ tool, "changed-line coverage" is prose. Check any configuration:
 
 ```bash
 uv run python -m openhands_f2p.prompt --explain --no-patch
-uv run python -m openhands_f2p.prompt --no-coverage-tool
+uv run python -m openhands_f2p.prompt --add-verify-tool --add-mutation-tool
 uv run python -m openhands_f2p.prompt --repo-search
 ```
 
@@ -100,7 +100,7 @@ the same conversation, and only in the configurations that ask for one.
 
 | file | job |
 |---|---|
-| `second-chance.md` | refuses a stop that leaves a gap -- sent by `--second-chance` (no test, collects nothing, passes or is skipped at base) and by `require-tools` (loop open). Says only what the agent could have established at base -- never that the test failed against the fix, which exists only in the head run. A `--second-chance` reason also carries the test file as it is on disk and what running it at base printed |
+| `second-chance.md` | refuses a stop that leaves a gap -- sent by the `second-chance` stop gate (no test, collects nothing, passes or is skipped at base, own last `verify` not fail-to-pass) and by `require-tools` (coverage / mutation answers left unanswered on a test that flips). Says only what the agent could have established at base -- never that the test failed against the fix, which exists only in the head run. A base-run reason also carries the test file as it is on disk and what running it at base printed |
 
 ## A note on what belongs here
 

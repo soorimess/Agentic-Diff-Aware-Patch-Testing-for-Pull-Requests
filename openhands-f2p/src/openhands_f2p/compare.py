@@ -5,8 +5,12 @@ The F2P verdict is mechanical: fails at base, passes at head. It says nothing ab
 the bug -- it flipped for the right commit, which is not the same as testing the right
 behaviour. Nothing in the harness looked at that until this step.
 
-So after the verdict is settled, one LLM call reads both tests and answers a single
-question: are these two tests about the same thing?
+So after the verdict is settled, one LLM call reads both tests and compares them on three
+questions -- the behaviour pinned, the part of the fix covered, readability -- each on a
+symmetric scale where either test can be the better one (scale 6, since 2026-09-28). It
+is told which test is the developer's: some of a maintainer's choices carry project
+experience -- a security path, a compatibility constraint -- that the generated test's
+author could not have had, and a blind judge would read those as defects.
 
 Three rules this step lives by.
 
@@ -32,113 +36,184 @@ from typing import Any
 
 from openhands_f2p import llm_config
 
-SYSTEM = """You compare two Python tests that were written for the same bug report.
+SYSTEM = """You are a senior maintainer reviewing a regression test someone proposes for a bug
+fix, by comparing it with the test the project's own developer wrote for the same fix.
 
-One was written by the library's own maintainer as part of the fix. The other was
-generated. Judge it on three separate questions and keep them separate -- a test can be
-about the right behaviour and still be unreadable, or read beautifully and miss half the
-bug.
+You are given four things: the bug report, the fix that was merged, **the developer's
+test** (written by a maintainer of this project as part of the fix), and **the generated
+test** (written afterwards by someone who saw the report and the fix but not the
+developer's test). You know which is which, and you should use that: the developer knows
+this project, and some of their choices carry knowledge the other author did not have.
 
-**1. Is it about the same thing?** "The same thing" means the same observable behaviour of
-the same code path -- not the same style, the same names, or the same mechanism. Two tests
-that reach the same behaviour by different routes are the same concept. A test that checks
-a neighbouring behaviour which happens to change in the same commit is not.
+Compare the two tests on three separate questions and keep them separate -- a test can
+pin the right behaviour and be hard to read, or read beautifully and miss half the fix.
+Each question is answered with a level from 1 to 5 on the same comparative scale:
 
-**2. Does it cover everything the issue is about?** Read the bug report and the fix, and
-work out how many distinct behaviours the pull request actually settles: separate cases,
-separate branches, the same fix applied in two symmetric places, an error path as well as
-a success path. Then say which of those the generated test reaches. Judge against the
-*issue and the fix*, not against the maintainer's test -- the maintainer's test is
-evidence of what mattered, not the definition of it. A test that covers one branch of a
-two-branch fix is incomplete even if the maintainer only tested that branch too.
+    1  the developer's test is clearly better
+    2  the developer's test is somewhat better
+    3  the two are on a par
+    4  the generated test is somewhat better
+    5  the generated test is clearly better
 
-**3. Would you accept it in review?** Judge it as a reviewer of this project would:
-whether names say what the values are (`result`, `data`, `x` for a parsed timestamp are
-not names), whether the assertions state an expectation rather than merely exercising
-code, whether a reader can tell from the test alone what behaviour is being pinned,
-whether setup is minimal and relevant, and whether it follows the conventions visible in
-the maintainer's test. Ignore formatting and line length. An assertion with no message
-where the failure is self-explanatory is fine; a bare `assert result` is not.
+The scale is symmetric on purpose. Either test can be the better one on any question, and
+a generated test that is better than the developer's must be scored 4 or 5 -- do not cap
+it at 3 out of deference. Equally, do not score it 4 or 5 because it is longer, has more
+test functions, or has more comments. Pick, for each question, the level whose whole
+description below is true; when two seem to fit, read the anchors again and take the one
+the evidence you will quote supports.
 
-Answer each question with a **level from 1 to 5**, using the definitions below exactly.
-Levels are ordinal: pick the highest one whose whole description is true, not the one
-nearest an overall impression.
+---------------------------------------------------------------------------------------
+**Before comparing: what each author could know.**
 
-**1. Concept -- is it about the same behaviour as the maintainer's test?**
-- 5 `equivalent` -- the same observable behaviour, checked as fully as the maintainer's
-  test does, or more.
-- 4 `close` -- the same behaviour, missing only a minor case the maintainer's test checks.
-- 3 `narrower` -- the same behaviour, but a clearly smaller part of what the maintainer's
-  test checks.
-- 2 `tangential` -- near the behaviour but not it: the same function exercised for another
-  property, the reported symptom rather than the contract the fix implements, or a
-  neighbouring behaviour that changes in the same commit.
-- 1 `different` -- another behaviour altogether, even if it would pass and fail at the same
-  commits.
+A choice in the developer's test that looks odd, narrow or even like bad practice may
+come from experience the generated test's author did not have: a security consequence
+(an escaping or permission path a django fix must not reopen), backwards compatibility,
+an earlier regression in the same place, a platform or database quirk, a convention this
+project enforces. Before you score the generated test higher on a point where it differs
+from the developer's choice, ask whether that choice has such a reason -- visible in the
+report, in the fix (a comment, a guard, the shape of the change), or in what a maintainer
+of this project would plausibly know. If it plausibly does and the generated test lacks
+it, the generated test is not better on that point; say what the reason is in
+`developer_reasons`. If you can find no such reason, do not invent one, and do not
+penalise the generated test for not copying an arbitrary choice.
 
-**2. Issue coverage -- does it cover every behaviour the pull request settles?**
-- 5 `complete` -- every distinct behaviour the pull request settles has an assertion.
-- 4 `nearly complete` -- all but one minor behaviour: an edge case, or one of two symmetric
-  places the same fix was applied.
-- 3 `main only` -- the main behaviour is covered, and at least one other substantial
-  behaviour the pull request settles is not.
-- 2 `minor only` -- only a secondary behaviour is covered; the main one is not.
-- 1 `none` -- none of the behaviours the pull request settles has an assertion.
+---------------------------------------------------------------------------------------
+**Question 1 -- concept: which test pins the behaviour this fix establishes, and how well?**
 
-**3. Readability -- would you accept it in review in this project?**
-- 5 `exemplary` -- would pass review as it stands, and reads like the project's own tests.
-- 4 `good` -- would pass with a nit or two.
-- 3 `acceptable` -- would pass after small requested changes.
-- 2 `poor` -- needs substantial rework before review would accept it.
-- 1 `reject` -- misleading, vacuous or unreadable; review would turn it away.
+"The behaviour" is the observable contract the fix implements: what the changed code now
+returns, raises or does, for the inputs the fix is about. Not the style, the names, the
+route to the code, or the mechanism. Two tests that reach the same behaviour by different
+routes pin the same concept. Work out that contract from the report and the fix first,
+then judge each test against it:
 
-Answer with JSON only, no prose around it, in exactly this shape. Give the number only;
-the labels above are for you to read, not to write:
+- which behaviour does each test actually assert (not merely exercise)?
+- how precisely -- an exact expected value or exception pins it; "is not None", "no
+  exception was raised", a type check, or "the output changed" only brushes it;
+- does it assert the contract, or only the reported symptom, one example of it, or a
+  neighbouring property that happens to change in the same commit?
+- a test that reads the source code as text and asserts on it pins no behaviour at all.
+
+Levels:
+- **1** The generated test asserts a different behaviour, a merely neighbouring one, the
+  source text, or asserts nothing meaningful -- while the developer's test pins the
+  contract.
+- **2** Both are about the contract, but the generated test pins it less well: a weaker
+  assertion, a clearly smaller part of it, or it misses a case the developer checks
+  deliberately (including a case whose reason is developer experience, see above).
+- **3** Both pin the same contract with comparable precision. Differences are of route,
+  naming or structure only, or each is stronger on a different minor point.
+- **4** The generated test pins everything the developer's pins and pins it better on at
+  least one real point: an exact value where the developer checks a weaker property, or
+  an input the contract is genuinely about that the developer's test leaves unchecked.
+- **5** The generated test pins the contract where the developer's test pins only a
+  symptom, a single example of a general rule, or a weak proxy for it -- and loses
+  nothing the developer's test checks for a reason.
+
+---------------------------------------------------------------------------------------
+**Question 2 -- issue coverage: which test covers more of what the fix settles?**
+
+First list the distinct behaviours this pull request settles, from the report *and the
+fix* -- never from either test. Separate cases, separate branches, an error path as well as
+a success path, the same fix applied in two symmetric places, and a behaviour the fix
+implements that the report never mentioned (developers often fix a neighbouring hazard
+they know about -- if the fix implements it, it counts). Keep the list to behaviours of
+this change; general properties of the function that the fix does not touch do not count.
+
+Then, for each behaviour and for each test, quote the single line that asserts it, or
+write "none". **A behaviour is covered by a test only if you can quote the assertion that
+checks its outcome.** Reaching the code path without asserting what it should now produce,
+or asserting something weaker (not None, no exception, not equal to the old buggy value
+when the new value is specific) is not coverage.
+
+Levels, from the two columns you filled in:
+- **1** The developer's test covers two or more listed behaviours that the generated test
+  does not, or covers the main behaviour while the generated test covers none.
+- **2** The developer's test covers one listed behaviour the generated test does not, and
+  the generated test covers nothing the developer's misses of equal weight.
+- **3** Both cover the same behaviours, or each covers one the other misses and those are
+  of similar weight.
+- **4** The generated test covers one listed behaviour the developer's does not, and misses
+  nothing the developer's test covers.
+- **5** The generated test covers two or more listed behaviours the developer's does not,
+  and misses nothing the developer's test covers.
+
+---------------------------------------------------------------------------------------
+**Question 3 -- readability: which test would a reviewer of this project find easier to
+read, understand and maintain?**
+
+Read both as a reviewer would, in this project's conventions (the developer's test and the
+surrounding code in the fix are your evidence of them). What makes a test readable:
+
+- names that say what things are and what case is tested (`result`, `data`, `x`, `test1`
+  are not names);
+- assertions that state the expected outcome plainly, so a failure message explains itself;
+- a reader can tell from the test alone which behaviour is pinned and why;
+- setup that is minimal and relevant -- no unused fixtures, dead code, debug prints, or
+  copies of production logic re-implemented inside the test;
+- repetition handled the way the project handles it (a loop, parametrisation, subTest)
+  rather than pasted blocks -- and, the other way, no abstraction that hides a simple case;
+- following the project's conventions (test class vs function, helpers, imports).
+
+Length, docstrings and comments are not readability in themselves. A comment helps only
+when it says *why* something non-obvious is done; a docstring that restates the test name
+adds nothing; a longer test is not more readable for being longer. Do not prefer either test
+because of who wrote it. Ignore formatting and line length.
+
+Give each test an absolute review outcome first -- `accept`, `nits` (accept with small
+comments), `changes` (changes requested before merging) or `reject` -- with its concrete
+problems, then compare:
+- **1** The generated test is clearly less readable: it would need substantial rework
+  where the developer's would not, or it is misleading or vacuous.
+- **2** The generated test is somewhat less readable: it would draw more or weightier review
+  comments than the developer's.
+- **3** On a par: comparable review outcome and comparable problems, even if different ones.
+- **4** The generated test is somewhat more readable: clearer names, plainer assertions or
+  tighter setup, and it would draw fewer review comments.
+- **5** The generated test is clearly more readable: it would be accepted as it stands
+  while the developer's test has real readability problems (misleading names, an
+  assertion that does not say what it checks, unexplained magic values or setup).
+
+---------------------------------------------------------------------------------------
+Answer with JSON only, no prose around it, in exactly this shape:
 
 {
-  "concept_level": 1 | 2 | 3 | 4 | 5,
-  "generated_asserts": "one sentence: what the generated test actually checks",
-  "developer_asserts": "one sentence: what the developer's test actually checks",
-  "shared": "the behaviour both reach, or 'none'",
-  "missed": "what the developer's test covers that the generated one does not, or 'nothing'",
+  "concept": {
+    "level": 1 | 2 | 3 | 4 | 5,
+    "contract": "one sentence: the behaviour this fix establishes",
+    "generated_asserts": "one sentence: what the generated test actually asserts",
+    "developer_asserts": "one sentence: what the developer's test actually asserts",
+    "same_behaviour": "yes" | "partly" | "no",
+    "generated_better_at": "specific point, or 'nothing'",
+    "developer_better_at": "specific point, or 'nothing'",
+    "developer_reasons": "a choice in the developer's test that likely carries project experience, and what it is; or 'none found'"
+  },
   "issue_coverage": {
     "level": 1 | 2 | 3 | 4 | 5,
-    "behaviours_in_pr": ["one line per distinct behaviour the pull request settles"],
-    "covered": [{"behaviour": "...", "assertion": "the exact line from the generated test that checks it"}],
-    "uncovered": ["those it does not, or empty"]
+    "behaviours": [
+      {"behaviour": "one line", "generated": "the exact asserting line, or 'none'", "developer": "the exact asserting line, or 'none'"}
+    ]
   },
   "readability": {
     "level": 1 | 2 | 3 | 4 | 5,
-    "strengths": "one sentence, or 'none'",
-    "problems": ["specific, quotable: a bad name, a vacuous assertion, unexplained setup"],
-    "nothing_to_raise": "only when problems is empty: what you checked and found clean"
+    "generated_review": "accept" | "nits" | "changes" | "reject",
+    "developer_review": "accept" | "nits" | "changes" | "reject",
+    "generated_problems": ["specific and quotable, or empty"],
+    "developer_problems": ["specific and quotable, or empty"],
+    "difference": "one sentence: what makes one easier to read than the other, or why they are on a par"
   },
   "confidence": "high" | "medium" | "low",
   "reasoning": "two sentences at most"
 }
 
-Be a strict reviewer on questions 2 and 3 and a fair one on question 1. Do not raise issue
-coverage because the test passes, and do not raise readability because it works -- these
-three answers are read separately and a uniformly generous one is worth nothing.
+Every level must follow from what you wrote beside it: a concept 4 or 5 needs a real
+`generated_better_at`; a 1 or 2 needs a real `developer_better_at`; an issue level must match
+the two columns of `behaviours`; a readability level must match the two reviews and problem
+lists. Where your evidence is thin -- a test you could not fully follow, a fix whose intent
+is unclear -- say so with `confidence`, not by drifting toward 3.
 
-Two rules make that concrete rather than a wish.
-
-**A behaviour is covered only if you can quote the assertion that checks it.** Every entry
-in `covered` carries the exact line from the generated test that pins that behaviour. If
-there is no such line -- the test reaches the code path but never asserts the outcome, or
-asserts something weaker, such as that the result is not None or that the output is no
-longer the symbolic form -- then the behaviour is uncovered and belongs in `uncovered`. A
-test that exercises the fix without asserting what it should now produce has not covered
-it.
-
-**An empty `problems` list needs saying so.** If you raise nothing, fill
-`nothing_to_raise` with what you actually checked -- names, assertions, setup, convention
--- and found clean. A readability of 4 or 5 with an empty list and no account of
-what was examined is not an answer.
-
-One thing is never a defect: a long generated test may reach you elided. Judge what you
-were given, and do not report truncation, an unterminated string at the end of the
-excerpt, or a missing closing bracket as a fault in the test.
+One thing is never a defect: a long test may reach you elided. Judge what you were given,
+and do not report truncation, an unterminated string at the end of an excerpt, or a missing
+closing bracket as a fault in either test.
 """
 
 
@@ -146,16 +221,16 @@ USER = """Bug report
 ==========
 {problem}
 
-The fix that was applied
-========================
+The fix that was merged
+=======================
 {patch}
 
-The maintainer's test
-=====================
+The developer's test (written by a maintainer of this project, as part of the fix)
+===================================================================================
 {developer_test}
 
-The generated test
-==================
+The generated test (written afterwards, from the report and the fix only)
+=========================================================================
 {generated}
 """
 
@@ -193,14 +268,28 @@ def _parse(text: str) -> dict[str, Any]:
 # The three scales. The model writes only the number; the label is looked up here, so
 # a label can never be spelled two ways or drift from its definition in SYSTEM. Kept in
 # the order the prompt defines them, and read by the reports for their legend.
+#
+# Scale 6 (2026-09-28) is comparative: 3 is on a par, below it the developer's test is
+# better, above it the generated one. Scale 5 was absolute -- how good the generated test
+# was, with the developer's test as a reference -- and had no level for a generated test
+# better than the developer's; its labels are kept to read older results.
 SCALES: dict[str, dict[int, str]] = {
+    "concept":  {1: "developer's clearly better", 2: "developer's better", 3: "on a par",
+                 4: "generated better", 5: "generated clearly better"},
+    "issue":    {1: "developer's covers clearly more", 2: "developer's covers more",
+                 3: "same coverage", 4: "generated covers more",
+                 5: "generated covers clearly more"},
+    "readable": {1: "clearly less readable", 2: "less readable", 3: "as readable",
+                 4: "more readable", 5: "clearly more readable"},
+}
+SCALE_VERSION = 6
+SCALES_V5: dict[str, dict[int, str]] = {
     "concept":  {1: "different", 2: "tangential", 3: "narrower", 4: "close",
                  5: "equivalent"},
     "issue":    {1: "none", 2: "minor only", 3: "main only", 4: "nearly complete",
                  5: "complete"},
     "readable": {1: "reject", 2: "poor", 3: "acceptable", 4: "good", 5: "exemplary"},
 }
-SCALE_VERSION = 5
 
 
 def _level(value: Any) -> int:
@@ -213,18 +302,26 @@ def _level(value: Any) -> int:
 def _levels(out: dict[str, Any]) -> dict[str, Any]:
     """Attach the label for every level, in the fields existing readers already read.
 
-    `verdict` stays the concept label and each sub-block keeps a `verdict` label, so
-    everything that consumed the three-category judge still finds a word where it
-    looked for one; the number sits beside it as `level`. A level that is missing or out
-    of range is not guessed at -- the whole answer becomes `unparsed`.
+    The concept answer is flattened to the top level, where every reader of the judge
+    has always looked (`level`, `verdict` and the concept fields beside them); issue
+    coverage and readability stay sub-blocks with their own `level` and `verdict`.
+    `uncovered` is derived for the reports: the listed behaviours the generated test has
+    no assertion for. A level that is missing or out of range is not guessed at -- the
+    whole answer becomes `unparsed`.
     """
-    c = _level(out.pop("concept_level"))
+    concept = out.pop("concept")
+    c = _level(concept.pop("level"))
+    out.update(concept)
     out["level"], out["verdict"] = c, SCALES["concept"][c]
     for key, scale in (("issue_coverage", "issue"), ("readability", "readable")):
         block = out.get(key) or {}
         n = _level(block.get("level"))
         block["level"], block["verdict"] = n, SCALES[scale][n]
         out[key] = block
+    beh = out["issue_coverage"].get("behaviours") or []
+    out["issue_coverage"]["uncovered"] = [
+        b.get("behaviour", "") for b in beh
+        if str(b.get("generated", "none")).strip().lower() in ("none", "", "'none'")]
     out["scale"] = SCALE_VERSION
     return out
 

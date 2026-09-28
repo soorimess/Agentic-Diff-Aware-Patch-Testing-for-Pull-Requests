@@ -169,7 +169,7 @@ def _undo_edits(box: Sandbox, log: list, on: bool = True) -> str:
     one `git diff --name-only` against a snapshot that lives outside the work tree.
     """
     if not on:
-        # `--no-guard`. The prompt still forbids the edit and `audit` still reports a
+        # Without `--add-guard`. The prompt still forbids the edit and `audit` still reports a
         # dirty tree as BROKEN; what is withheld is the repair, so the arm measures how
         # often the agent reaches for the library rather than how often it is stopped.
         return ""
@@ -499,12 +499,14 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
     """
 
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
-                 n: int = 5):
+                 n: int = 5, require_tools: bool = False):
         self.box = box
         self.repo = repo
         self.patch = patch
         self.log = log if log is not None else []
         self.n = n
+        # See CoverageExecutor: the obligation is stated where the answer arrives.
+        self.require_tools = require_tools
 
     def __call__(self, action: MutationAction,
                  conversation=None) -> MutationObservation:
@@ -534,11 +536,20 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
                           "that your test still passes on:"]
             lines += [f"  {m.file}:{m.line}    {m.operator}" for m in lived]
             lines += ["",
-                      "For each one, ask whether a reviewer would call that behaviour "
-                      "part of what this pull request fixes. Where the answer is yes, "
-                      "the test is missing an assertion about it. Where the answer is "
-                      "no -- the variant breaks something the change was never about, "
-                      "or nothing observable at all -- leave it alone."]
+                      "Answer each one. Ask whether a reviewer would call the behaviour "
+                      "it breaks part of what this pull request fixes. Where the answer "
+                      "is yes, your test is missing an assertion about that behaviour: "
+                      "add one that checks what the code returns, raises or does, then "
+                      "call `verify` and `mutation` again. Where the answer is no -- the "
+                      "variant breaks something the change was never about, or nothing "
+                      "observable at all -- say so in one sentence and leave it. Never "
+                      "assert on the exact expression a variant changed just to make it "
+                      "fail."]
+            if self.require_tools:
+                lines += ["",
+                          "You cannot finish with these unanswered: change the test for "
+                          "the ones that are part of the fix, and give a reason for the "
+                          "ones that are not."]
         else:
             lines += ["", "Every variant tried was caught."]
         return MutationObservation.from_text("\n".join(lines))
@@ -549,7 +560,8 @@ class SandboxMutationTool(ToolDefinition[MutationAction, MutationObservation]):
 
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
-               patch: str = "", log: list | None = None, n: int = 5, **params):
+               patch: str = "", log: list | None = None, n: int = 5,
+               require_tools: bool = False, **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="mutation",
@@ -560,7 +572,8 @@ class SandboxMutationTool(ToolDefinition[MutationAction, MutationObservation]):
             action_type=MutationAction,
             observation_type=MutationObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
-            executor=_Shown(MutationExecutor(box, repo, patch, log, n=n), "mutation"),
+            executor=_Shown(MutationExecutor(box, repo, patch, log, n=n,
+                                             require_tools=require_tools), "mutation"),
         )]
 
 
@@ -590,8 +603,13 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
 
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
                  reveal_missed: bool = True, point_at_mutation: bool = False,
-                 require_tools: bool = False, scored_name: str = ""):
+                 require_tools: bool = False, scored_name: str = "",
+                 gated: bool = False):
         self.box = box
+        # Whether a stop is refused while this says not fail-to-pass -- the stop gate,
+        # `--second-chance`'s since 2026-09-28. `require_tools` now covers only the checks
+        # after fail-to-pass, so it keys the coverage sentence in `_reach` and not this.
+        self.gated = gated
         # The file name the run is scored on. A verify on any other file answers about
         # that file only: three -repo-facts django runs verified a test under
         # `tests/<app>/` as fail-to-pass and stopped, while the file carrying the scored
@@ -712,7 +730,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # an earlier run stopped on exactly this observation.
         duty = ("\n\nYou cannot finish while this is the answer. Rewrite the test and "
                 "call `verify` again, as many times as it takes."
-                if self.require_tools and not ok else "")
+                if self.gated and not ok else "")
 
         # Reported here rather than left for the agent to ask about. The `coverage` tool
         # already offered this, and across twenty-six runs it was called twelve times --
@@ -795,7 +813,7 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, reveal_missed: bool = True,
                point_at_mutation: bool = False, require_tools: bool = False,
-               scored_name: str = "", **params):
+               scored_name: str = "", gated: bool = False, **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         return [cls(
             name="verify",
@@ -807,7 +825,7 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
             annotations=ToolAnnotations(readOnlyHint=False),
             executor=_Shown(VerifyExecutor(box, repo, patch, log, reveal_missed,
                                            point_at_mutation, require_tools,
-                                           scored_name), "verify"),
+                                           scored_name, gated), "verify"),
         )]
 
 
@@ -825,7 +843,7 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     `verify` and `coverage` both need the patch: without it there is no second state to
     run a test against, and nothing to measure coverage of.
     """
-    features = features if features is not None else FeatureSet.of()
+    features = features if features is not None else FeatureSet.full()
     # One process handles one instance under --parallel, but a serial run reuses this
     # one, and a count that carried over would be attributed to the wrong instance.
     INVENTED.clear()
@@ -850,7 +868,8 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
             reveal_missed=("coverage-tool" in features),
             point_at_mutation=("mutation-tool" in features),
             require_tools=require_tools,
-            scored_name=Path(gen_path).name if gen_path else "")[0]
+            scored_name=Path(gen_path).name if gen_path else "",
+            gated="second-chance" in features)[0]
         register_tool("verify", made["verify"])
         names.append("verify")
         if "coverage-tool" in features:
@@ -864,7 +883,8 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
         # fixed code, which is what `verify` establishes.
         if "mutation-tool" in features:
             made["mutation"] = SandboxMutationTool.create(
-                box=box, repo=repo, patch=patch, log=log, n=probe_mutants)[0]
+                box=box, repo=repo, patch=patch, log=log, n=probe_mutants,
+                require_tools=require_tools)[0]
             register_tool("mutation", made["mutation"])
             names.append("mutation")
     _check_no_leak(made, box, features)

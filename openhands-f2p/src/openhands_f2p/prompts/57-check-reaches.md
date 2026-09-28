@@ -1,7 +1,7 @@
 ---
 needs: coverage-tool
 name: check-reaches
-job: Step three, plus how to read a low figure. Dropped with the diff, and by `--no-coverage-tool` on its own.
+job: Step three, plus how to read a low figure. Present only with `--add-coverage-tool`, which needs the diff.
 
   Rewritten twice. The first version said "iterate until both answer well" -- an
   instruction to maximise the numbers we score by, which makes a high number evidence of

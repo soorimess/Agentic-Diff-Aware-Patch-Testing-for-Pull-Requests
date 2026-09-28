@@ -155,24 +155,40 @@ root, `openhands-f2p/.venv/bin/python main.py 3` also works.
 | `--out-root DIR` | write results here instead of `out/default/`. `out/` holds one folder per run |
 | `--label NAME` | a name for this run, recorded in every result |
 | `--max-iterations N` | cap on agent steps, default 100. One instance has reached it: `sphinx-7454` spent 91 of its 100 steps in `run`, searching rather than looping |
-| `--second-chance` | refuse the agent's first stop when the run ended with nothing to score for a reason it could have seen itself, and let it carry on once — on what is left of `--max-iterations`, so the arm costs no more budget than its control |
-| `--no-require-tools` | stop refusing a finish where a registered instrument was never used or last reported failure. On by default: `verify` must last say fail-to-pass with no edit since, `coverage` must have been called and a sub-100% report answered, `mutation` must have been called and read |
+
+The configuration flags are listed in the next section.
 
 The instances are in `src/openhands_f2p/prs.py`: 26 across 12 repositories, five django
 versions from 3.0 to 5.0, and for every other repository one old and one recent — the
 oldest is `psf/requests` at 1.1, from 2013.
 
-## Withhold a component
+## Choose what the agent has
 
-Every component the agent is given can be taken away, one flag each. The harness measures
-the same things either way, so a run made with a flag is comparable to one made without:
+Two kinds of flag (since 2026-09-28). What the agent is **shown** is on unless withheld;
+what is **added** to a bare agent is off unless asked for. With no flags at all the agent
+is shown the report, the diff and the briefing, holds `run`, `write_file` and `run_tests`,
+and its first stop is final.
+
+| shown -- on unless withheld | added -- off unless asked for |
+|---|---|
+| `--no-issue` the bug report | `--add-verify-tool` the `verify` tool |
+| `--no-patch` the pull request diff | `--add-coverage-tool` the `coverage` tool (needs verify-tool, patch) |
+| `--no-repo-facts` (`--repo-search`) the briefing on how this project tests | `--add-mutation-tool` the `mutation` tool (needs verify-tool, patch) |
+| | `--add-guard` edits to pre-existing files reverted between actions |
+| | `--add-second-chance` the stop gate: a stop is refused until the test is fail-to-pass |
+| | `--add-require-tools` the duties: once it flips, `coverage` / `mutation` answers must be acted on (needs verify-tool) |
+
+An add-on whose need is missing is refused with the flag that fixes it, never quietly
+dropped. The harness measures the same things in every configuration, so runs made with
+different flags are comparable:
 
 ```bash
-uv run openhands-f2p --no-coverage-tool     # the tool goes; the measurement stays
-uv run openhands-f2p --no-patch             # the agent works the bug out from the report
-uv run openhands-f2p --no-verify-tool       # it can watch its test fail, never pass
-uv run openhands-f2p --no-issue             # only the diff says what the bug is
-uv run openhands-f2p --repo-search          # no briefing; the agent works the repo out
+FULL="--add-verify-tool --add-coverage-tool --add-mutation-tool --add-guard --add-second-chance --add-require-tools"
+uv run openhands-f2p $FULL                              # everything: the reference configuration
+uv run openhands-f2p ${FULL/--add-coverage-tool /}      # the tool goes; the measurement stays
+uv run openhands-f2p $FULL --no-patch                   # refused: coverage and mutation need the diff
+uv run openhands-f2p --no-issue                         # only the diff says what the bug is
+uv run openhands-f2p $FULL --repo-search                # no briefing; the agent works the repo out
 ```
 
 `--repo-search` is the same switch as `--no-repo-facts`, spelled for what the run is for.
@@ -200,14 +216,14 @@ flags exist for &mdash; if withholding the diff also withheld the feedback loop,
 the result could not be attributed to either.
 
 What genuinely cannot be separated is `coverage`: it prints the source of the lines a test
-missed, which *is* the diff. So it needs `patch`, and dependencies cascade and say so
-&mdash; `--no-patch` reports `without patch, coverage-tool (needs patch)`.
+missed, which *is* the diff. So it needs `patch`, and `--add-coverage-tool --no-patch` is
+refused: "--add-coverage-tool needs patch: drop --no-patch".
 
 **To compare configurations, give each its own directory and compare the series:**
 
 ```bash
-uv run openhands-f2p --out-root out_full
-uv run openhands-f2p --out-root out_nocov --no-coverage-tool
+uv run openhands-f2p --out-root out_full  $FULL
+uv run openhands-f2p --out-root out_nocov ${FULL/--add-coverage-tool /}
 ```
 
 Each `result.json` records `features.config`, and `RUNS.md` says which configuration its
@@ -227,8 +243,8 @@ registered and raises, naming the piece to fix. Ask for the assembled prompt in 
 configuration:
 
 ```bash
-uv run python -m openhands_f2p.prompt --explain --no-patch   # which pieces, and why
-uv run python -m openhands_f2p.prompt --no-coverage-tool     # the text itself
+uv run python -m openhands_f2p.prompt --explain --no-patch        # which pieces, and why
+uv run python -m openhands_f2p.prompt --add-verify-tool --add-coverage-tool   # the text itself
 ```
 
 ## Would the test notice a wrong fix?
@@ -262,7 +278,8 @@ them and is deferred.
 
 `mutation` is also a tool the agent holds, alongside `verify` and `coverage`: it breaks
 the fix in small ways, runs the agent's test against each, and reports the ones it does
-not notice. `--no-mutation` withholds it, and then nothing in the prompt mentions it.
+not notice. It is there only with `--add-mutation-tool`; without it nothing in the prompt
+mentions it.
 
 Giving the agent the tool would ordinarily destroy the measurement — an agent that tunes
 its test until those ten mutants die, scored on those ten mutants, is being marked on its

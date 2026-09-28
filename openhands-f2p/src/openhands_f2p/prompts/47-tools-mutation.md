@@ -21,20 +21,25 @@ job: Says what `mutation` is for, and how to read a survivor without gaming it.
   broken version, and tells you which ones your test still passes on. A variant your test
   does not notice is a behaviour this change makes that your test does not check.
 
-Use it, and act on what it says. A test can flip from failing to passing, execute every
-changed line, and still be satisfied by a fix with a comparison inverted or a boundary off
-by one — coverage says the line *ran*, this says whether you would have *noticed* it going
-wrong. That is the difference between a test that documents the fix and a test that
+Use it, and act on what it says. A test can flip from failing to passing{?coverage-tool}, execute every
+changed line,{/coverage-tool} and still be satisfied by a fix with a comparison inverted or a boundary off
+by one{?coverage-tool} — coverage says the line *ran*, this says whether you would have *noticed* it going
+wrong{/coverage-tool}. That is the difference between a test that documents the fix and a test that
 merely accompanies it.
 
-Read each survivor as a question, not as a defect to clear:
+Every survivor gets an answer. Read each one as a question, not as a defect to clear:
 
-- **Would a reviewer call that behaviour part of what this pull request fixes?** If yes,
-  your test is missing an assertion about it — add the one that asserts the behaviour,
-  and the variant dies as a consequence.
+- **Would a reviewer call the behaviour it breaks part of what this pull request fixes?**
+  If yes, your test is missing an assertion about that behaviour — add the one that
+  asserts it (what the code returns, raises or does for an input that tells the right fix
+  from this wrong one), and the variant dies as a consequence. Then run `verify` and
+  `mutation` again.
 - **Or does the variant break something the change was never about**, or nothing
-  observable at all? Then leave it. Not every survivor is a gap, and a test stretched to
-  cover one that is not gets worse, not better.
+  observable at all? Then say so, in one sentence, and leave it. Not every survivor is a
+  gap, and a test stretched to cover one that is not gets worse, not better.
+
+A survivor you have not answered either way is the one thing this tool exists to prevent:
+a wrong fix your test would let through without anyone having decided that is acceptable.
 
 What you must never do is write an assertion whose purpose is to kill a mutant. Pinning
 the exact expression a variant happened to change — asserting on an internal value, or

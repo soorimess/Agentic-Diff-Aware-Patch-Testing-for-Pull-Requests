@@ -48,7 +48,10 @@ from openhands_f2p import verify as V
 from openhands_f2p.sandbox import Sandbox
 from openhands_f2p.statements import widen
 
-DEFAULT_MUTANTS = 10
+# Per half of the pool, not in total: `split_pool` spreads each half up to this many.
+# 20 since 2026-09-28, so a patch with a large candidate pool is scored on up to 20
+# unseen mutants rather than 10; a small patch stays small whatever this says.
+DEFAULT_MUTANTS = 20
 
 # Where the pre-patch copies are parked while mutants are generated. Inside the
 # container but outside the repository, so nothing walks into it.
@@ -361,9 +364,8 @@ class Score:
     asked: int = 0
     total: int = 0
     held_out: bool = False
-    """Scored on mutants the agent was never shown. True only when it had the
-    `mutation` tool -- a score taken on the sample the agent tuned against and one taken
-    on a fresh sample are different quantities and must not share a column."""
+    """Whether the agent held the `mutation` tool, and so was shown the other half of the
+    pool. Every run is scored on the same half since 2026-09-28 -- see `measure`."""
     agent_killed: int = 0
     developer_killed: int = 0
     mutants: list[dict] = field(default_factory=list)
@@ -468,20 +470,19 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
             score.why = "the generated test does not pass on the fixed code here"
             return score
 
-        # `held_out` when the agent had the `mutation` tool: it was shown one half of
-        # the pool and is scored on the other, so the number says whether the test
-        # generalises rather than whether it memorised the sample.
-        shown: list = []
-        if held_out:
-            shown, mutants = split_pool(box, instance["patch"], n)
-        else:
-            mutants = generate(box, instance["patch"], n)
+        # Always the scoring half of the split, with or without the tool. With it, the
+        # agent was shown the other half, so the number says whether the test
+        # generalises rather than whether it memorised the sample. Without it, the same
+        # half is used anyway: until 2026-09-28 such arms were scored on the whole pool
+        # (often 10 mutants) while arms with the tool got the half (often 1-3), so the
+        # two columns were different quantities and could not be paired per instance.
+        shown, mutants = split_pool(box, instance["patch"], n)
         if not mutants:
             score.measured = True
             # A pool of one goes to the agent's half, and "offers no mutations" was false
             # of it: there was a mutant, and the agent's `mutation` tool had shown it.
-            score.why = ("the only mutant(s) on these lines went to the half the agent's "
-                         "`mutation` tool showed it; none were left to score on"
+            score.why = ("the only mutant(s) on these lines went to the half reserved "
+                         "for the agent's `mutation` tool; none were left to score on"
                          if shown else
                          "mutmut offers no mutations on the lines this patch changed")
             return score

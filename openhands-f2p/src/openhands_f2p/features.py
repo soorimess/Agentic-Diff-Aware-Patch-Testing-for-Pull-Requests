@@ -7,9 +7,19 @@ used to be scattered -- a `--blind` boolean threaded through four functions, a
 prompt builder. Adding a third switch meant touching all of them and hoping nothing was
 missed.
 
-Here they are data. Add a `Feature` to `FEATURES` and it gets a `--no-<name>` flag, a
-place in the recorded result, dependency handling, and the ability to gate a prompt piece
-or a paragraph inside one. Nothing else needs editing.
+Here they are data. Add a `Feature` to `FEATURES` and it gets a flag, a place in the
+recorded result, dependency handling, and the ability to gate a prompt piece or a
+paragraph inside one. Nothing else needs editing.
+
+**Two kinds of feature, two kinds of flag (since 2026-09-28).** What the agent is *shown*
+-- the report, the diff, the briefing on how the project tests -- is an input: on unless
+withheld, `--no-issue`, `--no-patch`, `--no-repo-facts`. What is *added* to a bare agent --
+the tools beyond run/write/run_tests, the guard, the two stop gates -- is an add-on: off
+unless asked for, `--add-verify-tool`, `--add-coverage-tool`, `--add-mutation-tool`,
+`--add-guard`, `--add-require-tools`, `--add-second-chance`. A command line then reads as
+what the run has, and a run with no flags is the bare agent shown everything. Before,
+every feature was on by default and removed by `--no-<name>`, except the second chance,
+which was added by `--second-chance` -- two conventions in one list.
 
 An input and a tool are separate features even when they are about the same thing. The
 diff and `verify` were one switch at first, on the reasoning that a check against the
@@ -34,10 +44,11 @@ piece as well as gate its own.
 
 Two rules are enforced rather than documented:
 
-* **Dependencies cascade.** `coverage-tool` needs `patch`, so `--no-patch` turns the
-  coverage tool off too and says so. It does not fail; the resulting configuration is a
-  coherent one, and refusing it would only make the caller pass both flags to mean one
-  thing.
+* **Dependencies are checked, not guessed.** On the command line, an add-on whose need
+  is missing is refused with the flag to add: `--add-coverage-tool` without
+  `--add-verify-tool`, or with `--no-patch`, is an error, never a quiet change of
+  configuration. `FeatureSet.of`, the programmatic form, still cascades (withholding
+  `patch` takes the coverage tool with it) and records why in `cascaded`.
 * **Something has to describe the bug.** With neither the report nor the diff the task
   is not harder, it is impossible, and the run would produce a row that looks like a
   measurement. That is refused.
@@ -50,10 +61,14 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class Feature:
     name: str
-    """Also the flag: `issue` gives `--no-issue`."""
+    """Also the flag: `issue` gives `--no-issue`, `guard` gives `--add-guard`."""
 
     summary: str
-    """One line for `--help`, phrased as what withholding it does."""
+    """One line for `--help`: what withholding an input does, what adding an add-on does."""
+
+    added: bool = False
+    """An add-on: off unless `--add-<name>` asks for it. An input (False) is on unless
+    `--no-<name>` withholds it."""
 
     needs: tuple[str, ...] = ()
     """Features that must be on for this one to mean anything."""
@@ -74,34 +89,42 @@ FEATURES: tuple[Feature, ...] = (
                      "out what the change is for"),
     Feature("patch", "withhold the pull request diff from the prompt. The agent has to "
                      "work out the intended behaviour from the report alone"),
-    Feature("verify-tool", "withhold the `verify` tool, so the agent can watch its test "
-                           "fail on this code but never watch it pass. The harness "
-                           "still decides the verdict either way",
-            tools=("verify",)),
-    Feature("coverage-tool", "withhold the `coverage` tool. The harness still measures "
-                             "changed-line coverage; the agent just cannot see it while "
-                             "it works",
-            needs=("patch", "verify-tool"), tools=("coverage",)),
-    Feature("mutation-tool", "withhold the `mutation` tool, which runs the agent's test "
+    Feature("verify-tool", "add the `verify` tool, which runs the agent's test before "
+                           "and after the fix and says whether it flips. Without it the "
+                           "agent can watch its test fail on this code but never watch it "
+                           "pass; the harness decides the verdict either way",
+            added=True, tools=("verify",)),
+    Feature("coverage-tool", "add the `coverage` tool: which changed lines the test never "
+                             "runs, with their code and the conditions above them. The "
+                             "harness measures changed-line coverage either way",
+            added=True, needs=("patch", "verify-tool"), tools=("coverage",)),
+    Feature("mutation-tool", "add the `mutation` tool, which runs the agent's test "
                              "against small wrong variants of the fix and reports which "
-                             "ones it fails to notice. The harness still measures a "
-                             "mutation score afterwards, on mutants the agent was never "
-                             "shown",
-            needs=("patch", "verify-tool"), tools=("mutation",),
-            aliases=("--no-mutation",)),
-    Feature("guard", "stop reverting edits the agent makes to files that were already "
-                     "here. The prohibition stays in the prompt and the audit still "
-                     "reports a dirty tree as BROKEN -- what goes away is the repair "
-                     "between actions, so an agent that applies the fix to the library "
-                     "keeps it. Withhold it to measure how often that happens rather "
-                     "than how often it is caught"),
-    Feature("require-tools", "stop requiring the agent to have used the tools it was "
-                             "given. With this on -- the default -- a run that finishes "
-                             "without calling a registered instrument is sent back with "
-                             "the names of the ones it skipped, because a tool that is "
-                             "present and unused is a configuration we are not actually "
-                             "measuring",
-            needs=("verify-tool",)),
+                             "ones it fails to notice. The harness measures a mutation "
+                             "score either way, on mutants the agent was never shown",
+            added=True, needs=("patch", "verify-tool"), tools=("mutation",)),
+    Feature("guard", "add the guard: edits the agent makes to files that were already "
+                     "here are reverted between actions. Without it the prohibition "
+                     "stays in the prompt and the audit still reports a dirty tree as "
+                     "BROKEN, but an agent that applies the fix to the library keeps it",
+            added=True),
+    # The two stop checks, one objective each (split 2026-09-28). Until then
+    # `require-tools` held the verify loop as well as the coverage/mutation duties, and
+    # `--second-chance` refused only states the verify loop refused anyway: in
+    # experiments-v2's base arm all 40 second-chance rounds fired together with the loop,
+    # none alone, so removing the second chance removed wording and nothing else.
+    Feature("second-chance", "add the stop gate: a stop is sent back while there is no "
+                             "test file, it collects nothing, it passes or is skipped on "
+                             "the unfixed code (the harness runs it), or the agent's own "
+                             "last `verify` of it did not say fail-to-pass. The run "
+                             "carries on with what is left of its budget",
+            added=True),
+    Feature("require-tools", "add the duties after fail-to-pass: a test that already "
+                             "flips is sent back once if `coverage` or `mutation` was "
+                             "never called on it, or if the last answer listed missed "
+                             "lines or surviving mutants and the test was not changed "
+                             "since",
+            added=True, needs=("verify-tool",)),
     Feature("repo-facts", "withhold the briefing on how this project tests: the target "
                           "convention, where a new test file has to live to be "
                           "collected, the neighbouring tests and the test "
@@ -134,12 +157,15 @@ def instruments(features: "FeatureSet") -> tuple[str, ...]:
 
 
 def flag(name: str) -> str:
-    return f"--no-{name}"
+    """The flag that departs from the default: `--add-<name>` for an add-on, `--no-<name>`
+    for an input."""
+    return f"--{'add' if BY_NAME[name].added else 'no'}-{name}"
 
 
 def dest(name: str) -> str:
-    """argparse turns `--no-coverage-tool` into `no_coverage_tool`."""
-    return f"no_{name.replace('-', '_')}"
+    """argparse turns `--add-coverage-tool` into `add_coverage_tool`, `--no-issue` into
+    `no_issue`."""
+    return flag(name)[2:].replace("-", "_")
 
 
 @dataclass(frozen=True)
@@ -185,8 +211,33 @@ class FeatureSet:
         return cls(off=frozenset(resolved), cascaded=tuple(cascaded))
 
     @classmethod
+    def full(cls) -> FeatureSet:
+        """Everything on. The programmatic default -- not what a command line with no flags
+        means, which is the bare agent shown everything."""
+        return cls.of()
+
+    @classmethod
     def from_args(cls, args: object) -> FeatureSet:
-        return cls.of([f.name for f in FEATURES if getattr(args, dest(f.name), False)])
+        """The configuration a command line asked for, checked rather than completed.
+
+        An input is off when its `--no-` flag was given; an add-on is off unless its
+        `--add-` flag was. A feature left on whose need is off is refused with the flag
+        that fixes it -- no cascade here: a configuration someone typed must be the one
+        that runs, and the one the result records."""
+        given = {f.name for f in FEATURES if getattr(args, dest(f.name), False)}
+        off = {f.name for f in FEATURES if (f.name in given) != f.added}
+        problems = []
+        for f in FEATURES:
+            if f.name in off:
+                continue
+            for need in f.needs:
+                if need in off:
+                    fix = (f"add {flag(need)}" if BY_NAME[need].added
+                           else f"drop {flag(need)}")
+                    problems.append(f"{flag(f.name)} needs {need}: {fix}")
+        if problems:
+            raise SystemExit("  " + "\n  ".join(problems))
+        return cls.of(sorted(off))
 
     def __contains__(self, name: str) -> bool:
         if name not in BY_NAME:
@@ -211,8 +262,19 @@ class FeatureSet:
         return not self.off
 
     def slug(self) -> str:
-        """A short name for this configuration, for labelling a series of runs."""
-        return "full" if self.default else "no-" + "+".join(self.withheld)
+        """A short name for this configuration, for labelling a series of runs.
+
+        In the terms of the flags: `full` is everything; otherwise the add-ons present
+        (`bare` when there are none) and the inputs withheld -- `verify-tool+guard`,
+        `bare no-issue`, `full no-repo-facts`. Before 2026-09-28 it was `no-<withheld>`,
+        which recorded results still carry."""
+        if self.default:
+            return "full"
+        added = [f.name for f in FEATURES if f.added and f.name in self.on]
+        every = [f.name for f in FEATURES if f.added]
+        head = "full" if added == every else "+".join(added) or "bare"
+        withheld = [f.name for f in FEATURES if not f.added and f.name in self.off]
+        return head + "".join(f" no-{n}" for n in withheld)
 
     def as_dict(self) -> dict:
         """Recorded in every result, so a series of runs can be compared by what the
@@ -224,32 +286,41 @@ class FeatureSet:
     def describe(self) -> str:
         """One line for the run header."""
         if self.default:
-            return "everything (no --no-* flags)"
-        parts = []
-        for name in self.withheld:
-            why = dict(self.cascaded).get(name)
-            parts.append(f"{name} (needs {why})" if why else name)
-        return f"without {', '.join(parts)}"
+            return "everything: every input shown, every add-on added"
+        added = [f.name for f in FEATURES if f.added and f.name in self.on]
+        withheld = []
+        for f in FEATURES:
+            if not f.added and f.name in self.off:
+                why = dict(self.cascaded).get(f.name)
+                withheld.append(f"{f.name} (needs {why})" if why else f.name)
+        return (f"added: {', '.join(added) or 'nothing'}"
+                + (f"; withheld: {', '.join(withheld)}" if withheld else ""))
 
 
 def add_arguments(parser: object) -> None:
-    """Give the parser one `--no-<name>` per feature. Generated, so a new feature
-    cannot be added to the registry and forgotten here."""
-    group = parser.add_argument_group(
-        "what to withhold from the agent",
-        "Each flag removes one component. The harness measures the same things either "
-        "way, so runs made with different flags are comparable; every result records "
-        "which flags were in force.")
+    """One flag per feature, in two groups. Generated, so a new feature cannot be added to
+    the registry and forgotten here."""
+    shown = parser.add_argument_group(
+        "what the agent is shown (on unless withheld)",
+        "Each flag removes one input. The harness measures the same things either way, "
+        "so runs made with different flags are comparable; every result records the "
+        "configuration.")
+    added = parser.add_argument_group(
+        "what is added to the agent (off unless asked for)",
+        "With none of these the agent has run, write_file and run_tests, and its first "
+        "stop is final. Each flag adds one component; an add-on whose need is missing is "
+        "refused.")
     for f in FEATURES:
-        group.add_argument(flag(f.name), *f.aliases, action="store_true",
-                           help=f.summary)
+        (added if f.added else shown).add_argument(
+            flag(f.name), *f.aliases, dest=dest(f.name), action="store_true",
+            help=f.summary)
 
 
 def child_flags(features: FeatureSet) -> list[str]:
-    """The flags a child process needs to reproduce this configuration.
-
-    Only what was asked for: a cascaded feature comes back on its own in the child, and
-    passing it explicitly would report it as a deliberate choice.
-    """
+    """The flags a child process needs to reproduce this configuration: `--no-` for each
+    input withheld, `--add-` for each add-on present. A feature a cascade took out is off
+    in both processes without being named, so the child is not told it was a choice."""
     cascaded = {name for name, _ in features.cascaded}
-    return [flag(n) for n in features.withheld if n not in cascaded]
+    return ([flag(f.name) for f in FEATURES
+             if not f.added and f.name in features.withheld and f.name not in cascaded]
+            + [flag(f.name) for f in FEATURES if f.added and f.name in features.on])

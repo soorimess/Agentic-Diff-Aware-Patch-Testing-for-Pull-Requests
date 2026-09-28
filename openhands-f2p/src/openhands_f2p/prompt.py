@@ -184,7 +184,7 @@ def build(*, repo: str, test_file: str, problem: str = "", repo_facts: str = "",
           patch: str = "", features: FeatureSet | None = None,
           skip: object = None) -> str:
     """The finished prompt. `skip` drops pieces by name, for ablations by hand."""
-    features = features if features is not None else FeatureSet.of()
+    features = features if features is not None else FeatureSet.full()
     skip = set(skip or ())
 
     used, text_parts = [], []
@@ -213,7 +213,7 @@ build.last_pieces: list[str] = []
 
 
 def explain(features: FeatureSet | None = None) -> str:
-    features = features if features is not None else FeatureSet.of()
+    features = features if features is not None else FeatureSet.full()
     lines = [f"Prompt pieces, in order. Configuration: {features.describe()}\n"]
     for p in pieces():
         dropped = [n for n in p.needs if not holds(n, features)]
@@ -230,13 +230,15 @@ def explain(features: FeatureSet | None = None) -> str:
 
 
 if __name__ == "__main__":
-    import sys
-    from openhands_f2p.features import FEATURES
-    alias = {a: f.name for f in FEATURES for a in f.aliases}
-    off = [alias.get(a) or a[len("--no-"):] for a in sys.argv[1:]
-           if a.startswith("--no-") or a in alias]
-    fs = FeatureSet.of(off)
-    if "--explain" in sys.argv:
+    import argparse
+
+    from openhands_f2p.features import add_arguments
+    ap = argparse.ArgumentParser(description="Print the prompt a configuration assembles.")
+    ap.add_argument("--explain", action="store_true")
+    add_arguments(ap)
+    cli = ap.parse_args()
+    fs = FeatureSet.from_args(cli)
+    if cli.explain:
         print(explain(fs))
     else:
         # The bare filename when the briefing is withheld, because that is what

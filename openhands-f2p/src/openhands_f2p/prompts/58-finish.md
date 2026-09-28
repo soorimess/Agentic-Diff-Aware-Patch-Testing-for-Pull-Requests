@@ -53,30 +53,36 @@ The last thing you run before finishing should be `verify`: an assertion added t
 anything else can quietly stop the test failing on the old code.
 {/verify-tool}
 
-{?require-tools}
-**These are checked by their answers, not by whether you called them, and they are
-checked in this order.** Each one is a question about a test that has already answered
-the one above it, so work them in sequence rather than in parallel. Before you can stop:
+{?second-chance}
 {?verify-tool}
-1. the last `verify` must say fail-to-pass, and you must not have edited the test since —
-   an answer about a file you have changed is an answer about a file that no longer
-   exists. Until it does say so, this is the only thing worth spending an action on:
-   rewrite the test and call `verify` again, as many times as it takes;
+**Before you can stop, the last `verify` must say fail-to-pass, and you must not have
+edited the test since** — an answer about a file you have changed is an answer about a
+file that no longer exists. Until it does say so, this is the only thing worth spending an
+action on: rewrite the test and call `verify` again, as many times as it takes. This is
+checked by its answer, not by whether you called it; a stop before it says fail-to-pass
+is sent back with the reason.
 {/verify-tool}
+{/second-chance}
+{?require-tools}
+
+**Once `verify` says fail-to-pass, the checks after it are checked by their answers, in
+this order.** Each is a question about a test that already flips, so work them in
+sequence:
 {?coverage-tool}
-2. then `coverage`: aim for a test that runs every line the change touched. If it lists
-   lines your test never runs, you must have acted on that — either made them run, or
-   established that a line cannot be reached from a test. An assertion added only to execute a line is worth less than an
-   honest reason the line stays unreached;
+- `coverage`: aim for a test that runs every line the change touched. If it lists lines
+  your test never runs, you must have acted on that — either made them run, or
+  established that a line cannot be reached from a test. An assertion added only to
+  execute a line is worth less than an honest reason the line stays unreached;
 {/coverage-tool}
 {?mutation-tool}
-3. then `mutation`, called and its survivors read. You need not change anything because
-   of them.
+- `mutation`: every survivor answered — an assertion about the behaviour it breaks when
+  that behaviour is part of what this pull request fixes, or one sentence saying why it
+  is not.
 {/mutation-tool}
 
-Calling a tool once and stopping on a bad answer does not satisfy this. If any of the
-above is open you will be sent back with the reason, so closing it now is the shorter
-path.
+Calling a tool once and stopping on an answer you did nothing with does not satisfy this.
+If any of these is open you will be sent back with the reason, so closing it now is the
+shorter path.
 {/require-tools}
 
 You are finished when the checks above have been run against the test as it now stands

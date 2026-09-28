@@ -16,11 +16,14 @@ a way your test cannot tell apart from the right one.
 assertions have any force, and a test that flips and covers every line can still pass
 against a fix that is subtly wrong.
 
-Calling it is required; changing the test afterwards is not. Survivors are yours to weigh
-— some are behaviour this pull request does not fix, and saying so is a complete answer.
-What you must not do is close the list for its own sake: a run once answered `0 killed`
-by adding a second test that failed on both sides, which turned a file whose first test
-flipped correctly into no result at all.
+**Answer every survivor.** For each, decide whether the behaviour it breaks is part of what
+this pull request fixes. If it is, add the assertion about that behaviour and call
+`verify` and `mutation` again. If it is not, say so in one sentence — that is a complete
+answer.{?require-tools} This is checked: a stop right after survivors, with the test
+unchanged since, is sent back once to ask for those answers.{/require-tools} What you must
+not do is close the list for its own sake: a run once answered `0 killed` by adding a
+second test that failed on both sides, which turned a file whose first test flipped
+correctly into no result at all. Keep `verify` saying fail-to-pass while you work.
 
 Call it again after you change the test — a new assertion that closes one survivor often
 closes others, and it can reveal ones the earlier version never reached.

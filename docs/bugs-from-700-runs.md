@@ -366,6 +366,18 @@ for future runs (above); the published v1/v2 comparisons are to be read this way
 
 ## Changed after the fact
 
+- **2026-09-28, from the tool and gate analysis of experiments-v2** (details in
+  system-design.md): the second chance is the stop gate (verify loop included) and a
+  default-on feature; `require-tools` is only the coverage/mutation duties, and surviving
+  mutants must now be answered; every configuration is scored on the same held-out mutant
+  half, `--mutants 20`; the judge compares the two tests on a symmetric 1-5 scale (scale
+  6); one prompt leak closed (the mutation paragraph named `coverage` in −coverage). Why:
+  a withheld tool was already fully gone (no shell workarounds in 700 runs); `coverage`
+  and `mutation` are only called after the test flips, so they cannot move fail-to-pass
+  through their output; all 40 second-chance rounds in v2 base co-fired with the verify
+  loop; the mutation tool did not change the mutation score (0.66 vs 0.66, 31 pairs), and
+  its score was taken on a different pool from the arm without it.
+
 - **Sampling temperature 0.3 is the default** since 2026-09-26. One run at 0.3 scored
   20/26 against 16/26 with none sent (p = 0.22; 20 vs 15 genuine, p = 0.06). Adopted on
   that evidence; the ten arms all ran with none sent.

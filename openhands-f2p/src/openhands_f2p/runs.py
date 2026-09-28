@@ -18,7 +18,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from openhands_f2p.compare import SCALE_VERSION, SCALES, shown
+from openhands_f2p.compare import SCALE_VERSION, SCALES, SCALES_V5, shown
 from openhands_f2p.layout import OUT
 from openhands_f2p.prs import PRS
 
@@ -160,7 +160,7 @@ def _row(pr: dict, root: Path) -> dict:
             "judge": shown(r.get("concept")),
             "issue": shown((r.get("concept") or {}).get("issue_coverage")),
             "readable": shown((r.get("concept") or {}).get("readability")),
-            "five_level": bool((r.get("concept") or {}).get("scale") == SCALE_VERSION),
+            "scale": (r.get("concept") or {}).get("scale"),
             "uncovered": ((r.get("concept") or {}).get("issue_coverage")
                           or {}).get("uncovered") or [],
             "rechecked": bool(r.get("rechecked")),
@@ -172,21 +172,36 @@ def _row(pr: dict, root: Path) -> dict:
             "lost": _lost_turns(d)}
 
 
-def _judge_legend() -> list[str]:
+def _judge_legend(scales_seen: set) -> list[str]:
     """What each judge number means, above the table that uses them.
 
     Printed from `compare.SCALES` rather than written here, so the legend is the same
     table the labels were looked up in and cannot describe a scale the judge was not
-    given.
+    given. A folder judged on the older absolute scale gets that legend instead, or both
+    when rows from both are present.
     """
-    names = {"concept": "concept -- same behaviour as the maintainer's test?",
-             "issue": "issue -- every behaviour the pull request settles?",
-             "readable": "readable -- would it pass review?"}
-    out = ["The three judge columns are levels from 1 (worst) to 5 (best), printed as "
-           "`label (level)`:", "", "| scale | 1 | 2 | 3 | 4 | 5 |", "|---|---|---|---|---|---|"]
-    for key, scale in SCALES.items():
-        out.append(f"| {names[key]} | " + " | ".join(scale[n] for n in range(1, 6)) + " |")
-    return out + [""]
+    out = []
+    if SCALE_VERSION in scales_seen:
+        names = {"concept": "concept -- which pins the fix's behaviour better?",
+                 "issue": "issue -- which covers more of what the fix settles?",
+                 "readable": "readable -- which reads better?"}
+        out += ["The three judge columns compare the generated test with the developer's, "
+                "from 1 (the developer's clearly better) through 3 (on a par) to 5 (the "
+                "generated clearly better), printed as `label (level)`:", "",
+                "| scale | 1 | 2 | 3 | 4 | 5 |", "|---|---|---|---|---|---|"]
+        for key, scale in SCALES.items():
+            out.append(f"| {names[key]} | " + " | ".join(scale[n] for n in range(1, 6)) + " |")
+        out.append("")
+    if 5 in scales_seen:
+        names = {"concept": "concept -- same behaviour as the maintainer's test?",
+                 "issue": "issue -- every behaviour the pull request settles?",
+                 "readable": "readable -- would it pass review?"}
+        out += ["Rows judged before 2026-09-28 use the older absolute scale, 1 (worst) to "
+                "5 (best):", "", "| scale | 1 | 2 | 3 | 4 | 5 |", "|---|---|---|---|---|---|"]
+        for key, scale in SCALES_V5.items():
+            out.append(f"| {names[key]} | " + " | ".join(scale[n] for n in range(1, 6)) + " |")
+        out.append("")
+    return out
 
 
 def _brief(why: str | None) -> str:
@@ -212,27 +227,29 @@ def _brief(why: str | None) -> str:
 def _second_chance_table(retried: list[dict]) -> list[str]:
     """Which refusals converted, split by what the agent was told.
 
-    Worth its own table because the totals mislead. `loop_open` is not this flag's --
-    it belongs to `require-tools`, which is on by default and fires whether or not a
-    second chance was offered, so counting its conversions as the flag's work credits it
-    with runs it did not cause. `passes_at_base` and `collects_nothing` are the two
-    reasons `--second-chance` adds, and they are the only rows that answer whether it
-    earned its place. `no_test` and `skipped_at_base` are the flag's too; `reads_source`
-    is checked in every configuration and `runs_no_change` comes with the coverage tool.
-    The no-verify-tool table labelled `no_test` as from `require-tools`.
+    Worth its own table because the totals mislead: each reason belongs to one gate, and
+    counting another gate's conversions as this one's credits it with runs it did not
+    cause. Since 2026-09-28 the second chance is the stop gate -- the harness's base run
+    (`no_test`, `collects_nothing`, `passes_at_base`, `skipped_at_base`) and the agent's
+    own last `verify` (`verify_open`) -- and `require-tools` is the checks after
+    fail-to-pass (`duties_open`). `reads_source` is checked in every configuration and
+    `runs_no_change` comes with the coverage tool. Runs from before that date carry
+    `loop_open`, which was `require-tools`' verify loop and duties together.
     """
-    OWN = ("passes_at_base", "collects_nothing", "no_test", "skipped_at_base")
+    OWN = ("passes_at_base", "collects_nothing", "no_test", "skipped_at_base", "verify_open")
 
     def owner(reason: str) -> str:
         parts = []
         if any(k in reason for k in OWN):
-            parts.append("**added by the flag**")
+            parts.append("**second chance** (stop gate)")
+        if "duties_open" in reason:
+            parts.append("`require-tools` (checks after fail-to-pass)")
         if "loop_open" in reason:
-            parts.append("from `require-tools`")
+            parts.append("`require-tools` (before 2026-09-28)")
         if "reads_source" in reason:
             parts.append("every configuration")
         if "runs_no_change" in reason:
-            parts.append("from the coverage tool")
+            parts.append("the coverage tool")
         return " + ".join(parts) or "—"
 
     by_reason: dict[str, list[dict]] = {}
@@ -240,9 +257,9 @@ def _second_chance_table(retried: list[dict]) -> list[str]:
         by_reason.setdefault(r["second_chance"]["reason"], []).append(r)
 
     lines = ["", "### What the refused runs did next", "",
-             "`loop_open` belongs to `require-tools` and fires with or without "
-             "`--second-chance`; the rows marked *added by the flag* are the ones this "
-             "flag is answerable for.", "",
+             "Each reason belongs to one gate, named in the last column: the second "
+             "chance refuses a stop whose test is not fail-to-pass yet, `require-tools` "
+             "one whose checks after fail-to-pass were left unanswered.", "",
              "| told | runs | ended YES | ended NO | ended BROKEN | |",
              "|---|---|---|---|---|---|"]
     for reason in sorted(by_reason):
@@ -255,8 +272,8 @@ def _second_chance_table(retried: list[dict]) -> list[str]:
                  if any(k in r["second_chance"]["reason"] for k in OWN)]
     flag_yes = sum(1 for r in flag_rows if r["f2p"] == "YES")
     if flag_rows:
-        lines += ["", f"Of the **{len(flag_rows)}** refused for a reason the flag itself "
-                      f"adds, **{flag_yes}** ended fail-to-pass.", ""]
+        lines += ["", f"Of the **{len(flag_rows)}** refused by the stop gate, "
+                      f"**{flag_yes}** ended fail-to-pass.", ""]
     return lines
 
 
@@ -401,7 +418,7 @@ def build(root: Path = OUT) -> str:
     if len(configs) == 1:
         out += [f"Every row was produced with the same configuration: "
                 f"**`{configs[0]}`** &mdash; what the agent was given. `full` means "
-                f"nothing was withheld.", ""]
+                f"every input shown and every add-on added; otherwise the name lists the add-ons present (`bare` for none) and any input withheld.", ""]
     elif configs:
         out += ["> **These rows come from more than one configuration** "
                 f"({', '.join(f'`{c}`' for c in configs)}), so the totals above mix "
@@ -412,19 +429,20 @@ def build(root: Path = OUT) -> str:
     out += ["Coverage is measured only for tests that are fail-to-pass; for anything "
             "else the question does not apply. A `—` in that column means not "
             "measured, not zero.", ""]
-    if held_out:
-        out += ["The agent held the `mutation` tool in this run, so the mutants scored "
-                "here are the **held-out half** of the pool &mdash; the agent was shown "
-                "the other half and never these. That keeps the number a measurement "
-                "rather than a mark for revising against the sample, but it also halves "
-                "the denominator, so a per-instance figure is noisier than one from a "
-                "run without the tool. The two are not comparable row for row.", ""]
+    if any(r["mutation"].get("measured") for r in rows):
+        out += ["Mutants are scored on the **held-out half** of each instance's pool, in "
+                "every configuration, so runs with and without the `mutation` tool are "
+                "scored on the same mutants"
+                + (" &mdash; the agent held the tool here and was shown the other half, "
+                   "never these." if held_out else ".")
+                + " Results from before 2026-09-28 scored runs without the tool on the "
+                "whole pool and are not comparable row for row.", ""]
     out += [
             "`concept`, `issue` and `readable` are three separate answers from one "
-            "judgement call by a stronger model that wrote none of these tests: whether "
-            "the test is about the same behaviour as the maintainer's, whether it "
-            "reaches every behaviour the pull request settles, and whether it would pass "
-            "review. None of them feeds the F2P verdict.", "",
+            "judgement call by a model that wrote none of these tests, comparing the "
+            "generated test with the developer's: which pins the behaviour the fix "
+            "establishes better, which covers more of what the pull request settles, "
+            "and which reads better. None of them feeds the F2P verdict.", "",
             *([] if not has_mutation else
               ["The two `mutants` columns are the same set of mutants asked of two "
                "tests. `mutmut` mutates the lines the patch changed -- negating a "
@@ -435,7 +453,7 @@ def build(root: Path = OUT) -> str:
                "agent's does not is a gap, and one neither kills is probably "
                "behaviourally equivalent to the fix and says nothing about either test. "
                "The individual diffs are in each instance's `mutations/`.", ""]),
-            *(_judge_legend() if any(r["five_level"] for r in rows) else []),
+            *_judge_legend({r["scale"] for r in rows}),
             f"| instance | version | verdict | coverage |"
             f"{' mutants: agent test | mutants: dev test |' if has_mutation else ''}"
             f" actions | tools used | concept | issue | readable | last run |",

@@ -136,7 +136,6 @@ MAX_PASSES_AT_BASE_ROUNDS = 2
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
               out_dir: Path, features: FeatureSet, n_mutants: int = 0,
               model: str | None = None, provider: str | None = None,
-              second_chance: bool = False,
               temperature: float | None = M.DEFAULT_TEMPERATURE) -> dict:
     from openhands.sdk import Agent, Conversation, Tool
     from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent
@@ -272,8 +271,13 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     # terminal action. It ends when the gap closes, the budget is spent, the round cap is
     # reached, or the agent stops doing anything between refusals.
     #
-    # `V.shortfall` and `V.loop_gap` decide what counts as unfinished and what may be
-    # said, from base-observable facts only; they return None when there is nothing to say.
+    # Two gates with one objective each (since 2026-09-28). `second-chance` refuses a stop
+    # whose test is not fail-to-pass yet: `V.shortfall` (the harness runs the file at
+    # base) and `V.verify_gap` (the agent's own last `verify`). `require-tools` refuses
+    # one whose test flips but whose `coverage` / `mutation` answers were left unanswered
+    # (`V.duty_gap`). All of them say only base-observable facts and return None when
+    # there is nothing to say.
+    second_chance = "second-chance" in features
     retry: dict | None = None
     # The cap is a fact about the first stop. Counting the continuation's actions into it
     # would report a run as capped because the two stretches together passed the limit,
@@ -285,18 +289,20 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             spent = sum(counts.values())
             left = max_iterations - spent
             rel = V.written_test_path(box, tool_log, test_file)
-            # Two independent grounds for refusing the stop, and each has its own flag.
-            # They share one message because sending two would spend two turns saying
-            # one thing.
+            # Independent grounds for refusing the stop, each with its own flag. They share
+            # one message because sending two would spend two turns saying one thing.
             gaps: list[tuple[str, str]] = []
             if left > 0 and second_chance:
+                # The harness's own base run first: when it finds the file missing, empty
+                # or passing, that is the whole story, told with the file and its output,
+                # and the agent's last `verify` would only repeat it.
                 found = V.shortfall(box, instance, rel)
+                if found is None and "verify-tool" in features:
+                    found = V.verify_gap(tool_log, rel)
                 if found:
                     gaps.append(found)
             if left > 0 and "require-tools" in features:
-                # By what each instrument last *said*, not by whether it appears in the
-                # log. See `V.loop_gap`.
-                found = V.loop_gap(tool_log, instruments(features), rel)
+                found = V.duty_gap(tool_log, instruments(features), rel)
                 if found:
                     gaps.append(found)
             # A test that asserts on the project's source text rather than on behaviour.
@@ -319,7 +325,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             if left <= 0:
                 flow.record(flow.AGENT, "second chance", "no budget left at the cap")
                 break
-            # A tree off base -- only reachable under --no-guard, where a library edit is
+            # A tree off base -- only reachable without --add-guard, where a library edit is
             # left in place -- cannot be verified by the agent or scored by the harness.
             # Refusing there asked for a `verify` that answers only "unexpected state"
             # (sklearn-10297 under -guard, refused until the cap). Telling the agent to
@@ -353,35 +359,26 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             # refusals cannot change the verdict and only spend tokens -- xarray-7233 and
             # scikit-learn-10908 were refused five times each while already passing.
             settled = V.verify_settled(tool_log, rel)
-            if settled and reason == "loop_open" and any(r.get("settled") for r in rounds):
+            if settled and reason == "duties_open" and any(r.get("settled") for r in rounds):
                 flow.record(flow.AGENT, "second chance",
                             "test already fail-to-pass; its one reminder about the "
                             "remaining checks was given; not refusing again")
                 break
-            # Rounds spent on a test that cannot be scored. With --second-chance the
-            # harness says so itself (`passes_at_base`, `collects_nothing`). Without it
-            # the same state reaches the agent only as `loop_open`, and was refused five
-            # times where the flag's arm stops at two: the arm that removes the second
-            # chance got more refusals than the one that has it (eval5-arms, 20 against
-            # 4). The agent's own last `verify` -- all passing before the fix, or nothing
-            # collected -- stands in for the flag's check, so removing the flag removes
-            # help rather than adding rounds. A test failing on both sides is capped in
-            # neither configuration.
-            not_f2p = V.verify_unscoreable(tool_log, rel)
-
-            def stuck(why: str, short: bool) -> bool:
-                return (any(k in why for k in V.UNSCOREABLE) or (
-                    not second_chance and "loop_open" in why and short))
+            # Rounds spent on a test that cannot be scored: nothing fails at base
+            # (`V.UNSCOREABLE`). A test failing on both sides is not capped here: those
+            # rounds do convert (four runs recovered after a third such refusal).
+            def stuck(why: str) -> bool:
+                return any(k in why for k in V.UNSCOREABLE)
 
             streak = 0
             for r in reversed(rounds):
-                if not stuck(r["reason"], r.get("not_f2p", False)):
+                if not stuck(r["reason"]):
                     break
                 streak += 1
-            if stuck(reason, not_f2p) and streak >= MAX_PASSES_AT_BASE_ROUNDS:
+            if stuck(reason) and streak >= MAX_PASSES_AT_BASE_ROUNDS:
                 flow.record(flow.AGENT, "second chance",
-                            f"{'not scoreable (passes or is skipped at base, or collects nothing)' if second_chance else 'not scoreable by its own verify (passes or is skipped before the fix, or collects nothing)'}"
-                            f" after {streak} refusals running; not refusing again")
+                            f"not scoreable (passes or is skipped at base, or collects "
+                            f"nothing) after {streak} refusals running; not refusing again")
                 break
             # Which of the two mistakes a passing-at-base test is making. Only with the
             # coverage tool registered: see `V.reach_diagnosis`.
@@ -418,8 +415,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 flow.record(flow.AGENT, "retry raised", error[:200])
             after = sum(counts.values())
             rounds.append({"reason": reason, "said": say, "budget": left,
-                           "actions": after - before, "settled": settled,
-                           "not_f2p": not_f2p})
+                           "actions": after - before, "settled": settled})
             flow.record(flow.AGENT, "second chance done",
                         f"round {len(rounds)}: {after - before} more actions, {status}")
             if error:
@@ -580,9 +576,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
           out_root: Path | None = None, label: str = "",
           n_mutants: int = 0, model: str | None = None,
           provider: str | None = None, judge_model: str | None = None,
-          second_chance: bool = False,
           temperature: float | None = M.DEFAULT_TEMPERATURE) -> dict:
-    features = features if features is not None else FeatureSet.of()
+    features = features if features is not None else FeatureSet.full()
     inst = load(pr["id"])
     repo = inst["repo"]
     test_file = V.gen_test_path(pr["id"])      # provisional; re-resolved in the box
@@ -642,8 +637,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               f"(we would have used {test_file})")
 
         run = run_agent(inst, box, test_file, max_iterations, d, features, n_mutants,
-                        model=model, provider=provider,
-                        second_chance=second_chance, temperature=temperature)
+                        model=model, provider=provider, temperature=temperature)
         # Resolved before `audit`, which flags every write that is not the test file:
         # left unresolved, the agent's own chosen path would be reported as a stray
         # write on every run of this configuration.
@@ -769,7 +763,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
         # Out here rather than beside the verify call, where it used to sit: that branch
         # runs only when a test was written, so an agent that wrote none and patched the
         # library instead fell through to an ordinary NO and the audit missed exactly the
-        # case it exists to catch. `scikit-learn-10297` did that under --no-guard -- it
+        # case it exists to catch. `scikit-learn-10297` did that without the guard -- it
         # edited sklearn/linear_model/ridge.py, wrote no test, and was recorded as a
         # plain failure. The tree is the tree whether or not a test came out of the run.
         if checks["tree_altered"]:
@@ -926,18 +920,6 @@ def build_parser() -> argparse.ArgumentParser:
                         f"generated one and the developer's, on the same set. Bare "
                         f"--mutants uses {mutants.DEFAULT_MUTANTS}. Deterministic and "
                         f"offline; the diffs land in <run>/<id>/mutations/. 0 is off")
-    p.add_argument("--second-chance", action="store_true",
-                   help="refuse a stop that leaves nothing to score. When a run ends "
-                        "for a reason the agent could have seen itself -- no file "
-                        "written, a file that collects nothing, a test that passes on "
-                        "the unfixed code -- say so and let it carry on, on whatever is "
-                        "left of --max-iterations, and check every later stop the same "
-                        "way: up to 5 refusals, ending early once the gap closes or the "
-                        "agent stops acting between refusals. The cap is not raised "
-                        "and not reset, so a run that stopped at 41 of 100 resumes with "
-                        "59 and one that reached the cap gets nothing. Never quotes the "
-                        "run against the fixed code, so the agent still only knows what "
-                        "it could establish at base")
     p.add_argument("--mutate-saved", action="store_true",
                    help="measure mutation on the tests already written, without "
                         "running the agent again. Adds the `mutation` field and "
@@ -1119,7 +1101,6 @@ def main() -> int:
                          args.label, args.mutants,
                          model=args.model, provider=args.provider,
                          judge_model=args.judge_model,
-                         second_chance=args.second_chance,
                          temperature=args.temperature)
                    for pr in prs]
     else:

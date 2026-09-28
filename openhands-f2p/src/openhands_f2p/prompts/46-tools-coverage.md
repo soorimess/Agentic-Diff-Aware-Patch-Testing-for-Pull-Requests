@@ -4,7 +4,7 @@ name: tools-coverage
 job: Says what `coverage` is *for* -- a better test -- which the previous version left
   implicit while describing only what it reports. Sixteen of twenty-two agents never
   called it, and a tool whose purpose is not stated is a tool with no reason to be
-  reached for. Dropped by `--no-coverage-tool`, and with the diff, since the tool needs it.
+  reached for. Present only with `--add-coverage-tool`, which needs the diff.
 ---
 - `coverage` — of the lines this pull request changed, which ones did your test actually
   execute. For each line it missed, you are shown that line's source and the conditions

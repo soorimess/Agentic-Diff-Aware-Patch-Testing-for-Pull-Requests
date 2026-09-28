@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
+import shutil
 import re
 import subprocess
 from pathlib import Path
@@ -135,14 +136,33 @@ def vm_free_gb() -> float | None:
     """
     r = _run(["docker", "run", "--rm", "--platform", PLATFORM, "alpine",
               "df", "-Pk", "/"], timeout=180)
+    vm = None
     for line in r.stdout.splitlines()[1:]:
         parts = line.split()
         if len(parts) >= 4:
             try:
-                return int(parts[3]) / (1024 * 1024)
+                vm = int(parts[3]) / (1024 * 1024)
             except ValueError:
                 return None
-    return None
+            break
+    if vm is None:
+        return None
+    # The other half: on Docker Desktop the VM's disk is a sparse file on the host, so
+    # the VM can report room the host does not have. On the laptop (2026-09-28) the VM
+    # said 79 GB free while the host had 52 -- twenty loaded images would have filled the
+    # host first. The smaller of the two is what can actually be written.
+    host = _host_free_gb()
+    return vm if host is None else min(vm, host)
+
+
+def _host_free_gb() -> float | None:
+    """Free space on the host volume holding Docker Desktop's disk image; None when
+    Docker is not Docker Desktop (a Linux host's daemon writes to its own disk, which the
+    VM figure already is)."""
+    data = Path.home() / "Library" / "Containers" / "com.docker.docker"
+    if not data.exists():
+        return None
+    return shutil.disk_usage(data).free / 1e9
 
 
 # Workers under `--parallel` are separate processes, so an image one of them is about
