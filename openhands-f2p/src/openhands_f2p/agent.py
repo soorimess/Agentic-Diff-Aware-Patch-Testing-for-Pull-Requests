@@ -244,6 +244,10 @@ def _joined(first: dict, second: dict, note: str) -> dict:
 # three loops in five rounds would end on the cap rather than on their answers. The
 # action budget still bounds the run.
 MAX_REFUSALS = 10
+# Fewer actions than this cannot answer a refusal or use a restart: rewriting the test and
+# calling `verify` is two, and stopping is a third. sphinx-9602 (fix check, 2026-09-29) was
+# refused with 1 action left, and a restart can be handed 1 or 2.
+MIN_USEFUL_ACTIONS = 3
 # A test that cannot be scored -- `passes_at_base` or `collects_nothing` -- refused at
 # most this many rounds in a row. On the new system's first run seven of eight instances
 # that reached `passes_at_base` stayed there for all five rounds; the one that recovered
@@ -452,6 +456,11 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 "+".join(r for r, _ in gaps), "\n\n".join(say for _, say in gaps))
             if left <= 0:
                 flow.record(flow.AGENT, "stop check", "no budget left at the cap")
+                break
+            if left < MIN_USEFUL_ACTIONS and gap is not None:
+                flow.record(flow.AGENT, "stop check",
+                            f"{left} action(s) left, too few to answer a refusal; "
+                            f"gap still open ({gap[0]})")
                 break
             # A tree off base -- only reachable without --add-guard, where a library edit is
             # left in place -- cannot be verified by the agent or scored by the harness.
@@ -898,9 +907,9 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
             restart = {"first_verdict": verdict.f2p, "first_why": verdict.why,
                        "first_actions": run["actions"], "budget": max(remaining, 0),
                        "first_tool_calls": len(run["tool_log"])}
-            if remaining <= 0:
-                restart["skipped"] = "no actions left"
-                flow.record(flow.AGENT, "second chance", "no actions left for a restart")
+            if remaining < MIN_USEFUL_ACTIONS:
+                restart["skipped"] = f"{max(remaining, 0)} action(s) left, too few for a restart"
+                flow.record(flow.AGENT, "second chance", restart["skipped"])
             else:
                 note = _restart_note(run, verdict, test_file, code, max_iterations, remaining)
                 field("restart", f"{verdict.f2p} after {run['actions']} actions -- starting "

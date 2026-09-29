@@ -610,6 +610,8 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   passes at base said "keep the input" whenever any changed line ran; with some missed it
   now names them and says the difference may lie there (sphinx-9602: 7 of 8 lines, the one
   missed the line the new nodes go through).
+- **Not with fewer than 3 actions left** (`MIN_USEFUL_ACTIONS`), and no restart below that
+  either: rewriting the test and calling `verify` takes two, stopping a third.
 - **A refusal from the base run hands back the file and the run.** Such a refusal
   (`no_test` aside) carries the test file as it is on disk and what running it at base
   printed, both clipped. The refused v2 runs rewrote a median of five times and converted

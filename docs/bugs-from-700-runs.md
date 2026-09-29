@@ -391,6 +391,15 @@ Three instances (sphinx-9602, django-11119, matplotlib-22719) under base and und
   whole trajectory sorted by time. The probe rows are named `stop-check probe` / `stop-check
   reach` (they were `second-chance …`, from before require-tools owned the stop checks).
 
+- **A refusal with 1 action left.** Found in the re-check (sphinx-9602): too few to
+  rewrite the test and call `verify`. No refusal and no restart now below 3 actions left
+  (`MIN_USEFUL_ACTIONS`); the stop check records the gap still open instead.
+
+Re-check after the fixes (`_fix-check`, same two base NOs): matplotlib-22719 YES in 32
+actions, no refusals (its `verify` now showed the failing assertion after the change);
+sphinx-9602 NO again at the 100-action cap -- two passes-at-base refusals (reaching all 8
+changed lines, so "keep the input" was right), the restart spent on the same assertion.
+
 Working as designed, for the record: the verify loop ran to the cap of 10 (matplotlib
 base); the passes-at-base cap ended the first attempt after two rounds and the restart
 took the rest of the budget (sphinx both modes; NO -> YES under score report); the
