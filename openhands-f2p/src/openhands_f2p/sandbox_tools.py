@@ -144,6 +144,23 @@ _RUNNER_NOISE = re.compile(
 _SECTION = re.compile(r"^=+ .+ =+$")
 
 
+def _import_only(box: Sandbox, cov: dict) -> str:
+    """A note when every changed line the test runs is one that runs on import.
+
+    Call inside the patched window: `import_time_hits` reads the file at head.
+    """
+    hits = cov.get("hit") or []
+    at_import = E.import_time_hits(box, cov) if hits else []
+    if not hits or len(at_import) != len(hits):
+        return ""
+    shown = ", ".join(f"`{h}`" for h in at_import[:4]) + (" ..." if len(at_import) > 4 else "")
+    return ("\n\nNote: every changed line it runs is module-level (" + shown + ") -- it "
+            "executes when the module is imported, whatever the test does. That it runs "
+            "is no sign the test uses the change: the test has to call the code that "
+            "uses it, and a copy of the changed value made inside the test checks the "
+            "copy, not the project.")
+
+
 def _condense(text: str) -> str:
     """`text` without the lines that describe the runner instead of the test."""
     kept, in_warnings = [], False
@@ -443,6 +460,7 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         self.box.apply_patch(self.patch)
         try:
             cov = E.changed_line_coverage(self.box, [action.target], self.patch)
+            import_only = _import_only(self.box, cov) if cov.get("measured") else ""
         finally:
             self.box.apply_patch(self.patch, revert=True)
 
@@ -466,7 +484,7 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         if not cov["missed"]:
             return CoverageObservation.from_text(
                 score + "Your test runs every executable line this pull request changed."
-                + failing)
+                + import_only + failing)
         lines = [score + "Some lines this pull request changed never ran under your test."]
 
         # The source and the guards, not just the numbers. "line 1631 is uncovered" is
@@ -853,7 +871,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         missed = len(cov.get("missed") or [])
         pct = (f" Changed-line coverage: {cov['percent']}%." if self.scored else "")
         if not missed:
-            return "\n\nIt runs every line this pull request changed." + pct
+            return ("\n\nIt runs every line this pull request changed." + pct
+                    + _import_only(self.box, cov))
         # Called only with `coverage` registered, so there is always a tool to point at.
         # The duty sentence was keyed on `require_tools` alone and went out in arms with
         # no `coverage`, where no check enforced it -- a rule nothing carried out.

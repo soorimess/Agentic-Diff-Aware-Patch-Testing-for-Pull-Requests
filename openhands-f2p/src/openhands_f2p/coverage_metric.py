@@ -11,6 +11,7 @@ repository\'s own coverage configuration has to be overridden.
 """
 from __future__ import annotations
 
+import ast
 import difflib
 import json
 import shlex
@@ -422,3 +423,40 @@ def _annotate(box: "Sandbox", refs: list[str], guards: int = 4) -> list[dict]:
             out.append({"ref": f"{path}:{ln}", "line": body.rstrip(),
                         "guards": context})
     return out
+
+
+def import_time_hits(box: "Sandbox", cov: dict) -> list[str]:
+    """The changed lines this run hit that execute when their module is imported.
+
+    Anything outside a function body -- a module-level assignment, a class attribute, a
+    decorator, a default argument -- runs on import, whatever the test then does. So
+    "the test runs it" is true of every test that imports the module, and is no sign the
+    test uses the change. django-15098 (first 36-instance base run, 2026-09-29) changed a
+    module-level regex; its test copied that regex into itself and asserted on the copy,
+    and coverage, the refusal ("It does reach the change ... Keep the input") and the
+    agent all read "runs every changed line" as aimed at the right code.
+
+    Read at head, so call it while the patch is applied, as the coverage run is.
+    """
+    by_file: dict[str, list[int]] = {}
+    for ref in cov.get("hit") or []:
+        path, _, line = ref.rpartition(":")
+        if line.isdigit():
+            by_file.setdefault(path, []).append(int(line))
+    found: list[str] = []
+    for path, lines in by_file.items():
+        source = box.read(path)
+        if source is None:
+            continue
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        in_body: set[int] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                in_body.update(range(node.body[0].lineno, (node.end_lineno or 0) + 1))
+            elif isinstance(node, ast.Lambda):
+                in_body.update(range(node.body.lineno, (node.body.end_lineno or 0) + 1))
+        found += [f"{path}:{n}" for n in sorted(lines) if n not in in_body]
+    return found

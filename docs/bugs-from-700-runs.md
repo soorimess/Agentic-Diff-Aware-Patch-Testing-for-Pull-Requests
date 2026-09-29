@@ -413,6 +413,33 @@ mutation loop refused twice and closed on an attempt that did not improve (djang
 sphinx score); matplotlib score scored 0% on the held-out half with 1/1 on its own -- one
 held-out mutant (`and` -> `or` guarding a log call) that the developer's test misses too.
 
+## Found in the first base run's 13 finished runs (2026-09-30)
+
+12 YES, 1 NO (django-15098). Two measurement bugs, both fixed:
+
+- **mutmut never mutated decorated code.** Its rule (skip decorated functions and whole
+  decorated classes) exists for its own runner. pytest-5262 (an `@property`) and
+  astropy-7336 (inside a `@wraps` wrapper) scored "mutmut offers no mutations"; the
+  agent's tool told pytest-5262 the same three times. Fixed in `mutants._allow_decorated`;
+  files with no decorators give byte-identical pools (checked on twelve modules).
+- **A module-level change counts as reached by any import.** django-15098's patch is a
+  module-level regex. The test copied the regex into itself; coverage said it runs every
+  changed line and the passes-at-base refusal said "It does reach the change ... Keep the
+  input", twice. Now `coverage`, `verify` and the refusal say when every line run is an
+  import-time line, and the refusal asks for the code that uses it.
+
+Not bugs, for the record:
+- 5 of 13 had no mutation score: the 2 above, django-17029 (a bare `cache_clear()` call:
+  no operator applies) and 2 with a pool of one mutant, which goes to the agent's half.
+- Readability was "developer's better" in 11 of 12: long docstrings, comments, unused
+  imports. The judge's readings were grounded (e.g. django-17029: a mock asserting
+  `cache_clear` was called, against the developer's check that the cache is empty).
+- 4 runs left scratch scripts at the repository root (`debug_test.py`, `simple_test.py`,
+  `poc_test.py`, a urls module); the audit records them; none is imported by the test.
+- The refusal fixes from the loop check worked: requests-6028 called `verify` right after
+  the quoted `verify_open` refusal and flipped; requests-1142 and sympy-12096's mutation
+  loops closed on a non-improving attempt.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

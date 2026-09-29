@@ -252,8 +252,9 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
     box.apply_patch(patch)
     try:
         cov = E.changed_line_coverage(box, [rel], patch)
+        at_import = E.import_time_hits(box, cov) if cov.get("hit") else []
     except Exception:                                           # noqa: BLE001
-        cov = {}
+        cov, at_import = {}, []
     finally:
         box.apply_patch(patch, revert=True)
     # A test that never imports the changed file leaves no entry for it in the coverage
@@ -271,6 +272,19 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
                 "fix does not touch. Keep the idea and move the input: call the code the "
                 "change modifies, with an input that sends execution through the changed "
                 "lines. `coverage` shows which they are and the conditions above each.")
+    # Run only by importing it. A module-level line executes for any test that imports
+    # the module, so "it runs the change" says nothing about the input; see
+    # `E.import_time_hits` (django-15098: told "keep the input" twice while asserting on
+    # its own copy of the changed regex).
+    if at_import and len(at_import) == len(cov.get("hit") or []):
+        shown = ", ".join(f"`{h}`" for h in at_import[:4])
+        return ("\n\n**It only imports the change.** The changed lines it runs are "
+                f"module-level ({shown}): they execute when the module is imported, "
+                "whatever the test does, so that they run says nothing about the input. "
+                "Call the code that *uses* the changed value, with an input where the old "
+                "and the new value give different results, and assert on what that code "
+                "returns or does. A copy of the value made inside the test checks the "
+                "copy, not the project.")
     # Part of the change is not all of it. "It does reach the change ... Keep the input"
     # went out for sphinx-9602 (loop check) at 7 of 8 lines, and the line it never ran was
     # the one that turns the new nodes back into text -- the input was not yet right, and

@@ -171,6 +171,15 @@ mutations landing on lines the pull request touched are kept. A mutant elsewhere
 file asks whether the test covers code the pull request never changed, which is a
 different question and not the one being scored.
 
+**Decorated code is mutated too** (since 2026-09-30). mutmut skips every decorated
+function (a lone `@staticmethod` / `@classmethod` aside) and every decorated class, for
+the sake of its own trampoline runner, which this harness does not use. `_allow_decorated`
+lifts that rule for the node pairs we take; the decorator expressions themselves stay
+unmutated, since they run at import. Before it, every line under `@property`,
+`@cached_property`, `@functools.wraps` or `@dataclass` was silently outside the pool:
+pytest-5262 and astropy-7336 reported "no mutations on the lines this patch changed",
+and the agent's tool said the same to pytest-5262 three times.
+
 **Spread, not clustered.** `_spread` round-robins over `(file, line)` groups before
 taking the first N, so ten mutants on a two-file patch sample both files and several lines
 rather than ten variants of one expression.
@@ -613,6 +622,11 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   When the test was edited after a NOT fail-to-pass, the refusal carries that answer's
   headline and says `run_tests` and `coverage` each run one side of the change only.
   matplotlib-22719 got the bare sentence ten times and answered each with those two.
+- **"It only imports the change"** when every changed line the test runs is module-level
+  (`import_time_hits`: outside any function body -- assignments, class attributes,
+  decorators, defaults). Those run for any test that imports the module. `coverage` and
+  `verify`'s reach line add the same note. django-15098 changed a module-level regex, copied
+  it into its test and asserted on the copy, and was told "keep the input" twice.
 - **"It reaches the change" only when it reaches all of it.** The diagnosis on a test that
   passes at base said "keep the input" whenever any changed line ran; with some missed it
   now names them and says the difference may lie there (sphinx-9602: 7 of 8 lines, the one

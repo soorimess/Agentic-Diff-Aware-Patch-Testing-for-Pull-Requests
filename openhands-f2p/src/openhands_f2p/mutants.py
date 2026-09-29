@@ -85,6 +85,41 @@ class Mutant:
                             "survived both")}
 
 
+def _allow_decorated() -> None:
+    """Let mutmut mutate inside decorated functions and classes. Once per process.
+
+    mutmut 3 skips every decorated function (a lone `@staticmethod` / `@classmethod`
+    aside) and every decorated class, whole -- for its own runner, which swaps functions
+    through a trampoline that a decorator would wrap. We never use that runner, only the
+    (original, mutated) node pairs, so the rule protected nothing here and silently cost
+    every line under `@property`, `@cached_property`, `@functools.wraps` or a
+    `@dataclass`. Found in the first 36-instance base run (2026-09-29): pytest-5262's
+    whole patch is an `@property` and astropy-7336's sits in a `@wraps` wrapper, and both
+    reported "mutmut offers no mutations on the lines this patch changed".
+
+    The decorator expressions themselves stay unmutated -- they run when the module is
+    imported, so a mutated argument breaks the import rather than the behaviour -- which
+    is the one part of mutmut's reasoning that does apply. The node is asked about
+    without its decorators; its other rules (names never mutated, pragmas) still apply.
+    """
+    import libcst as cst
+    from mutmut.mutation.file_mutation import MutationVisitor
+
+    original = MutationVisitor._skip_node_and_children
+    if getattr(original, "_f2p_allows_decorated", False):
+        return
+
+    def skip(self, node):
+        if isinstance(node, cst.Decorator):
+            return True
+        if isinstance(node, (cst.FunctionDef, cst.ClassDef)) and node.decorators:
+            return original(self, node.with_changes(decorators=[]))
+        return original(self, node)
+
+    skip._f2p_allows_decorated = True
+    MutationVisitor._skip_node_and_children = skip
+
+
 def _configure_mutmut() -> None:
     """Give mutmut a configuration instead of letting it guess one.
 
@@ -104,6 +139,7 @@ def _configure_mutmut() -> None:
     import dataclasses
     from mutmut import configuration as C
 
+    _allow_decorated()
     if getattr(C, "_config", None) is not None:
         return
     zeros: dict[str, object] = {}
