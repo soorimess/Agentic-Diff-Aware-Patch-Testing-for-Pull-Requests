@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
+import time
 import shutil
 import re
 import subprocess
@@ -254,6 +255,22 @@ def evict_one_image(keep: str) -> bool:
 # ever reporting a disk problem.
 DEFAULT_IMAGE_HEADROOM_GB = 14.0
 
+# Room each running container of ours is still going to write after its image is in:
+# the coverage wheel, test runs, coverage data, mutated copies of the fixed files. The
+# headroom above is checked once, when an image loads, so it only ever covered the load.
+# The 36-instance base run on the laptop (2026-09-29) loaded its last images with the
+# host above 14 GB free, then fourteen running containers wrote the rest of it away:
+# the host reached 0, Docker Desktop stopped ("no space left on device"), and every job
+# hung on its next `docker exec`.
+CONTAINER_RESERVE_GB = 1.5
+
+
+def running_containers() -> int:
+    """How many of this harness's containers are running now (named `f2p-*`)."""
+    r = _run(["docker", "ps", "--filter", "name=^f2p-", "--format", "{{.Names}}"],
+             timeout=180)
+    return sum(1 for x in r.stdout.split() if x)
+
 
 PULL_LOCK = Path("/tmp/f2p-pull.lock")
 
@@ -355,7 +372,22 @@ def pull_image(image: str, quiet: bool = False,
         with LOAD_LOCK.open("w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             try:
-                free = make_room(image, need_gb, quiet)
+                # Short of room while jobs are running: wait for one to finish, and its
+                # image becomes evictable. Falling through instead went to the pull path,
+                # which on the laptop has no registry to pull from and fails the job.
+                # The lock is held while waiting, so the loads queued behind this one
+                # wait too rather than each taking the room this one is waiting for.
+                while True:
+                    running = running_containers()
+                    need = need_gb + CONTAINER_RESERVE_GB * running
+                    free = make_room(image, need, quiet)
+                    if free is None or free >= need or running == 0:
+                        break
+                    if not quiet:
+                        print(f"  {free:.0f} GB free, {need:.0f} needed with {running} "
+                              f"job(s) running; waiting for one to finish")
+                    time.sleep(30)
+                need_gb = need
                 if free is None or free >= need_gb:
                     if image_cache.load(image, quiet=quiet):
                         return

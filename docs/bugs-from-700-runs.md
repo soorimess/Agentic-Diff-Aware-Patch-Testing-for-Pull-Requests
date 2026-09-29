@@ -400,6 +400,12 @@ actions, no refusals (its `verify` now showed the failing assertion after the ch
 sphinx-9602 NO again at the 100-action cap -- two passes-at-base refusals (reaching all 8
 changed lines, so "keep the input" was right), the restart spent on the same assertion.
 
+- **The first 36-instance base run filled the laptop's disk** (13 of 36 done, all
+  before the failure and kept). The load guard checked 14 GB free per load and nothing
+  for the containers already running; fourteen of them wrote the host to 0, Docker
+  Desktop stopped, the rest hung. Now 1.5 GB is reserved per running container and a load
+  short of room waits for a job to finish. The 23 unfinished were cleared, not rerun yet.
+
 Working as designed, for the record: the verify loop ran to the cap of 10 (matplotlib
 base); the passes-at-base cap ended the first attempt after two rounds and the restart
 took the rest of the budget (sphinx both modes; NO -> YES under score report); the

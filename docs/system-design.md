@@ -425,7 +425,14 @@ the model and temperature fixed; see its docstring). `out-v2/base/` is the refer
 
 The free-space guard reads the smaller of the Docker VM's free space and the host's:
 Docker Desktop's disk is a sparse file on the host, and on the laptop the VM reported
-79 GB free while the host had 52.
+79 GB free while the host had 52. A load needs 14 GB plus 1.5 GB for every `f2p-*`
+container running (`CONTAINER_RESERVE_GB`): those keep writing after their image is in,
+and the first 36-instance base run (2026-09-29, parallel 18, 27 GB free at launch) loaded
+its last images with room to spare and then wrote the host to 0 -- Docker Desktop
+stopped and every job hung. Short of room while jobs run, a load now waits for one to
+finish (its image becomes evictable) instead of falling through to a pull the laptop
+cannot make. Deleting an image frees VM space at once; the host's copy of it shrinks
+when Docker Desktop reclaims the sparse file (it did on restart: 49 GB -> 19 GB).
 
 There is no server any more. Runs are on the laptop at `--parallel 20`, over the 36
 instances whose images are cached locally: 26 in `image-cache/` (the development set) and
