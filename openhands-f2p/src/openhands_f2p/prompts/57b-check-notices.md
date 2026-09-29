@@ -16,12 +16,13 @@ a way your test cannot tell apart from the right one.
 assertions have any force, and a test that flips and covers every line can still pass
 against a fix that is subtly wrong.
 
-**Answer every survivor.** For each, decide whether the behaviour it breaks is part of what
+**Work every survivor.** For each, decide whether the behaviour it breaks is part of what
 this pull request fixes. If it is, add the assertion about that behaviour and call
-`verify` and `mutation` again. If it is not, say so in one sentence — that is a complete
-answer.{?require-tools} This is checked: a stop right after survivors, with the test
-unchanged since, is sent back once to ask for those answers.{/require-tools} What you must
-not do is close the list for its own sake: a run once answered `0 killed` by adding a
+`verify` and `mutation` again. If it is not, leave it.{?require-tools} This is a loop, and
+it is checked: while survivors remain you will be sent back to work them and call
+`mutation` again, until none survives or an honest attempt catches no more -- what is left
+then breaks nothing a test here can observe.{/require-tools} What you must not do is close
+the list for its own sake: a run once answered `0 killed` by adding a
 second test that failed on both sides, which turned a file whose first test flipped
 correctly into no result at all. Keep `verify` saying fail-to-pass while you work.
 

@@ -119,19 +119,18 @@ FEATURES: tuple[Feature, ...] = (
     # `verify` loop until fail-to-pass, then the coverage/mutation duties. The second
     # chance is no longer a refusal at all -- it is a restart after the run has ended
     # without a test that scores YES.
-    Feature("require-tools", "add the stop checks: a stop is sent back while there is no "
-                             "test file, it collects nothing, it passes or is skipped on "
-                             "the unfixed code (the harness runs it), or the agent's own "
-                             "last `verify` of it did not say fail-to-pass; once it "
-                             "flips, sent back once more if `coverage` or `mutation` was "
-                             "never called on it or its last answer was left unanswered",
+    Feature("require-tools", "add the stop checks, as three loops: `verify` until the test "
+                             "is fail-to-pass (the harness also runs it at base: no file, "
+                             "nothing collected, passing or skipped is refused), then "
+                             "`coverage` until no changed line is missed and `mutation` "
+                             "until no variant survives -- each ending early when an "
+                             "honest attempt stops improving it",
             added=True, needs=("verify-tool",)),
     Feature("require-tools-with-score-report",
-            "add the stop checks of --add-require-tools, with scores: `coverage` and "
-            "`mutation` report changed-line coverage and mutation score. Coverage has a "
-            "target -- a stop is sent back while it is below 100 percent and the last "
-            "round raised it; the mutation score has none -- its survivors must be "
-            "answered, not caught at any cost. Implies --add-require-tools",
+            "add the loops of --add-require-tools, with scores: `coverage` and `mutation` "
+            "report changed-line coverage (target 100 percent) and mutation score "
+            "(maximised), and the agent is asked to reach them. Implies "
+            "--add-require-tools",
             added=True, needs=("verify-tool", "require-tools"),
             implies=("require-tools",)),
     Feature("second-chance", "add a restart: when the run ends without a test that scores "

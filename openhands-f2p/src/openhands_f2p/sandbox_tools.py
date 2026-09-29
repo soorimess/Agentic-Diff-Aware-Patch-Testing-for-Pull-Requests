@@ -455,14 +455,13 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         # trust. Saying why a line is unreachable satisfies this as fully as reaching it.
         if self.scored:
             lines += ["",
-                      "Raise the score: you cannot finish while it is below 100% and your "
-                      "last change raised it. Lines that cannot be reached from a test "
-                      "end this once a change leaves the score where it was."]
+                      "The target is 100%: you will be sent back while it is below, until "
+                      "it gets there or an honest attempt raises it no further."]
         elif self.require_tools:
             lines += ["",
-                      "You cannot finish having read this and changed nothing. Either "
-                      "make these lines run, or be able to say which of them is "
-                      "genuinely out of reach from a test and why."]
+                      "You will be sent back while lines are missed: change the test and "
+                      "call `coverage` again, until every changed line runs or an honest "
+                      "attempt reaches no more of them."]
         return CoverageObservation.from_text("\n".join(lines))
 
 
@@ -560,17 +559,12 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
                       "observable at all -- say so in one sentence and leave it. Never "
                       "assert on the exact expression a variant changed just to make it "
                       "fail."]
-            if self.scored:
+            if self.scored or self.require_tools:
                 lines += ["",
-                          "A higher score is better, but not at any cost, and it has no "
-                          "target: answer each survivor -- catch the ones that break "
-                          "behaviour this pull request fixes, give a reason for the ones "
-                          "that do not."]
-            elif self.require_tools:
-                lines += ["",
-                          "You cannot finish with these unanswered: change the test for "
-                          "the ones that are part of the fix, and give a reason for the "
-                          "ones that are not."]
+                          ("Maximise the score: y" if self.scored else "Y")
+                          + "ou will be sent back while variants survive: add assertions "
+                          "about the behaviour they break and call `mutation` again, until "
+                          "none survives or an honest attempt catches no more."]
         else:
             lines += ["", "Every variant tried was caught."]
         return MutationObservation.from_text("\n".join(lines))

@@ -240,7 +240,10 @@ def _joined(first: dict, second: dict, note: str) -> dict:
 # How many times a stop may be refused. The budget bounds a run anyway; this bounds the
 # number of times the same kind of message is appended to the context, and a run still
 # open after five refusals has usually stopped moving.
-MAX_REFUSALS = 5
+# Ten since 2026-09-29, when coverage and mutation became loops after the verify loop:
+# three loops in five rounds would end on the cap rather than on their answers. The
+# action budget still bounds the run.
+MAX_REFUSALS = 10
 # A test that cannot be scored -- `passes_at_base` or `collects_nothing` -- refused at
 # most this many rounds in a row. On the new system's first run seven of eight instances
 # that reached `passes_at_base` stayed there for all five rounds; the one that recovered
@@ -425,15 +428,9 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 # or passing, that is the whole story, told with the file and its output,
                 # and the agent's last `verify` would only repeat it. The duties only
                 # start once the test flips by its own verify.
-                # Duties already sent once: the mutation duty is sent once even when
-                # scores keep the coverage duty open round after round.
-                reminded = frozenset(
-                    n for r in rounds if r["reason"].startswith("duties_open[")
-                    for n in r["reason"][len("duties_open["):-1].split("+"))
                 found = (V.shortfall(box, instance, rel)
                          or V.verify_gap(tool_log, rel)
-                         or V.duty_gap(tool_log, instruments(features), rel, scored=scored,
-                                       reminded=reminded))
+                         or V.duty_gap(tool_log, instruments(features), rel, scored=scored))
                 if found:
                     gaps.append(found)
             # A test that asserts on the project's source text rather than on behaviour.
@@ -485,19 +482,13 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 break
 
             reason, say = gap
-            # A test that already flips, refused only because `coverage` or `mutation`
-            # has not been answered. One reminder is worth sending; after that the
-            # refusals cannot change the verdict and only spend tokens -- xarray-7233 and
-            # scikit-learn-10908 were refused five times each while already passing.
+            # A test that already flips is in the coverage and mutation loops (user,
+            # 2026-09-29): refused while either falls short, until each reaches its goal
+            # or an honest attempt stops improving it (`V._no_better`). Until then a flipping
+            # test got one reminder -- xarray-7233 and scikit-learn-10908 had been refused
+            # five times each while already passing, back when "answered" meant nothing
+            # measurable; the loops now end on the tool's own answer.
             settled = V.verify_settled(tool_log, rel)
-            # With scores the reminders go on while the scores move (`V._plateau` ends
-            # them), so the one-reminder rule is the plain duties' only.
-            if (settled and reason.startswith("duties_open") and not scored
-                    and any(r.get("settled") for r in rounds)):
-                flow.record(flow.AGENT, "stop check",
-                            "test already fail-to-pass; its one reminder about the "
-                            "remaining checks was given; not refusing again")
-                break
             # Rounds spent on a test that cannot be scored: nothing fails at base
             # (`V.UNSCOREABLE`). A test failing on both sides is not capped here: those
             # rounds do convert (four runs recovered after a third such refusal).

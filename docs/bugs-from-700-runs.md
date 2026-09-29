@@ -366,6 +366,12 @@ for future runs (above); the published v1/v2 comparisons are to be read this way
 
 ## Changed after the fact
 
+- **2026-09-29:** the judge answers five labelled questions per subject before each
+  level (`rubric: questions-v1`); its prompt is the folder `judge_prompts/`, questions
+  and labels read from the pieces; the judge decides the levels itself, with no rule tying
+  them to the labels.
+- **2026-09-29:** require-tools' coverage and mutation duties are loops (until no missed
+  line / no survivor, or an attempt that does not improve them), in both modes; refusal cap 10.
 - **2026-09-28, second revision:** require-tools holds every stop refusal (the base run,
   the `verify` loop, the duties); the second chance is a restart with the first attempt's
   record; `--add-require-tools-with-score-report` adds scores to the duties; flags are

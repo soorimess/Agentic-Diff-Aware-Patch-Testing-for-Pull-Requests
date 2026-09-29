@@ -257,7 +257,31 @@ The absolute scale before it (scale 5: `different … equivalent`, `none … com
 developer's; an equivalent test and a stronger one both scored 5. Its labels stay in
 `compare.SCALES_V5`, and RUNS.md prints whichever legend its rows were judged on.
 
-How the prompt is built to come close to a human reviewer (`compare.SYSTEM`):
+**Questions under each level (2026-09-29, `rubric: questions-v1`).** Before each level
+the judge answers five questions about the generated test, each with one label from a fixed
+list; the labels are evidence it records, and they can be counted
+across runs where a 1-5 number cannot say why. The judge answers both: the labels, and
+the level.
+
+| subject | questions |
+|---|---|
+| concept | **C1** what its main assertion checks (`contract` / `symptom` / `neighbour` / `source-text` / `other`) · **C2** how exact the expected outcome is (`exact` / `partial` / `weak` / `none`) · **C3** would it fail on a plausible wrong fix (`yes` / `partly` / `no` / `unclear`) · **C4** same behaviour as the developer's (`same` / `overlapping` / `different`) · **C5** developer's project knowledge (`none` / `present-and-matched` / `present-and-missed`) |
+| issue coverage | **I1** share of the fix's behaviours covered (`all` / `most` / `main-only` / `minor-only` / `none`) · **I2** main behaviour covered (`yes` / `weakly` / `no`) · **I3** error, boundary, edge paths (`all` / `some` / `none` / `n/a`) · **I4** several changed places (`all` / `some` / `one` / `n/a`) · **I5** against the developer's (`generated-covers-more` / `same` / `developer-covers-more` / `each-covers-something-else`) |
+| readability | **R1** intent clear from the test alone (`clear` / `partly` / `unclear`) · **R2** names (`descriptive` / `mixed` / `poor`) · **R3** setup (`minimal` / `some-noise` / `heavy`) · **R4** assertion style (`direct` / `indirect` / `vacuous`) · **R5** project conventions (`follows` / `partly` / `ignores`) |
+
+**The prompt is a folder**, `judge_prompts/`, built like the agent's `prompts/`: numbered
+pieces with a header naming each and its job, joined in order into the system prompt
+(`00-role`, `10-context`, `20-concept`, `30-issue`, `40-readability`, `50-answer`), and
+`user.md` for the user turn. The questions and their labels are read *from the pieces*
+(`compare.QUESTIONS`) -- one list, in the prompt -- and every answer's labels are checked
+against it; a label off its list makes the answer `unparsed`. `uv run python -m
+openhands_f2p.compare --show` prints the assembled prompt.
+
+**The levels are the judge's own decision** (user, 2026-09-29). It answers the questions
+first and weighs them with everything else it found, but no rule ties a level to a label;
+an answer is re-asked only when it cannot be read or uses a label off its list.
+
+How the prompt is built to come close to a human reviewer:
 
 - **The judge knows which test is the developer's**, deliberately. A maintainer's choice
   that looks odd -- an escaping path a django fix must not reopen, a compatibility case --
@@ -265,24 +289,22 @@ How the prompt is built to come close to a human reviewer (`compare.SYSTEM`):
   make it read those as defects. It is told to look for such a reason before ranking the
   generated test higher on a point where the two differ, to name it
   (`developer_reasons`), and not to invent one.
-- **Concept** is judged against the contract the fix implements (what the changed code now
-  returns, raises or does), worked out from the report and the fix first; each anchor says
-  what makes one test pin it better -- an exact value against a weak proxy, the contract
-  against one example of it, a deliberate case the other misses.
+- **The two tests arrive differently, and the judge is told so** (taken from the
+  annotation study's judge, `Task/llm_judge.py`): the developer's test is the lines a patch
+  added to existing test files and can lean on fixtures and helpers it is not shown; the
+  generated test is a whole file. It is told not to credit the one for brevity or fault
+  the other for its own setup.
+- **Concept** is judged against the contract the fix implements, worked out from the report
+  and the fix first; each anchor says what makes one test pin it better.
 - **Issue coverage** lists the behaviours the pull request settles from the report *and
   the fix*, never from either test -- including a hazard the fix handles that the report
   never mentioned -- and, for each, quotes the asserting line from each test or says
-  `none`. A behaviour is covered only with a quotable assertion on its outcome; the level
-  follows from the two columns (one more behaviour = 2 or 4, two or more = 1 or 5).
+  `none`. A behaviour is covered only with a quotable assertion on its outcome.
 - **Readability** gives each test an absolute review outcome first (`accept`, `nits`,
   `changes`, `reject`) with its concrete problems, then compares. Length, docstrings and
-  comments are named as not readability in themselves -- generated tests are longer and
-  more commented, and a judge rewards that unless told not to.
-- Every level must follow from the evidence written beside it; thin evidence goes into
-  `confidence`, not toward 3. The model writes only numbers; labels come from
-  `compare.SCALES`. `uncovered` (the behaviours the generated test has no assertion for)
-  is derived for the reports. A missing or out-of-range level makes the whole answer
-  `unparsed`; it is re-asked once.
+  comments are named as not readability in themselves.
+- Thin evidence goes into `confidence`, not toward 3. The model writes numbers and labels
+  only; level labels come from `compare.SCALES`. `uncovered` is derived for the reports.
 
 None of the three feeds the F2P verdict. Scale-6 levels are not comparable with scale-5
 levels from v1 and v2.
@@ -427,13 +449,13 @@ pair on 36 should be read as direction, not effect.
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1309 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1300 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 167 | What the agent actually did, checked rather than assumed. |
-| `compare.py` | 393 | Does the generated test check the same thing the developer's test checks? |
+| `compare.py` | 279 | How does the generated test compare with the developer's, on concept, issue coverage and readability? |
 | `coverage_metric.py` | 424 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
 | `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
-| `features.py` | 344 | What the agent is given, as one registry that everything else reads. |
+| `features.py` | 343 | What the agent is given, as one registry that everything else reads. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
 | `image_cache.py` | 292 | Instance images kept on the host disk, so each one is pulled from the registry once. |
 | `images.py` | 424 | Prepared SWE-bench images, and the disk they compete for. |
@@ -449,12 +471,12 @@ pair on 36 should be read as direction, not effect.
 | `runners.py` | 512 | Three test-runner conventions, and how to read what they print. |
 | `runs.py` | 543 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 355 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 938 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sandbox_tools.py` | 932 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 364 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 812 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 821 | The F2P decision. One implementation, used by every arm. |
 | `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
 <!-- /generated:modules -->
 
@@ -497,8 +519,8 @@ point a stop was refused.
 
 | feature | what it does | reasons |
 |---|---|---|
-| `require-tools` | refuses a stop while the test is not fail-to-pass: no file, collects nothing, passes or is skipped at base (the harness runs it), or the agent's own last `verify` of the scored file did not say fail-to-pass or predates an edit. Once it flips, refuses once more if `coverage` / `mutation` was never called on it or its last answer (missed lines, survivors) was left unanswered. Also refuses a test that reads project source as text, and (coverage tool) asks once about a test that flips without running the change | `no_test`, `collects_nothing`, `passes_at_base`, `skipped_at_base`, `verify_open`, `duties_open`, `reads_source`, `runs_no_change` |
-| `require-tools-with-score-report` | require-tools, plus scores: `coverage`, `mutation` and `verify` report changed-line coverage and mutation score. **Coverage has a target**: a stop is refused while it is below 100% -- until a change to the test leaves it where it was (`V._plateau`), which is taken as the agent's answer. **Mutation has none** (user, 2026-09-28: many survivors cannot be caught by any honest test): the score is shown, higher is better but not at any cost, and its survivors must be answered once as in the plain duty. Implies `require-tools` | as above; `duties_open[coverage]` repeats while coverage moves |
+| `require-tools` | three loops (user, 2026-09-29). **verify**: a stop is refused while the test is not fail-to-pass -- no file, collects nothing, passes or is skipped at base (the harness runs it), or the agent's own last `verify` of the scored file did not say fail-to-pass or predates an edit. **Then coverage and mutation**: refused while `coverage` lists a missed changed line or `mutation` a surviving variant, or while the last answer predates an edit to the test; each ends at its goal, or when the agent's last attempt did not improve it (`V._no_better`: two calls with the test changed between them and no better score) -- a line no test reaches, a variant that breaks nothing observable. A score below the best the file ever had keeps the loop open. Also refuses a test that reads project source as text, and (coverage tool) asks once about a test that flips without running the change | `no_test`, `collects_nothing`, `passes_at_base`, `skipped_at_base`, `verify_open`, `duties_open[coverage+mutation]`, `reads_source`, `runs_no_change` |
+| `require-tools-with-score-report` | the same loops, with the scores shown by `coverage`, `mutation` and `verify` and named in the prompt: changed-line coverage has the target 100%, mutation score is to be maximised. Implies `require-tools` | as above |
 | `second-chance` | not a refusal: after the run is scored, one that ended without a YES (and was not cut off by an outside failure) is restarted when actions remain -- a fresh conversation sent the same task and `followups/restart.md`: why the attempt was not accepted (the harness's verdict and what each test did before and after the fix), the test it left whatever the verdict, the record of the attempt (each tool call and what it returned, shortened, newest kept past 40,000 characters), and the remaining budget. The run is scored again; `second_chance` in the result keeps the first verdict | -- |
 
 For one day (2026-09-28, first revision) the verify loop belonged to the second chance and
@@ -548,8 +570,10 @@ where the model's pattern under refusal was *write → verify → finish* every 
   `eval5-arms` run spent five rounds on a file that never collected. (From 2026-09-26 to
   -28 the −second-chance arm also capped `loop_open` rounds whose own `verify` showed the
   same state; every refusal is require-tools' now, so there is one rule.)
-- **A test that already flips gets one reminder** (`duties_open`) -- with scores
-  (`--add-require-tools-with-score-report`), reminders instead go on while the scores rise. Refusals over an unanswered `coverage` or
+- **A test that already flips is in the coverage and mutation loops** (`duties_open[...]`,
+  since 2026-09-29; one reminder before). Each loop ends on the tool's own answer -- the
+  goal, or an attempt that did not improve it -- and the refusal cap is 10 (5 before), so
+  three loops end on their answers rather than on the cap. Refusals over an unanswered `coverage` or
   `mutation` cannot change its verdict, and two tests were refused five times each while
   already passing.
 
@@ -839,8 +863,8 @@ uv run openhands-f2p --out-root out/nocov --add-verify-tool --add-mutation-tool 
 | `--add-coverage-tool` | add the `coverage` tool: which changed lines the test never runs, with their code and the conditions above them. The harness measures changed-line coverage either way |
 | `--add-mutation-tool` | add the `mutation` tool, which runs the agent's test against small wrong variants of the fix and reports which ones it fails to notice. The harness measures a mutation score either way, on mutants the agent was never shown |
 | `--add-guard` | add the guard: edits the agent makes to files that were already here are reverted between actions. Without it the prohibition stays in the prompt and the audit still reports a dirty tree as BROKEN, but an agent that applies the fix to the library keeps it |
-| `--add-require-tools` | add the stop checks: a stop is sent back while there is no test file, it collects nothing, it passes or is skipped on the unfixed code (the harness runs it), or the agent's own last `verify` of it did not say fail-to-pass; once it flips, sent back once more if `coverage` or `mutation` was never called on it or its last answer was left unanswered |
-| `--add-require-tools-with-score-report` | add the stop checks of --add-require-tools, with scores: `coverage` and `mutation` report changed-line coverage and mutation score. Coverage has a target -- a stop is sent back while it is below 100 percent and the last round raised it; the mutation score has none -- its survivors must be answered, not caught at any cost. Implies --add-require-tools |
+| `--add-require-tools` | add the stop checks, as three loops: `verify` until the test is fail-to-pass (the harness also runs it at base: no file, nothing collected, passing or skipped is refused), then `coverage` until no changed line is missed and `mutation` until no variant survives -- each ending early when an honest attempt stops improving it |
+| `--add-require-tools-with-score-report` | add the loops of --add-require-tools, with scores: `coverage` and `mutation` report changed-line coverage (target 100 percent) and mutation score (maximised), and the agent is asked to reach them. Implies --add-require-tools |
 | `--add-second-chance` | add a restart: when the run ends without a test that scores fail-to-pass and actions remain, the agent starts a fresh conversation with the task, the record of its first attempt, the test it left (unless the run was BROKEN) and the rest of its budget. The run is scored again at the end |
 
 **which model answers**
@@ -898,6 +922,12 @@ features  flow  images  layout  llm_config  prs  runners      leaves
 `features.py` is a leaf on purpose. It is the registry of what the agent is given, and
 four layers read it -- the prompt builder, the tool registration, the child command line,
 and the recorded result -- so anything it imported would be imported by all of them.
+
+Two prompt folders sit beside the modules, each a set of numbered markdown pieces with a
+header naming the piece and its job: `prompts/` (the agent's task, plus `followups/` for
+the refusal and the restart) and `judge_prompts/` (the judge's system prompt, its user
+turn, and the questions and labels `compare.QUESTIONS` is read from). Each has a README
+listing its pieces.
 
 `coverage_metric` rather than `coverage`, so it cannot be confused with the `coverage`
 package it drives inside the container. `layout.py` holds `PROJECT_ROOT` and `OUT`.

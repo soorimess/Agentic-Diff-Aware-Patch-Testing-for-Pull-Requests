@@ -175,8 +175,8 @@ and its first stop is final.
 | `--no-patch` the pull request diff | `--add-coverage-tool` the `coverage` tool (needs verify-tool, patch) |
 | `--no-repo-facts` (`--repo-search`) the briefing on how this project tests | `--add-mutation-tool` the `mutation` tool (needs verify-tool, patch) |
 | | `--add-guard` edits to pre-existing files reverted between actions |
-| | `--add-require-tools` the stop checks: a stop is refused until the test is fail-to-pass by its own `verify`, then until `coverage` / `mutation` answers are acted on (needs verify-tool) |
-| | `--add-require-tools-with-score-report` the same, with coverage and mutation scores shown and to be raised (implies `--add-require-tools`) |
+| | `--add-require-tools` three loops: `verify` until the test is fail-to-pass, then `coverage` until no changed line is missed and `mutation` until no variant survives, each ending early when an honest attempt stops improving it (needs verify-tool) |
+| | `--add-require-tools-with-score-report` the same loops with the scores shown: coverage to 100%, mutation score maximised (implies `--add-require-tools`) |
 | | `--add-second-chance` a restart: a run that ended without a YES starts again with its first attempt's record and the rest of its budget |
 
 An add-on whose need is missing is refused with the flag that fixes it, never quietly

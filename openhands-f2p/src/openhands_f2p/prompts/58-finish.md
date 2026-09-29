@@ -55,9 +55,9 @@ behind it answers nothing.
 {/coverage-tool}
 {?mutation-tool}
 - mutation score, the share of wrong versions of the fix your test catches, reported by
-  `mutation`. **Higher is better, but it has no target**: try hard, understand each
-  survivor, and catch the ones that break behaviour this pull request fixes -- not at any
-  cost.
+  `mutation`. **Maximise it**: catch every survivor that breaks behaviour a test can
+  observe; the ones that break nothing observable are what is left when an honest attempt
+  catches no more.
 {/mutation-tool}
 
 Raise a score the way a better test raises it: an input that takes the test somewhere it
@@ -89,33 +89,31 @@ this order.** Each is a question about a test that already flips, so work them i
 sequence:
 {?coverage-tool}
 {?!require-tools-with-score-report}
-- `coverage`: aim for a test that runs every line the change touched. If it lists lines
-  your test never runs, you must have acted on that — either made them run, or
-  established that a line cannot be reached from a test. An assertion added only to
-  execute a line is worth less than an honest reason the line stays unreached;
+- `coverage`, as a loop: while it lists lines your test never runs, change the test and
+  call it again, until every changed line runs or an honest attempt reaches no more. An
+  assertion added only to execute a line does not count;
 {/!require-tools-with-score-report}
 {?require-tools-with-score-report}
-- `coverage`: your changed-line coverage score must reach 100%, or stop rising because
-  the lines left cannot be reached from a test. While it is below 100% and your last
-  change raised it, you will be sent back to raise it further;
+- `coverage`, as a loop with a score: your changed-line coverage must reach 100%. While it
+  is below, change the test and call it again, until it does or an honest attempt raises
+  it no further;
 {/require-tools-with-score-report}
 {/coverage-tool}
 {?mutation-tool}
 {?!require-tools-with-score-report}
-- `mutation`: every survivor answered — an assertion about the behaviour it breaks when
-  that behaviour is part of what this pull request fixes, or one sentence saying why it
-  is not.
+- `mutation`, as a loop: while variants survive, add assertions about the behaviour they
+  break and call it again, until none survives or an honest attempt catches no more.
 {/!require-tools-with-score-report}
 {?require-tools-with-score-report}
-- `mutation`: every survivor answered, as the score allows -- an assertion about the
-  behaviour it breaks when that behaviour is part of what this pull request fixes, or one
-  sentence saying why it is not. A higher mutation score is better; it is not a target.
+- `mutation`, as a loop with a score: maximise your mutation score. While variants
+  survive, add assertions about the behaviour they break and call it again, until none
+  survives or an honest attempt catches no more.
 {/require-tools-with-score-report}
 {/mutation-tool}
 
 Calling a tool once and stopping on an answer you did nothing with does not satisfy this.
-If any of these is open you will be sent back with the reason, so closing it now is the
-shorter path.
+While any of these loops is open you will be sent back with the reason, so working it now
+is the shorter path.
 {/require-tools}
 
 You are finished when the checks above have been run against the test as it now stands

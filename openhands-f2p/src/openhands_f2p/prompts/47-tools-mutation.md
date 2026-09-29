@@ -29,11 +29,10 @@ merely accompanies it.
 
 {?require-tools-with-score-report}
 In this run it also reports your mutation score -- the share of wrong versions caught --
-and that number is one of the two your test is scored on. A higher score is better, but not
-at any cost, and unlike coverage it has no target: many survivors break nothing a test can
-observe, or break something this pull request is not about, and no honest test catches
-them. Try hard, understand each survivor, and decide -- catch it when it breaks behaviour
-the fix is about, leave it when it does not. That judgement is what is being asked for.
+and that number is one of the two your test is scored on. Maximise it, by the route below
+and no other: some survivors break nothing a test can observe, and no honest test catches
+them -- an attempt that catches no more ends the loop. Asserting on the exact expression a
+variant changed raises the number and makes the test worse.
 
 {/require-tools-with-score-report}
 Every survivor gets an answer. Read each one as a question, not as a defect to clear:

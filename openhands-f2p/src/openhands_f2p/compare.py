@@ -1,4 +1,4 @@
-"""Does the generated test check the same thing the developer's test checks?
+"""How does the generated test compare with the developer's, on concept, issue coverage and readability?
 
 The F2P verdict is mechanical: fails at base, passes at head. It says nothing about
 *what* was asserted. A test can be fail-to-pass and still be about something adjacent to
@@ -36,203 +36,58 @@ from typing import Any
 
 from openhands_f2p import llm_config
 
-SYSTEM = """You are a senior maintainer reviewing a regression test someone proposes for a bug
-fix, by comparing it with the test the project's own developer wrote for the same fix.
-
-You are given four things: the bug report, the fix that was merged, **the developer's
-test** (written by a maintainer of this project as part of the fix), and **the generated
-test** (written afterwards by someone who saw the report and the fix but not the
-developer's test). You know which is which, and you should use that: the developer knows
-this project, and some of their choices carry knowledge the other author did not have.
-
-Compare the two tests on three separate questions and keep them separate -- a test can
-pin the right behaviour and be hard to read, or read beautifully and miss half the fix.
-Each question is answered with a level from 1 to 5 on the same comparative scale:
-
-    1  the developer's test is clearly better
-    2  the developer's test is somewhat better
-    3  the two are on a par
-    4  the generated test is somewhat better
-    5  the generated test is clearly better
-
-The scale is symmetric on purpose. Either test can be the better one on any question, and
-a generated test that is better than the developer's must be scored 4 or 5 -- do not cap
-it at 3 out of deference. Equally, do not score it 4 or 5 because it is longer, has more
-test functions, or has more comments. Pick, for each question, the level whose whole
-description below is true; when two seem to fit, read the anchors again and take the one
-the evidence you will quote supports.
-
----------------------------------------------------------------------------------------
-**Before comparing: what each author could know.**
-
-A choice in the developer's test that looks odd, narrow or even like bad practice may
-come from experience the generated test's author did not have: a security consequence
-(an escaping or permission path a django fix must not reopen), backwards compatibility,
-an earlier regression in the same place, a platform or database quirk, a convention this
-project enforces. Before you score the generated test higher on a point where it differs
-from the developer's choice, ask whether that choice has such a reason -- visible in the
-report, in the fix (a comment, a guard, the shape of the change), or in what a maintainer
-of this project would plausibly know. If it plausibly does and the generated test lacks
-it, the generated test is not better on that point; say what the reason is in
-`developer_reasons`. If you can find no such reason, do not invent one, and do not
-penalise the generated test for not copying an arbitrary choice.
-
----------------------------------------------------------------------------------------
-**Question 1 -- concept: which test pins the behaviour this fix establishes, and how well?**
-
-"The behaviour" is the observable contract the fix implements: what the changed code now
-returns, raises or does, for the inputs the fix is about. Not the style, the names, the
-route to the code, or the mechanism. Two tests that reach the same behaviour by different
-routes pin the same concept. Work out that contract from the report and the fix first,
-then judge each test against it:
-
-- which behaviour does each test actually assert (not merely exercise)?
-- how precisely -- an exact expected value or exception pins it; "is not None", "no
-  exception was raised", a type check, or "the output changed" only brushes it;
-- does it assert the contract, or only the reported symptom, one example of it, or a
-  neighbouring property that happens to change in the same commit?
-- a test that reads the source code as text and asserts on it pins no behaviour at all.
-
-Levels:
-- **1** The generated test asserts a different behaviour, a merely neighbouring one, the
-  source text, or asserts nothing meaningful -- while the developer's test pins the
-  contract.
-- **2** Both are about the contract, but the generated test pins it less well: a weaker
-  assertion, a clearly smaller part of it, or it misses a case the developer checks
-  deliberately (including a case whose reason is developer experience, see above).
-- **3** Both pin the same contract with comparable precision. Differences are of route,
-  naming or structure only, or each is stronger on a different minor point.
-- **4** The generated test pins everything the developer's pins and pins it better on at
-  least one real point: an exact value where the developer checks a weaker property, or
-  an input the contract is genuinely about that the developer's test leaves unchecked.
-- **5** The generated test pins the contract where the developer's test pins only a
-  symptom, a single example of a general rule, or a weak proxy for it -- and loses
-  nothing the developer's test checks for a reason.
-
----------------------------------------------------------------------------------------
-**Question 2 -- issue coverage: which test covers more of what the fix settles?**
-
-First list the distinct behaviours this pull request settles, from the report *and the
-fix* -- never from either test. Separate cases, separate branches, an error path as well as
-a success path, the same fix applied in two symmetric places, and a behaviour the fix
-implements that the report never mentioned (developers often fix a neighbouring hazard
-they know about -- if the fix implements it, it counts). Keep the list to behaviours of
-this change; general properties of the function that the fix does not touch do not count.
-
-Then, for each behaviour and for each test, quote the single line that asserts it, or
-write "none". **A behaviour is covered by a test only if you can quote the assertion that
-checks its outcome.** Reaching the code path without asserting what it should now produce,
-or asserting something weaker (not None, no exception, not equal to the old buggy value
-when the new value is specific) is not coverage.
-
-Levels, from the two columns you filled in:
-- **1** The developer's test covers two or more listed behaviours that the generated test
-  does not, or covers the main behaviour while the generated test covers none.
-- **2** The developer's test covers one listed behaviour the generated test does not, and
-  the generated test covers nothing the developer's misses of equal weight.
-- **3** Both cover the same behaviours, or each covers one the other misses and those are
-  of similar weight.
-- **4** The generated test covers one listed behaviour the developer's does not, and misses
-  nothing the developer's test covers.
-- **5** The generated test covers two or more listed behaviours the developer's does not,
-  and misses nothing the developer's test covers.
-
----------------------------------------------------------------------------------------
-**Question 3 -- readability: which test would a reviewer of this project find easier to
-read, understand and maintain?**
-
-Read both as a reviewer would, in this project's conventions (the developer's test and the
-surrounding code in the fix are your evidence of them). What makes a test readable:
-
-- names that say what things are and what case is tested (`result`, `data`, `x`, `test1`
-  are not names);
-- assertions that state the expected outcome plainly, so a failure message explains itself;
-- a reader can tell from the test alone which behaviour is pinned and why;
-- setup that is minimal and relevant -- no unused fixtures, dead code, debug prints, or
-  copies of production logic re-implemented inside the test;
-- repetition handled the way the project handles it (a loop, parametrisation, subTest)
-  rather than pasted blocks -- and, the other way, no abstraction that hides a simple case;
-- following the project's conventions (test class vs function, helpers, imports).
-
-Length, docstrings and comments are not readability in themselves. A comment helps only
-when it says *why* something non-obvious is done; a docstring that restates the test name
-adds nothing; a longer test is not more readable for being longer. Do not prefer either test
-because of who wrote it. Ignore formatting and line length.
-
-Give each test an absolute review outcome first -- `accept`, `nits` (accept with small
-comments), `changes` (changes requested before merging) or `reject` -- with its concrete
-problems, then compare:
-- **1** The generated test is clearly less readable: it would need substantial rework
-  where the developer's would not, or it is misleading or vacuous.
-- **2** The generated test is somewhat less readable: it would draw more or weightier review
-  comments than the developer's.
-- **3** On a par: comparable review outcome and comparable problems, even if different ones.
-- **4** The generated test is somewhat more readable: clearer names, plainer assertions or
-  tighter setup, and it would draw fewer review comments.
-- **5** The generated test is clearly more readable: it would be accepted as it stands
-  while the developer's test has real readability problems (misleading names, an
-  assertion that does not say what it checks, unexplained magic values or setup).
-
----------------------------------------------------------------------------------------
-Answer with JSON only, no prose around it, in exactly this shape:
-
-{
-  "concept": {
-    "level": 1 | 2 | 3 | 4 | 5,
-    "contract": "one sentence: the behaviour this fix establishes",
-    "generated_asserts": "one sentence: what the generated test actually asserts",
-    "developer_asserts": "one sentence: what the developer's test actually asserts",
-    "same_behaviour": "yes" | "partly" | "no",
-    "generated_better_at": "specific point, or 'nothing'",
-    "developer_better_at": "specific point, or 'nothing'",
-    "developer_reasons": "a choice in the developer's test that likely carries project experience, and what it is; or 'none found'"
-  },
-  "issue_coverage": {
-    "level": 1 | 2 | 3 | 4 | 5,
-    "behaviours": [
-      {"behaviour": "one line", "generated": "the exact asserting line, or 'none'", "developer": "the exact asserting line, or 'none'"}
-    ]
-  },
-  "readability": {
-    "level": 1 | 2 | 3 | 4 | 5,
-    "generated_review": "accept" | "nits" | "changes" | "reject",
-    "developer_review": "accept" | "nits" | "changes" | "reject",
-    "generated_problems": ["specific and quotable, or empty"],
-    "developer_problems": ["specific and quotable, or empty"],
-    "difference": "one sentence: what makes one easier to read than the other, or why they are on a par"
-  },
-  "confidence": "high" | "medium" | "low",
-  "reasoning": "two sentences at most"
-}
-
-Every level must follow from what you wrote beside it: a concept 4 or 5 needs a real
-`generated_better_at`; a 1 or 2 needs a real `developer_better_at`; an issue level must match
-the two columns of `behaviours`; a readability level must match the two reviews and problem
-lists. Where your evidence is thin -- a test you could not fully follow, a fix whose intent
-is unclear -- say so with `confidence`, not by drifting toward 3.
-
-One thing is never a defect: a long test may reach you elided. Judge what you were given,
-and do not report truncation, an unterminated string at the end of an excerpt, or a missing
-closing bracket as a fault in either test.
-"""
+# The prompt lives in judge_prompts/, one file per part, like the agent's in prompts/
+# (2026-09-29): numbered pieces joined in order into the system prompt, `user.md` the
+# user turn. See judge_prompts/README.md.
+JUDGE_PROMPTS = Path(__file__).resolve().parent / "judge_prompts"
+_HEADER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 
 
-USER = """Bug report
-==========
-{problem}
+def _body(path: Path) -> str:
+    raw = path.read_text()
+    m = _HEADER.match(raw)
+    if not m:
+        raise ValueError(f"{path.name} has no `---` header naming it and its job")
+    return raw[m.end():].strip()
 
-The fix that was merged
-=======================
-{patch}
 
-The developer's test (written by a maintainer of this project, as part of the fix)
-===================================================================================
-{developer_test}
+def pieces() -> list[Path]:
+    return sorted(JUDGE_PROMPTS.glob("[0-9][0-9]-*.md"))
 
-The generated test (written afterwards, from the report and the fix only)
-=========================================================================
-{generated}
-"""
+
+SYSTEM = "\n\n".join(_body(p) for p in pieces())
+USER = _body(JUDGE_PROMPTS / "user.md") + "\n"
+
+# The questions of each subject and their labels, read off the pieces: a bullet
+# `- **C1** <question> Labels: `a` · `b`` (possibly wrapped) defines one. The prompt text
+# is the only list, so a label cannot be allowed here and absent there.
+_QUESTION = re.compile(r"^- \*\*([CIR]\d)\*\* ")
+_SUBJECT = {"C": "concept", "I": "issue_coverage", "R": "readability"}
+
+
+def _questions() -> dict[str, dict[str, dict]]:
+    out: dict[str, dict[str, dict]] = {v: {} for v in _SUBJECT.values()}
+    for path in pieces():
+        lines = path.read_text().splitlines()
+        for k, line in enumerate(lines):
+            m = _QUESTION.match(line)
+            if not m:
+                continue
+            text = line[m.end():]
+            for more in lines[k + 1:]:
+                if not more.startswith("  ") or more.lstrip().startswith("- "):
+                    break
+                text += " " + more.strip()
+            ask, sep, labels = text.partition("Labels:")
+            if not sep:
+                raise ValueError(f"{path.name}: {m.group(1)} has no `Labels:`")
+            out[_SUBJECT[m.group(1)[0]]][m.group(1)] = {
+                "question": ask.strip(), "labels": re.findall(r"`([a-z][a-z/-]*)`", labels)}
+    return out
+
+
+QUESTIONS = _questions()
+
 
 FENCE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.S)
 # A comma before a closing brace or bracket. Strict JSON rejects it, and the judge writes
@@ -283,6 +138,9 @@ SCALES: dict[str, dict[int, str]] = {
                  4: "more readable", 5: "clearly more readable"},
 }
 SCALE_VERSION = 6
+# The questions under each level (judge_prompts/, 2026-09-29). Same scale 6 levels, so the
+# levels stay comparable; `rubric` says whether the questions were asked.
+RUBRIC = "questions-v1"
 SCALES_V5: dict[str, dict[int, str]] = {
     "concept":  {1: "different", 2: "tangential", 3: "narrower", 4: "close",
                  5: "equivalent"},
@@ -299,23 +157,35 @@ def _level(value: Any) -> int:
     return n
 
 
+def _labels(block: dict, subject: str) -> dict[str, str]:
+    """The block's question labels, every one present and spelled as its piece lists it."""
+    got = block.get("questions") or {}
+    for qid, q in QUESTIONS[subject].items():
+        if got.get(qid) not in q["labels"]:
+            raise ValueError(f"{qid}={got.get(qid)!r} is not one of {q['labels']}")
+    return {qid: got[qid] for qid in QUESTIONS[subject]}
+
+
 def _levels(out: dict[str, Any]) -> dict[str, Any]:
     """Attach the label for every level, in the fields existing readers already read.
 
     The concept answer is flattened to the top level, where every reader of the judge
-    has always looked (`level`, `verdict` and the concept fields beside them); issue
-    coverage and readability stay sub-blocks with their own `level` and `verdict`.
-    `uncovered` is derived for the reports: the listed behaviours the generated test has
-    no assertion for. A level that is missing or out of range is not guessed at -- the
-    whole answer becomes `unparsed`.
+    has always looked (`level`, `verdict`, `questions` and the concept fields beside
+    them); issue coverage and readability stay sub-blocks with their own `level`,
+    `verdict` and `questions`. `uncovered` is derived for the reports: the listed
+    behaviours the generated test has no assertion for. A level or question label that
+    is missing or not on its list is not guessed at -- the whole answer becomes
+    `unparsed`.
     """
     concept = out.pop("concept")
     c = _level(concept.pop("level"))
+    concept["questions"] = _labels(concept, "concept")
     out.update(concept)
     out["level"], out["verdict"] = c, SCALES["concept"][c]
     for key, scale in (("issue_coverage", "issue"), ("readability", "readable")):
         block = out.get(key) or {}
         n = _level(block.get("level"))
+        block["questions"] = _labels(block, key)
         block["level"], block["verdict"] = n, SCALES[scale][n]
         out[key] = block
     beh = out["issue_coverage"].get("behaviours") or []
@@ -323,6 +193,7 @@ def _levels(out: dict[str, Any]) -> dict[str, Any]:
         b.get("behaviour", "") for b in beh
         if str(b.get("generated", "none")).strip().lower() in ("none", "", "'none'")]
     out["scale"] = SCALE_VERSION
+    out["rubric"] = RUBRIC
     return out
 
 
@@ -367,6 +238,8 @@ def compare(instance: dict[str, Any], generated: str,
     # pass (django-14792), with nothing on disk to say why. Same model, same settings:
     # a re-ask, not a fallback. An answer that still cannot be read is kept whole in
     # `raw`, so the next one can be diagnosed.
+    # The levels are the judge's own decision (user, 2026-09-29): no rule ties them to
+    # the question labels, so an answer is re-asked only when it cannot be read.
     for attempt in (1, 2):
         resp = llm.completion([
             Message(role="system", content=[TextContent(text=SYSTEM)]),
@@ -391,3 +264,16 @@ def line(result: dict[str, Any]) -> str:
     return (f"concept {shown(result)} | issue {shown(result.get('issue_coverage'))} | "
             f"readable {shown(result.get('readability'))} "
             f"({result.get('confidence', '?')} conf){tail}")
+
+
+if __name__ == "__main__":
+    import sys
+    if "--show" in sys.argv:
+        print(SYSTEM)
+        print("\n" + "=" * 30 + " user turn " + "=" * 30 + "\n")
+        print(USER)
+    else:
+        for subject, qs in QUESTIONS.items():
+            print(subject)
+            for qid, q in qs.items():
+                print(f"  {qid}  {q['question']}\n      {' | '.join(q['labels'])}")
