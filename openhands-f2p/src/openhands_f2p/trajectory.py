@@ -91,6 +91,10 @@ def _as_markdown(task: str) -> str:
 # Tool-call names as the model sends them -> the name in the tool log. Only the real
 # tools: a call to an invented name (`sandbox_run_tests`, `sandbox_finish`) never ran.
 # Runs before the tools were named after the prompt used the SDK's class-derived names.
+# The flow row each tool call leaves, one per call (`on_event` in `agent.run_agent`).
+_TOOL_EVENTS = {"RunAction", "WriteAction", "TestAction", "VerifyAction", "CoverageAction",
+                "MutationAction"}
+
 _CALL_NAMES = {"sandbox_run": "run", "sandbox_write": "write_file",
                "sandbox_test": "run_tests", "sandbox_verify": "verify",
                "sandbox_coverage": "coverage", "sandbox_mutation": "mutation",
@@ -188,7 +192,21 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
     # flow.jsonl carries wall-clock offsets; without it everything lands on one second,
     # which makes the timeline useless.
     base = datetime.now(timezone.utc)
-    offsets = [r["t"] for r in flow_rows if r.get("phase") == "agent" and "action" not in r]
+    # One flow row per tool call, in call order -- only those. Every agent row was taken
+    # before, so `tools registered`, `task sent`, each think, finish and stop check pushed
+    # the tool calls after it one row later in time, and the harness's own events (the
+    # stop-check probes, the patch applied for a `verify`) could not be placed among them:
+    # they were all drawn after the last tool call, a restart's first attempt included.
+    offsets = [r["t"] for r in flow_rows
+               if r.get("phase") == "agent" and r.get("event") in _TOOL_EVENTS]
+    # When each harness message was sent: a refused stop or the restart.
+    sent = [r["t"] for r in flow_rows if r.get("phase") == "agent" and (
+        r.get("event") == "restart sent"
+        or (r.get("event") == "stop check" and str(r.get("detail", "")).startswith("round")))]
+    # Placed by time only when both line up with what they time; a run recorded before
+    # these rows existed keeps the order it is built in.
+    timed = (len(offsets) == sum(1 for e in tool_log if e.get("tool") != "guard")
+             and len(sent) == len(injected))
     events: list[dict[str, Any]] = []
     n = 0
 
@@ -196,6 +214,7 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
         nonlocal n
         ev["id"] = n
         ev["timestamp"] = _ts(base, offset)
+        ev["_t"] = offset
         events.append(ev)
         n += 1
         return ev["id"]
@@ -226,6 +245,8 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
             break
 
     def say(msg: dict, offset: float) -> None:
+        if timed:
+            offset = sent[injected.index(msg)]
         add({"source": "user", "action": "message", "message": "harness",
              "args": {"content": msg.get("text", ""), "images_urls": []}}, offset)
 
@@ -330,6 +351,20 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
                   "final_thought": result.get("why", ""),
                   "task_completed": "true" if result.get("f2p") == "YES" else "false"}},
         last + 0.2)
+
+    if timed:
+        # The task stays first (the uploader keys on it) and the verdict last; everything
+        # between goes in the order it happened. Stable, so an observation keeps its place
+        # after its action, and ids are renumbered with `cause` following them.
+        body = sorted(events[1:-1], key=lambda ev: ev["_t"])
+        events = events[:1] + body + events[-1:]
+        new_id = {ev["id"]: i for i, ev in enumerate(events)}
+        for i, ev in enumerate(events):
+            ev["id"] = i
+            if "cause" in ev:
+                ev["cause"] = new_id[ev["cause"]]
+    for ev in events:
+        del ev["_t"]
     return events
 
 

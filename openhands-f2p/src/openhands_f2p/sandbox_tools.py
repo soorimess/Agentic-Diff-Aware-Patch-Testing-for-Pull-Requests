@@ -30,6 +30,7 @@ Three tools, deliberately not more:
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from pydantic import ConfigDict, Field
@@ -127,6 +128,35 @@ def _clip(text: str, limit: int = MAX_OUTPUT) -> str:
     half = limit // 2
     return (text[:half] + f"\n\n... [{len(text) - limit} characters omitted] ...\n\n"
             + text[-half:])
+
+
+# What a runner prints about itself rather than about the test: pytest's session header
+# and its warnings summary, django's banner. matplotlib-22719 (loop check, 2026-09-29) lost
+# its whole run to these: `verify` clipped each side to its first and last few hundred
+# characters, the header and the warnings summary filled both ends, and the one line that
+# said why the test still failed after the change -- `DID NOT WARN`, from a bare
+# `pytest.warns()` -- sat in the omitted middle all four times. The agent concluded
+# `verify` was broken and spent sixty actions re-running a test it could already see fail.
+_RUNNER_NOISE = re.compile(
+    r"^(=+ test session starts =+$|platform |rootdir: |configfile: |plugins: |cachedir: "
+    r"|libraries: |base tempdir: |collecting \.\.\. |Testing against Django installed "
+    r"|Skipping setup of unused database|System check identified )")
+_SECTION = re.compile(r"^=+ .+ =+$")
+
+
+def _condense(text: str) -> str:
+    """`text` without the lines that describe the runner instead of the test."""
+    kept, in_warnings = [], False
+    for line in text.splitlines():
+        if _SECTION.match(line):
+            in_warnings = "warnings summary" in line
+            if in_warnings:
+                continue
+        elif in_warnings or line.startswith("-- Docs: https://docs.pytest.org"):
+            continue
+        if not _RUNNER_NOISE.match(line):
+            kept.append(line)
+    return "\n".join(kept).strip()
 
 
 def _ignored(action, tool: str) -> str:
@@ -329,7 +359,7 @@ class TestExecutor(ToolExecutor[TestAction, TestObservation]):
         head = f"$ {command}" if self.reveal_runner else f"ran {action.target}"
         dropped = _ignored(action, "run_tests")
         return TestObservation.from_text(
-            f"{head}\nexit code {r.returncode}\n{summary}\n\n{_clip(r.output)}{dropped}",
+            f"{head}\nexit code {r.returncode}\n{summary}\n\n{_clip(_condense(r.output))}{dropped}",
             is_error=not outcomes or bool(dropped))
 
 
@@ -424,9 +454,19 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         score = (f"Changed-line coverage: {cov['percent']}% ({cov['covered']} of "
                  f"{cov['executable_changed_lines']} executable changed lines).\n\n"
                  if self.scored else "")
+        # The run this measured is the test with the change applied, so it already knows
+        # whether the test passes there. matplotlib-22719 (loop check) read "runs every
+        # line" eight times as a sign it was done, about a test that failed once the change
+        # was in -- and never called `verify` again, which is the check that says so.
+        failing = ("\n\nNote: with the change applied, this test run did not pass (exit "
+                   f"code {cov['test_run_returncode']}), so at least one test here fails "
+                   "once the fix is in. Which lines run says nothing about that -- the file "
+                   "is not fail-to-pass until `verify` says it is."
+                   if cov.get("test_run_returncode") not in (0, None) else "")
         if not cov["missed"]:
             return CoverageObservation.from_text(
-                score + "Your test runs every executable line this pull request changed.")
+                score + "Your test runs every executable line this pull request changed."
+                + failing)
         lines = [score + "Some lines this pull request changed never ran under your test."]
 
         # The source and the guards, not just the numbers. "line 1631 is uncovered" is
@@ -462,7 +502,7 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
                       "You will be sent back while lines are missed: change the test and "
                       "call `coverage` again, until every changed line runs or an honest "
                       "attempt reaches no more of them."]
-        return CoverageObservation.from_text("\n".join(lines))
+        return CoverageObservation.from_text("\n".join(lines) + failing)
 
 
 class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
@@ -761,8 +801,15 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # But withholding it left the agent no handle on how far from done it was, and
         # the obligation the run enforces is expressed in that number, so stating the
         # rule while hiding the measure is the worse of the two failures.
-        body = (f"\n\nbefore the change:\n{_clip(before.output, 1800)}"
-                f"\n\nafter the change:\n{_clip(after.output, 1200)}"
+        #
+        # The side that holds the reason gets the room. A test that still fails, or fails
+        # only, once the change is in is explained by the run after it; every other answer
+        # (passes at base, skipped, nothing collected, fail-to-pass) by the run before.
+        after_matters = bool(still_failing or inverted)
+        body = (f"\n\nbefore the change:\n"
+                f"{_clip(_condense(before.output), 1000 if after_matters else 2400)}"
+                f"\n\nafter the change:\n"
+                f"{_clip(_condense(after.output), 2400 if after_matters else 1000)}"
                 if base_out or head_out else "")
         # Only when the test actually flips: asking what a test would notice about a
         # wrong fix presumes it notices the right one, and saying this after a NOT

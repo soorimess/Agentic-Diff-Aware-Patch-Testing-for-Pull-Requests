@@ -364,6 +364,40 @@ and budget.
 v1's and v2's −coverage measured "no line-level detail", not "no coverage feedback". Fixed
 for future runs (above); the published v1/v2 comparisons are to be read this way.
 
+## Found in the loop check (6 runs, 2026-09-29)
+
+Three instances (sphinx-9602, django-11119, matplotlib-22719) under base and under
+`--add-require-tools-with-score-report`, before the 36-instance base run. All fixed.
+
+- **`verify` clipped away the reason.** Each side of its output was cut to its first and
+  last few hundred characters; pytest's session header and warnings summary filled both
+  ends. matplotlib-22719 (base) wrote `with pytest.warns() as w: ...; assert len(w) == 0`,
+  which fails after the fix with `DID NOT WARN` -- a line that fell in the omitted middle
+  in all four verifies. The agent decided `verify` could not work "in this environment",
+  took ten `verify_open` refusals without calling it again, and ended NO after a restart.
+  Now the runner's own lines are dropped (`_condense`, also for `run_tests`) and the side
+  that explains the answer gets 2400 characters.
+- **`coverage` said "runs every line" about a test that fails after the fix.** Read as
+  "done" eight times in the same run. It now adds that the test did not pass with the
+  change applied and that only `verify` decides fail-to-pass.
+- **The `verify_open` refusal was one fixed sentence.** It now quotes the last `verify`
+  headline and says `run_tests` and `coverage` do not answer it.
+- **"It does reach the change -- keep the input" at partial reach.** sphinx-9602 ran 7 of
+  8 changed lines; the message now lists the missed ones.
+- **Trajectory order.** Tool calls were timed off every agent flow row (think, finish,
+  stop checks included), so the harness's own events could not be placed among them and
+  were all drawn after the last tool call -- a restart's first-attempt probes after the
+  restart. Now timed off the tool rows only, refusals off their stop-check rows, and the
+  whole trajectory sorted by time. The probe rows are named `stop-check probe` / `stop-check
+  reach` (they were `second-chance …`, from before require-tools owned the stop checks).
+
+Working as designed, for the record: the verify loop ran to the cap of 10 (matplotlib
+base); the passes-at-base cap ended the first attempt after two rounds and the restart
+took the rest of the budget (sphinx both modes; NO -> YES under score report); the
+mutation loop refused twice and closed on an attempt that did not improve (django score,
+sphinx score); matplotlib score scored 0% on the held-out half with 1/1 on its own -- one
+held-out mutant (`and` -> `or` guarding a log call) that the developer's test misses too.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

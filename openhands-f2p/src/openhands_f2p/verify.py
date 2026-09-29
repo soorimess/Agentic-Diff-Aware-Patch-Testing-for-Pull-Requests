@@ -178,7 +178,7 @@ def shortfall(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str, st
 
     r = box.exec(E.test_command(box, [rel]), timeout=3600)
     outcomes = E.parse_output(r.output)
-    flow.record(flow.VERIFY, "second-chance probe",
+    flow.record(flow.VERIFY, "stop-check probe",
                 f"{rel}: " + (", ".join(sorted(set(outcomes.values()))) or "nothing collected"))
     if not outcomes:
         found = ("collects_nothing",
@@ -262,7 +262,7 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
     # went out with no diagnosis for exactly this reason.
     if not cov.get("measured") and cov.get("reason") != "the changed file was never imported by this test":
         return ""
-    flow.record(flow.VERIFY, "second-chance reach",
+    flow.record(flow.VERIFY, "stop-check reach",
                 f"{rel}: runs {cov.get('covered', 0)} of the changed lines"
                 + ("" if cov.get("measured") else " (changed file never imported)"))
     if not cov.get("covered"):
@@ -271,11 +271,25 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
                 "fix does not touch. Keep the idea and move the input: call the code the "
                 "change modifies, with an input that sends execution through the changed "
                 "lines. `coverage` shows which they are and the conditions above each.")
+    # Part of the change is not all of it. "It does reach the change ... Keep the input"
+    # went out for sphinx-9602 (loop check) at 7 of 8 lines, and the line it never ran was
+    # the one that turns the new nodes back into text -- the input was not yet right, and
+    # the refusal told it to keep it.
+    missed = cov.get("missed") or []
+    if missed:
+        shown = ", ".join(f"`{m}`" for m in missed[:5]) + (" ..." if len(missed) > 5 else "")
+        return (f"\n\n**It reaches part of the change, and still passes before the fix.** "
+                f"It runs {cov['covered']} of the {cov['executable_changed_lines']} lines "
+                f"this pull request changes; these never run: {shown}. Either the "
+                f"assertion checks something true on both sides of the change, or the "
+                f"difference lies on a line the input never reaches. `coverage` shows those "
+                f"lines and the conditions above each; work out what the changed lines "
+                f"compute differently and assert that.")
     return ("\n\n**It does reach the change, and still passes before the fix.** It runs "
-            "lines this pull request changes, so the input is aimed at the right code -- "
-            "the assertion is what is wrong: it checks something that is true both before "
-            "and after the change. Keep the input. Work out what the changed lines compute "
-            "differently, and assert that value or behaviour instead.")
+            "every line this pull request changes, so the input is aimed at the right code "
+            "-- the assertion is what is wrong: it checks something that is true both "
+            "before and after the change. Keep the input. Work out what the changed lines "
+            "compute differently, and assert that value or behaviour instead.")
 
 
 # Reading the project's own source and asserting on the text. Eight "fail-to-pass" tests
@@ -453,9 +467,17 @@ def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
             # Said "the test has not changed since" here regardless, which was false for
             # every run that had edited after its last verify -- three of the nine
             # refusals in one 26-instance run.
+            # What it said, quoted, and which calls do not count. matplotlib-22719 (loop
+            # check) got the bare sentence ten times running, answered each with
+            # `run_tests` and `coverage` -- both of which only ever run the test on one
+            # side of the change -- and stopped again without calling `verify` once.
+            last_said = (e.get("shown") or "").split("\n\n")[0].strip()
+            quoted = f" Its answer was:\n\n> {last_said}\n\n" if last_said else " "
             say = (f"The last `verify` said **not fail-to-pass**, and you have edited the "
-                   f"test since, so nothing has checked the file on disk now. Call "
-                   f"`verify` on it, and keep going until it says fail-to-pass.")
+                   f"test since, so nothing has checked the file on disk now.{quoted}"
+                   f"Call `verify` on it, and keep going until it says fail-to-pass. "
+                   f"`run_tests` and `coverage` do not answer this: each runs the test on "
+                   f"one side of the change only.")
         elif not flipped or still:
             if flipped and still:
                 said = (f"{len(flipped)} test(s) already fail before the change and pass "

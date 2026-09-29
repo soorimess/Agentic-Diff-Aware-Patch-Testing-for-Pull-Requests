@@ -513,6 +513,15 @@ questions". A negative verdict is also no longer flagged as a tool error: it use
 prefixed `[An error occurred during execution.]`, a median of five times per run by the
 point a stop was refused.
 
+What `verify` and `run_tests` print of the runner's output leaves out the lines about the
+runner (pytest's session header and warnings summary, django's banner: `_condense`), and
+`verify` gives the room to the side that explains its answer -- the run after the change
+when a test still fails there or fails only there, the run before it otherwise (2400
+characters against 1000). Clipped evenly before, the header and the warnings filled both
+ends, and matplotlib-22719 never saw its `DID NOT WARN` in four verifies. `coverage` adds
+a note when the test did not pass with the change applied: which lines ran says nothing
+about fail-to-pass, and "runs every line" had been read eight times as done.
+
 ### Refusing a stop
 
 **Who refuses a stop, and what the second chance is (2026-09-28, second revision).**
@@ -593,6 +602,14 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   agent changed makes `verify` answer "unexpected state" to every call, and the loop kept
   asking for one. Telling the agent to put the file back would be the guard the arm
   removes, so the loop ends and the verdict reports the tree.
+- **A `verify_open` refusal quotes the last `verify` and names what does not answer it.**
+  When the test was edited after a NOT fail-to-pass, the refusal carries that answer's
+  headline and says `run_tests` and `coverage` each run one side of the change only.
+  matplotlib-22719 got the bare sentence ten times and answered each with those two.
+- **"It reaches the change" only when it reaches all of it.** The diagnosis on a test that
+  passes at base said "keep the input" whenever any changed line ran; with some missed it
+  now names them and says the difference may lie there (sphinx-9602: 7 of 8 lines, the one
+  missed the line the new nodes go through).
 - **A refusal from the base run hands back the file and the run.** Such a refusal
   (`no_test` aside) carries the test file as it is on disk and what running it at base
   printed, both clipped. The refused v2 runs rewrote a median of five times and converted
