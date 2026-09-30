@@ -193,7 +193,12 @@ def _run_children(jobs: list[tuple], parallel: int,
         # real run was twenty minutes plus a pull -- but a child that wedges on a socket
         # used to hold the parent open indefinitely, and three of them once sat silent
         # for fifty-one minutes after a laptop sleep before being killed by hand.
-        limit = float(os.getenv("F2P_CHILD_TIMEOUT") or 7200)
+        #
+        # Six hours since 2026-09-30, above what the model-call retries can spend (60,
+        # see `models.BUILTIN`). At two hours django-17029 rode out the proxy outage on
+        # its retries, carried on working, and was killed by this ceiling instead -- the
+        # retries only moved the failure.
+        limit = float(os.getenv("F2P_CHILD_TIMEOUT") or 21600)
         # Stamped before launch so a result.json left by an *earlier* run is not read
         # back as this child's answer. One instance died when the docker socket vanished
         # mid-pull and the parent reported the previous day's row -- wrong cause, wrong
