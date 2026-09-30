@@ -80,7 +80,12 @@ BUILTIN: dict[str, object] = {
     "max_output_tokens": 32000,
     "native_tool_calling": None,
     "timeout": 600,
-    "num_retries": 10,
+    # Sixty, not ten (2026-09-30). A retry re-sends a request that got no answer, so it
+    # changes nothing the agent sees -- only how long it waits. Ten attempts covered about
+    # forty minutes of an unreachable proxy; the outage on 2026-09-30 lasted longer and
+    # cut thirteen agents off mid-run (BROKEN, after 0-21 actions). Sixty rides out about
+    # two hours of refused connections, and longer when calls hang to their timeout.
+    "num_retries": 60,
     "retry_max_wait": 120,
 }
 

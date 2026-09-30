@@ -401,6 +401,16 @@ a field with a real default can never fall through to a fallback; `None` is how 
 says *this one has no opinion*. And `describe()` prints resolved values with a star on
 the ones the file actually names.
 
+### Retries (since 2026-09-30)
+
+A model call that gets no answer is re-sent up to 60 times (`models.BUILTIN`, and
+`FALLBACK_LLM_NUM_RETRIES` in `.env`), backing off to two minutes. A retry repeats a
+request that produced nothing, so the agent's view is unchanged; only the wait grows. At
+10 a proxy outage of about forty minutes (2026-09-30) cut thirteen agents off mid-run;
+60 covers about two hours of refused connections. An outage longer than that still ends
+the run as BROKEN with an outside-failure reason, which `run_exp.py --retry-broken`
+reruns from scratch.
+
 ### Temperature
 
 `--temperature` sets the agent's sampling temperature (0 to 2; anything else is refused,
