@@ -479,6 +479,25 @@ Observed, not changed:
 - sympy-21612: the image lacks `antlr4`, but the patch is in `printing/str.py` and is
   testable without the LaTeX parser -- a model failure, not an environment one.
 
+## Found in the final base run (36, 2026-09-30): 26/36 YES
+
+A proxy outage (~40 min) cut 13 first-wave agents off and a 14th hit the 2 h per-job
+ceiling after riding it out; all 14 were deleted and rerun (`out-v2/audit_outage.py`
+classified every run; two others had waited out 9 timeouts and are valid). Model calls
+now retry 60 times and the per-job ceiling is 6 h.
+
+- **The agent's `coverage` measured the diff header's lines, not where the patch landed.**
+  Only the harness's final measurement passed the pre-patch files to
+  `changed_line_coverage`; the tool, `verify`'s reach line, the passes-at-base diagnosis and
+  the runs-no-change check fell back to hunk-header numbers, which are wrong whenever `git
+  apply` relocates a hunk. scikit-learn-10908's lines landed 22 below the header: the tool
+  measured an unrelated line, said 0% seven times and drove four refusals, while the
+  harness scored the same test 100%. pylint-7277 was one line off. Fixed (`E.base_texts`
+  read before every apply); 2 of 36 runs affected, both YES, their scored coverage correct.
+- pytest-7982 would not call `verify` through ten refusals ("verify is not a pytest command
+  but a special command in this environment"), the pattern astropy-13398 showed before the
+  refusal was reworded; the model reads "fails now" as done. Not changed.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

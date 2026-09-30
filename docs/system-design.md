@@ -190,6 +190,12 @@ tests that pass in this sandbox and lists the others under `excluded` (no networ
 requests' httpbin tests, astropy's IERS downloads); it is "not measured" only when none
 pass. The agent's column is measured either way.
 
+**Every coverage reading finds where the patch landed.** The agent's `coverage`, `verify`'s
+reach line and the stop-check diagnoses read the patched files before applying the patch
+(`E.base_texts`) and pass them to `changed_line_coverage`, as the scored measurement always
+did. The diff header's numbers are wrong when `git apply` relocates a hunk
+(scikit-learn-10908: 22 lines).
+
 **Spread, not clustered.** `_spread` round-robins over `(file, line)` groups before
 taking the first N, so ten mutants on a two-file patch sample both files and several lines
 rather than ten variants of one expression.

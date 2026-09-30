@@ -249,9 +249,10 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
     patch = instance["patch"]
     if box.ensure_base(patch) != "base":
         return ""
+    base = E.base_texts(box, patch)
     box.apply_patch(patch)
     try:
-        cov = E.changed_line_coverage(box, [rel], patch)
+        cov = E.changed_line_coverage(box, [rel], patch, base)
         at_import = E.import_time_hits(box, cov) if cov.get("hit") else []
     except Exception:                                           # noqa: BLE001
         cov, at_import = {}, []
@@ -364,9 +365,10 @@ def no_reach_gap(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str,
     patch = instance["patch"]
     if box.ensure_base(patch) != "base":
         return None
+    base = E.base_texts(box, patch)
     box.apply_patch(patch)
     try:
-        cov = E.changed_line_coverage(box, [rel], patch)
+        cov = E.changed_line_coverage(box, [rel], patch, base)
     except Exception:                                           # noqa: BLE001
         cov = {}
     finally:

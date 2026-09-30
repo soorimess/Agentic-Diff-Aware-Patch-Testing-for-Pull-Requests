@@ -457,9 +457,10 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
             return CoverageObservation.from_text(
                 "cannot measure: the working tree is in an unexpected state "
                 f"({state}) -- some file was modified outside the test", is_error=True)
+        base = E.base_texts(self.box, self.patch)
         self.box.apply_patch(self.patch)
         try:
-            cov = E.changed_line_coverage(self.box, [action.target], self.patch)
+            cov = E.changed_line_coverage(self.box, [action.target], self.patch, base)
             import_only = _import_only(self.box, cov) if cov.get("measured") else ""
         finally:
             self.box.apply_patch(self.patch, revert=True)
@@ -721,6 +722,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         cmd = E.test_command(self.box, [action.target])
         before = self.box.exec(cmd, timeout=3600)
         base_out = E.parse_output(before.output)
+        self._base = E.base_texts(self.box, self.patch)
         self.box.apply_patch(self.patch)
         missed = ""
         try:
@@ -870,7 +872,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         of the agent is a score to raise.
         """
         try:
-            cov = E.changed_line_coverage(self.box, [target], self.patch)
+            cov = E.changed_line_coverage(self.box, [target], self.patch,
+                                          getattr(self, "_base", None))
         except Exception:
             return ""
         if not cov.get("measured"):

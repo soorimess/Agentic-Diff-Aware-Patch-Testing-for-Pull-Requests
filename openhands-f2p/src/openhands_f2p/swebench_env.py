@@ -15,7 +15,7 @@ import json
 from openhands_f2p.coverage_metric import (COV_DATA, COV_RC, COV_RC_SRC,
                                            DJANGO_COV_PATH, SYMPY_COV_DRIVER,
                                            SYMPY_DRIVER_SRC,
-                                           added_lines_between, changed_line_coverage,
+                                           added_lines_between, base_texts, changed_line_coverage,
                                            import_time_hits,
                                            changed_lines, coverage_command, is_test_file,
                                            measure_coverage, patched_source_files)
@@ -48,7 +48,7 @@ __all__ = [
     # the coverage metric
     "COV_DATA", "COV_RC", "COV_RC_SRC", "DJANGO_COV_PATH", "SYMPY_COV_DRIVER",
     "SYMPY_DRIVER_SRC", "added_lines_between", "changed_line_coverage", "changed_lines",
-    "import_time_hits",
+    "import_time_hits", "base_texts",
     "coverage_command", "is_test_file", "measure_coverage", "patched_source_files",
     # here
     "verify_environment",

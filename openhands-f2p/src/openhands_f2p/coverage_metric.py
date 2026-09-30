@@ -460,3 +460,21 @@ def import_time_hits(box: "Sandbox", cov: dict) -> list[str]:
                 in_body.update(range(node.body.lineno, (node.body.end_lineno or 0) + 1))
         found += [f"{path}:{n}" for n in sorted(lines) if n not in in_body]
     return found
+
+
+def base_texts(box: "Sandbox", patch: str) -> dict[str, str]:
+    """The files `patch` changes, read now -- call this before applying it.
+
+    `changed_line_coverage` needs them to find where the patch's lines actually landed.
+    Without them it falls back to the diff header's line numbers, and `git apply` moves a
+    hunk whose context has shifted: scikit-learn-10908 (base run, 2026-09-30) had its
+    lines 22 below the header, so the agent's `coverage` tool measured an unrelated line,
+    reported 0% seven times, and drove three coverage refusals and a "runs none of the
+    change" refusal -- while the harness, which passed these, scored the same test 100%.
+    """
+    out: dict[str, str] = {}
+    for path in patched_source_files(patch):
+        text = box.read(path)
+        if text is not None:
+            out[path] = text
+    return out
