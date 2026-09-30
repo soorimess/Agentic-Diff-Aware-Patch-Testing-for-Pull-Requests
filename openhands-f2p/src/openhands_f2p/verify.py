@@ -607,13 +607,17 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
             score = (f"Changed-line coverage is {pct}% ({cov.get('covered')} of "
                      f"{cov.get('executable_changed_lines')} lines); the target is 100%. "
                      if scored else "")
-            if not cov.get("measured") or not cov.get("missed"):
-                pass
-            elif wrote_test_after(tool_log, i, rel):
+            # Stale first, goal second. The other way round, a `coverage` that said "every
+            # line" was believed for the rest of the run, whatever the mutation loop did
+            # to the test afterwards -- only a short answer was ever re-asked. `verify` has
+            # always been re-asked after an edit; the duties now are too.
+            if cov.get("measured") and wrote_test_after(tool_log, i, rel):
                 gaps.append(("coverage",
                              f"{score}You changed the test after the last `coverage`, so "
                              f"its answer describes a file that no longer exists. Call "
                              f"`coverage` again on what is on disk now."))
+            elif not cov.get("measured") or not cov.get("missed"):
+                pass
             elif not _no_better(tool_log, "coverage", rel, coverage_score):
                 lost = _lost(tool_log, "coverage", rel, coverage_score, pct, "%")
                 gaps.append(("coverage",
@@ -637,13 +641,13 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
             ms = mutation_score(e)
             score = (f"Mutation score is {ms}% ({e.get('killed')} of {e.get('total')} "
                      f"caught); maximise it. " if scored and ms is not None else "")
-            if not e.get("survived"):
-                pass
-            elif wrote_test_after(tool_log, i, rel):
+            if e.get("total") and wrote_test_after(tool_log, i, rel):
                 gaps.append(("mutation",
                              f"{score}You changed the test after the last `mutation`, so "
                              f"its answer describes a file that no longer exists. Call "
                              f"`mutation` again on what is on disk now."))
+            elif not e.get("survived"):
+                pass
             elif not _no_better(tool_log, "mutation", rel, mutation_score):
                 lost = _lost(tool_log, "mutation", rel, mutation_score, ms, "%")
                 gaps.append(("mutation",

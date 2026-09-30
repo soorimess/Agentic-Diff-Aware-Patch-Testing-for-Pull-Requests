@@ -632,6 +632,11 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   When the test was edited after a NOT fail-to-pass, the refusal carries that answer's
   headline and says `run_tests` and `coverage` each run one side of the change only.
   matplotlib-22719 got the bare sentence ten times and answered each with those two.
+- **An answer at goal is re-asked after an edit, like a short one.** `duty_gap` used to
+  check "no missed line / no survivor" before "edited since", so a `coverage` of 100% was
+  believed for the rest of the run whatever the mutation loop then did to the test (and
+  the same for `mutation`). Now staleness is checked first, as `verify_gap` always did.
+  Across 57 runs two stopped on such a stale answer; neither had lost anything.
 - **"It only imports the change"** when every changed line the test runs is module-level
   (`import_time_hits`: outside any function body -- assignments, class attributes,
   decorators, defaults). Those run for any test that imports the module. `coverage` and

@@ -460,6 +460,13 @@ held). Fixed:
   32% changed-line coverage). The refusal now says `verify` applies and reverts the change
   itself and names the call.
 
+- **A duty answer at goal was never re-asked.** Found checking whether the loops can make
+  results worse (57 runs): six tests stopped being fail-to-pass during the coverage or
+  mutation loop and all six were brought back by the `verify` gate before the stop; no
+  run ended with coverage or mutation below its own best. But `duty_gap` accepted a
+  100% `coverage` (or an all-caught `mutation`) forever, even after later edits; two runs
+  stopped that way, harmlessly. Staleness is now checked before the goal.
+
 Observed, not changed:
 - All 9 NOs ended on the passes-at-base cap, then a restart; 2 of 11 restarts converted
   (django-17029, sphinx-9602). Reach diagnoses split: 3 "does not reach", 4 "does reach",
