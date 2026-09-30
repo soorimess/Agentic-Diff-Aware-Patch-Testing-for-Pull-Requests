@@ -440,6 +440,37 @@ Not bugs, for the record:
   the quoted `verify_open` refusal and flipped; requests-1142 and sympy-12096's mutation
   loops closed on a non-improving attempt.
 
+## Found in the second base run (36 instances, 2026-09-30): 27/36 YES
+
+Ran 1.3 h at parallel 18; the disk never went below 39 GB free (the per-container reserve
+held). Fixed:
+
+- **mutmut never mutates `__new__`, `__getattribute__`, `__setattr__`** -- the same
+  trampoline-only rule as the decorator one. sympy-24562's patch is all in
+  `Rational.__new__` and still had "no mutations". Lifted with the decorator rule.
+- **A developer test that cannot pass here dropped both mutation columns.** requests'
+  tests call httpbin and astropy's refraction tests fetch IERS data; the sandbox has no
+  network, so the "both tests must pass on the fix" check returned early and
+  requests-1766 and astropy-13398 had no score for the agent's passing test either. The
+  developer column now uses the developer tests that pass here and lists the rest
+  (`excluded`); it reads "not measured" only when none pass.
+- **"You never called `verify`" said nothing about what `verify` does.** astropy-13398
+  wrote "let me run `verify`" fourteen times, believed it "cannot apply the change in this
+  environment", never called it, and took all ten refusals (it scored YES anyway, with
+  32% changed-line coverage). The refusal now says `verify` applies and reverts the change
+  itself and names the call.
+
+Observed, not changed:
+- All 9 NOs ended on the passes-at-base cap, then a restart; 2 of 11 restarts converted
+  (django-17029, sphinx-9602). Reach diagnoses split: 3 "does not reach", 4 "does reach",
+  2 "reaches part". pytest-7982 alternated passes-at-base and verify-open refusals, so the
+  two-running cap never fired and it used all ten.
+- A coverage or mutation loop can close with no refusal at all: `V._no_better` also counts
+  an attempt made before the agent first stopped (requests-1142: coverage 50%, mutation
+  3/5, "not needed"). Working as written; a design question for the user.
+- sympy-21612: the image lacks `antlr4`, but the patch is in `printing/str.py` and is
+  testable without the LaTeX parser -- a model failure, not an environment one.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

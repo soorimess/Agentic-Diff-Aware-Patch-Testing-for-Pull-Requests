@@ -86,7 +86,8 @@ class Mutant:
 
 
 def _allow_decorated() -> None:
-    """Let mutmut mutate inside decorated functions and classes. Once per process.
+    """Let mutmut mutate inside decorated functions and classes, and inside `__new__`,
+    `__getattribute__` and `__setattr__`. Once per process.
 
     mutmut 3 skips every decorated function (a lone `@staticmethod` / `@classmethod`
     aside) and every decorated class, whole -- for its own runner, which swaps functions
@@ -103,8 +104,14 @@ def _allow_decorated() -> None:
     without its decorators; its other rules (names never mutated, pragmas) still apply.
     """
     import libcst as cst
+    from mutmut.mutation import file_mutation
     from mutmut.mutation.file_mutation import MutationVisitor
 
+    # Same origin, same cost: `__new__`, `__getattribute__` and `__setattr__` are never
+    # mutated because a trampoline cannot stand in for them. sympy-24562's whole patch is
+    # in `Rational.__new__` and reported "no mutations" after the decorator rule was
+    # lifted (second base run, 2026-09-30). The rule reads the module global at call time.
+    file_mutation.NEVER_MUTATE_FUNCTION_NAMES = set()
     original = MutationVisitor._skip_node_and_children
     if getattr(original, "_f2p_allows_decorated", False):
         return
@@ -404,6 +411,10 @@ class Score:
     pool. Every run is scored on the same half since 2026-09-28 -- see `measure`."""
     agent_killed: int = 0
     developer_killed: int = 0
+    # False when none of the developer's tests pass on the fixed code in this sandbox;
+    # `developer_excluded` names the ones that do not (see `measure`).
+    developer_measured: bool = True
+    developer_excluded: list[str] = field(default_factory=list)
     mutants: list[dict] = field(default_factory=list)
 
     def _pct(self, n: int) -> float | None:
@@ -415,8 +426,14 @@ class Score:
                 "held_out": self.held_out,
                 "agent": {"killed": self.agent_killed, "total": self.total,
                           "percent": self._pct(self.agent_killed)},
-                "developer": {"killed": self.developer_killed, "total": self.total,
-                              "percent": self._pct(self.developer_killed)},
+                "developer": ({"killed": self.developer_killed, "total": self.total,
+                               "percent": self._pct(self.developer_killed),
+                               "excluded": self.developer_excluded}
+                              if self.developer_measured else
+                              {"killed": None, "total": self.total, "percent": None,
+                               "excluded": self.developer_excluded,
+                               "why": "none of the developer's tests pass on the fixed "
+                                      "code in this sandbox"}),
                 "mutants": self.mutants}
 
 
@@ -428,8 +445,10 @@ def line(score: dict) -> str:
     a, d = score["agent"], score["developer"]
     gaps = sum(1 for m in score.get("mutants", [])
                if m.get("verdict") == "developer only")
+    dev = (f"{d['killed']}/{d['total']}" if d.get("killed") is not None
+           else "not measured (none of its tests pass here)")
     return (f"agent test {a['killed']}/{a['total']}, "
-            f"developer test {d['killed']}/{d['total']}"
+            f"developer test {dev}"
             + (f"   ({gaps} killed only by the developer's)" if gaps else ""))
 
 
@@ -499,9 +518,19 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
         gen_expected = list(collected)
         # Both tests must pass on the unmutated fix, or every mutant would read as
         # killed and the score would be meaningless rather than obviously wrong.
-        if _fails(box, gold_targets, gold_expected):
-            score.why = "the developer's test does not pass on the fixed code here"
-            return score
+        # Only the developer's tests that pass on the unmutated fix *here* can say
+        # anything about a mutant. Some cannot pass in this sandbox at all: requests'
+        # tests call httpbin and astropy's refraction tests fetch IERS data, and the
+        # container has no network. Returning here, as this did, dropped the *agent's*
+        # column with the developer's -- requests-1766 and astropy-13398 in the second
+        # base run (2026-09-30) had no mutation score for a test that passed. Now the
+        # developer's column uses the tests that pass, names the ones left out, and is
+        # marked unmeasured only when none pass.
+        gold_out = R.parse_output(
+            box.exec(R.test_command(box, gold_targets), timeout=1800).output)
+        gold_ok = [n for n in gold_expected if R.outcome_of(gold_out, n) == "PASSED"]
+        score.developer_excluded = [n for n in gold_expected if n not in gold_ok]
+        score.developer_measured = bool(gold_ok)
         if _fails(box, [gen_path], gen_expected):
             score.why = "the generated test does not pass on the fixed code here"
             return score
@@ -528,17 +557,19 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
             box.write(m.file, m.source)
             try:
                 m.agent_kills = _fails(box, [gen_path], gen_expected)
-                m.developer_kills = _fails(box, gold_targets, gold_expected)
+                m.developer_kills = (_fails(box, gold_targets, gold_ok) if gold_ok
+                                     else None)
             finally:
                 box.write(m.file, originals[m.file])
             m.source = ""              # written; no reason to keep it in the record
+            dev = ("not measured" if m.developer_kills is None else
+                   "kills" if m.developer_kills else "survives")
             flow.record(flow.VERIFY, "mutant",
                         f"{m.name}: agent {'kills' if m.agent_kills else 'survives'}, "
-                        f"developer {'kills' if m.developer_kills else 'survives'}")
+                        f"developer {dev}")
             if not quiet:
                 print(f"    {m.name:30} agent "
-                      f"{'kill' if m.agent_kills else 'LIVE'}   developer "
-                      f"{'kill' if m.developer_kills else 'LIVE'}")
+                      f"{'kill' if m.agent_kills else 'LIVE'}   developer {dev}")
     finally:
         # Back to base, tests off before the fix because they went on after it. A tree
         # left patched would make the next "before the fix" run be the after run.
@@ -551,7 +582,7 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
 
     score.total = len(mutants)
     score.agent_killed = sum(1 for m in mutants if m.agent_kills)
-    score.developer_killed = sum(1 for m in mutants if m.developer_kills)
+    score.developer_killed = sum(1 for m in mutants if m.developer_kills is True)
     score.mutants = [m.as_dict() for m in mutants]
     score.measured = True
     if out_dir is not None:

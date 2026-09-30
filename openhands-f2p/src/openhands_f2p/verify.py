@@ -469,9 +469,15 @@ def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
                f"counts: put the test there, call `verify` on it, and keep going until it "
                f"says fail-to-pass.")
     elif got is None:
+        # What `verify` does, said here. astropy-13398 (second base run, 2026-09-30) wrote
+        # "let me run `verify`" fourteen times, called something else every time -- it
+        # believed it "cannot apply the change in this environment" -- and took all ten
+        # refusals without one call. It never has to apply anything: `verify` does.
         say = (f"You never called `verify`, so nothing has established the one property "
-               f"the test must have. Write a test, call `verify`, and keep going until it "
-               f"says fail-to-pass.")
+               f"the test must have. `verify` works here and does the applying itself: it "
+               f"runs your test on this code, applies the change, runs it again and puts "
+               f"the code back -- you apply nothing. Call it now with `target` set to "
+               f"`{rel}`, and keep going until it says fail-to-pass.")
     else:
         i, e = got
         still = [n for n, st in (e.get("after") or {}).items() if st in BEHAVIOURAL]
@@ -489,7 +495,8 @@ def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
             quoted = f" Its answer was:\n\n> {last_said}\n\n" if last_said else " "
             say = (f"The last `verify` said **not fail-to-pass**, and you have edited the "
                    f"test since, so nothing has checked the file on disk now.{quoted}"
-                   f"Call `verify` on it, and keep going until it says fail-to-pass. "
+                   f"Call `verify` with `target` set to `{rel}`, and keep going until it "
+                   f"says fail-to-pass. "
                    f"`run_tests` and `coverage` do not answer this: each runs the test on "
                    f"one side of the change only.")
         elif not flipped or still:

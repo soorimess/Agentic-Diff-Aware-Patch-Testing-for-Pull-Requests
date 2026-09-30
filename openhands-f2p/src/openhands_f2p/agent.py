@@ -1223,7 +1223,7 @@ def main() -> int:
         done = [r for r in rows if (r.get("mutation") or {}).get("measured")]
         counted = sum(r["mutation"]["total"] for r in done)
         killed = sum(r["mutation"]["agent"]["killed"] for r in done)
-        dev = sum(r["mutation"]["developer"]["killed"] for r in done)
+        dev = sum(r["mutation"]["developer"]["killed"] or 0 for r in done)
         if counted:
             print(f"\n  measured {len(done)}/{len(rows)} instance(s) over {counted} "
                   f"mutant(s): the generated tests killed {killed} "

@@ -180,6 +180,16 @@ unmutated, since they run at import. Before it, every line under `@property`,
 pytest-5262 and astropy-7336 reported "no mutations on the lines this patch changed",
 and the agent's tool said the same to pytest-5262 three times.
 
+**Special methods too.** mutmut also never mutates `__new__`, `__getattribute__` or
+`__setattr__` (same runner reason); the list is emptied with the decorator rule
+(sympy-24562's patch is all in `Rational.__new__`).
+
+**A developer test that cannot pass here is left out, not the measurement.** Both columns
+need their tests passing on the unmutated fix. The developer's column uses the developer
+tests that pass in this sandbox and lists the others under `excluded` (no network:
+requests' httpbin tests, astropy's IERS downloads); it is "not measured" only when none
+pass. The agent's column is measured either way.
+
 **Spread, not clustered.** `_spread` round-robins over `(file, line)` groups before
 taking the first N, so ten mutants on a two-file patch sample both files and several lines
 rather than ten variants of one expression.

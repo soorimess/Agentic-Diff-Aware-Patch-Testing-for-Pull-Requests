@@ -482,6 +482,8 @@ def build(root: Path = OUT) -> str:
                 return "—"
             if not m.get("total"):
                 return "no mutants"
+            if m[side].get("killed") is None:
+                return "n/a"
             return f"{m[side]['killed']}/{m['total']}"
         cell = (f" {_cell('agent')} | {_cell('developer')} |" if has_mutation else "")
         out.append(f"| [`{r['id']}`](./{r['id']}/) | {r['version']} | "
