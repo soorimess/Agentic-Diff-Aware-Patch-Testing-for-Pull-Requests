@@ -244,6 +244,42 @@ def _joined(first: dict, second: dict, note: str) -> dict:
 # three loops in five rounds would end on the cap rather than on their answers. The
 # action budget still bounds the run.
 MAX_REFUSALS = 10
+
+
+def _f2p_history(tool_log: list, final_code: str, final_f2p: str, d: Path) -> dict | None:
+    """What became of the tests `verify` called fail-to-pass, for the record only.
+
+    Each is written to `f2p_snapshots/` and compared with the file the agent handed in.
+    `made_worse` is the case this exists to count: the agent had a fail-to-pass test by
+    its own `verify` and ended with one the harness scores as something else. Nothing
+    here changes what is scored -- the agent's final file is its answer (user,
+    2026-09-30). None when `verify` never said fail-to-pass.
+    """
+    shots = [(i, e["f2p_test"]) for i, e in enumerate(tool_log)
+             if e.get("tool") == "verify" and "f2p_test" in e]
+    if not shots:
+        return None
+    out = d / "f2p_snapshots"
+    out.mkdir(exist_ok=True)
+    for k, (i, text) in enumerate(shots, 1):
+        (out / f"{k:02d}_tool{i}.py").write_text(text)
+    last_i, last_text = shots[-1]
+    return {"verified_f2p": len(shots), "last_f2p_at_tool": last_i,
+            "final_is_last_f2p": final_code == last_text,
+            "final_verdict": final_f2p,
+            "made_worse": final_f2p != "YES"}
+
+
+def _first_refusals(injected: list[dict]) -> dict[str, int]:
+    """Where the first refusal naming each duty landed in the tool log, by duty."""
+    first: dict[str, int] = {}
+    for m in injected:
+        reason = m.get("reason") or ""
+        if "duties_open[" not in reason:
+            continue
+        for duty in reason.split("duties_open[", 1)[1].split("]", 1)[0].split("+"):
+            first.setdefault(duty, m.get("at_tool", 0))
+    return first
 # Fewer actions than this cannot answer a refusal or use a restart: rewriting the test and
 # calling `verify` is two, and stopping is a third. sphinx-9602 (fix check, 2026-09-29) was
 # refused with 1 action left, and a restart can be handed 1 or 2.
@@ -434,7 +470,8 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 # start once the test flips by its own verify.
                 found = (V.shortfall(box, instance, rel)
                          or V.verify_gap(tool_log, rel)
-                         or V.duty_gap(tool_log, instruments(features), rel, scored=scored))
+                         or V.duty_gap(tool_log, instruments(features), rel, scored=scored,
+                                       refused=_first_refusals(injected)))
                 if found:
                     gaps.append(found)
             # A test that asserts on the project's source text rather than on behaviour.
@@ -984,6 +1021,9 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               # The restart: the first verdict and why, the budget it had, and the final
               # verdict; None when the second chance was off or not needed.
               "second_chance": restart,
+              # The tests the agent's own `verify` called fail-to-pass, and whether the
+              # final one is still such a test -- record only; see `_f2p_history`.
+              "f2p_history": _f2p_history(run["tool_log"], code or "", verdict.f2p, d),
               # Edits to files that existed at base -- the guard's subject. Scratch
               # files the agent created for itself are listed separately.
               "files_edited_outside_test": checks["preexisting_written"],

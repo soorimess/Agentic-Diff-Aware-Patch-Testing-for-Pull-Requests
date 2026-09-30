@@ -522,19 +522,29 @@ def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
                            f"* {say}")
 
 
-def _no_better(tool_log: list, tool: str, rel: str, score) -> bool:
+def _no_better(tool_log: list, tool: str, rel: str, score,
+               since: int | None = None) -> bool:
     """Whether the agent's last attempt to improve this answer did not improve it: the two
     latest calls of `tool` on the scored file have the test written between them, and the
     later score is no higher. That is what ends a coverage or mutation loop short of its
     goal -- a line no test can reach, a variant that breaks nothing observable. Trying and
-    not moving is an answer; refusing again would only ask for padding."""
+    not moving is an answer; refusing again would only ask for padding.
+
+    Only an attempt made after the agent was refused on this duty counts (`since`: the
+    tool-log position of that first refusal; `None` = never refused, so nothing counts).
+    Any edit between two calls used to, and requests-1142 (second base run) closed both
+    loops at 50% coverage and 3 of 5 mutants with no refusal at all: the edits it was
+    credited with were made before it had been asked for anything (user, 2026-09-30)."""
+    if since is None:
+        return False
     calls = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
              and same_file(e.get("target", ""), rel)]
     if len(calls) < 2:
         return False
     (i_prev, prev), (i_last, last) = calls[-2], calls[-1]
+    start = max(i_prev + 1, since)
     tried = any(e.get("tool") == "write_file" and same_file(e.get("path", ""), rel)
-                for e in tool_log[i_prev + 1:i_last])
+                for e in tool_log[start:i_last])
     a, b = score(prev), score(last)
     # A score below the best this file ever had is a regression, not a plateau: the loop
     # stays open so the agent gets back what it lost.
@@ -566,7 +576,8 @@ def mutation_score(e: dict) -> float | None:
 
 
 def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
-             scored: bool = False) -> tuple[str, str] | None:
+             scored: bool = False,
+             refused: dict[str, int] | None = None) -> tuple[str, str] | None:
     """The coverage and mutation loops, once the test flips. `require-tools`.
 
     Two loops (user, 2026-09-29), each on the tool's answer about the scored file:
@@ -587,9 +598,14 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
     100% and maximise. Before 2026-09-29 the plain duty was one reminder, and in score mode
     mutation had no loop; both loop now.
 
+    `refused` maps each duty to the tool-log position of the first refusal that named
+    it; an attempt only ends a loop short of its goal when it came after that (see
+    `_no_better`).
+
     Pure, reads only the agent's own record. Returns `(reason, what_to_say)` or `None`;
     the reason is `duties_open[coverage+mutation]`, naming the open loops.
     """
+    refused = refused or {}
     if not verify_settled(tool_log, rel):
         return None
     gaps: list[tuple[str, str]] = []
@@ -618,7 +634,8 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                              f"`coverage` again on what is on disk now."))
             elif not cov.get("measured") or not cov.get("missed"):
                 pass
-            elif not _no_better(tool_log, "coverage", rel, coverage_score):
+            elif not _no_better(tool_log, "coverage", rel, coverage_score,
+                                refused.get("coverage")):
                 lost = _lost(tool_log, "coverage", rel, coverage_score, pct, "%")
                 gaps.append(("coverage",
                              f"{score}{lost}`coverage` last listed {len(cov['missed'])} changed "
@@ -648,7 +665,8 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                              f"`mutation` again on what is on disk now."))
             elif not e.get("survived"):
                 pass
-            elif not _no_better(tool_log, "mutation", rel, mutation_score):
+            elif not _no_better(tool_log, "mutation", rel, mutation_score,
+                                refused.get("mutation")):
                 lost = _lost(tool_log, "mutation", rel, mutation_score, ms, "%")
                 gaps.append(("mutation",
                              f"{score}{lost}`mutation` last reported {len(e['survived'])} wrong "

@@ -797,6 +797,13 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # "That it flips, and what it reaches, are two of the three questions", with no
         # duty line. It scored NO having been told both things.
         ok = bool(flipped) and not still_failing
+        # The file as it stood when `verify` said fail-to-pass, kept for the record only:
+        # `f2p_history` in the result says whether the test the agent finally handed in
+        # is still that one, or it edited a passing test into a failing one afterwards.
+        # Nothing picks or restores it -- the agent's last file is its answer (user,
+        # 2026-09-30).
+        if ok:
+            self.log[-1]["f2p_test"] = self.box.read(action.target.split("::")[0]) or ""
 
         # The obligation, said where the answer arrives. It used to live only in the
         # prompt block the agent read once at the start and in the refusal it gets after

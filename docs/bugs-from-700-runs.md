@@ -472,9 +472,10 @@ Observed, not changed:
   (django-17029, sphinx-9602). Reach diagnoses split: 3 "does not reach", 4 "does reach",
   2 "reaches part". pytest-7982 alternated passes-at-base and verify-open refusals, so the
   two-running cap never fired and it used all ten.
-- A coverage or mutation loop can close with no refusal at all: `V._no_better` also counts
-  an attempt made before the agent first stopped (requests-1142: coverage 50%, mutation
-  3/5, "not needed"). Working as written; a design question for the user.
+- A coverage or mutation loop could close with no refusal at all: `V._no_better` also
+  counted an attempt made before the agent first stopped (requests-1142: coverage 50%,
+  mutation 3/5, "not needed"). User chose (2026-09-30): only attempts after a refusal for
+  that duty count. Done; and fail-to-pass snapshots are now kept for the record.
 - sympy-21612: the image lacks `antlr4`, but the patch is in `printing/str.py` and is
   testable without the LaTeX parser -- a model failure, not an environment one.
 

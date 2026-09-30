@@ -632,6 +632,16 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   When the test was edited after a NOT fail-to-pass, the refusal carries that answer's
   headline and says `run_tests` and `coverage` each run one side of the change only.
   matplotlib-22719 got the bare sentence ten times and answered each with those two.
+- **A loop ends short of its goal only on an attempt made after it was refused** (user,
+  2026-09-30). `V._no_better` needs the two latest calls of the tool with the test edited
+  between them, no gain, *and* that edit after the first refusal naming the duty (the
+  position `injected` records). Before, any edit counted, so a loop could close with no
+  refusal at all (requests-1142: 50% coverage, 3 of 5 mutants, "not needed").
+- **Fail-to-pass snapshots, record only.** Each time `verify` says fail-to-pass the file
+  is kept (`f2p_test` on that tool-log entry, and `f2p_snapshots/` in the run folder); the
+  result's `f2p_history` says how many there were and `made_worse` when the agent handed in
+  a test the harness does not score YES. Nothing is picked or restored -- the agent's last
+  file is its answer (user). RUNS.md counts them under "Fail-to-pass, then lost".
 - **An answer at goal is re-asked after an edit, like a short one.** `duty_gap` used to
   check "no missed line / no survivor" before "edited since", so a `coverage` of 100% was
   believed for the rest of the run whatever the mutation loop then did to the test (and

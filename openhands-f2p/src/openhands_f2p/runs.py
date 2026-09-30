@@ -173,6 +173,7 @@ def _row(pr: dict, root: Path) -> dict:
             "refusals": r.get("refusals") or (
                 r.get("second_chance")
                 if "reason" in (r.get("second_chance") or {}) else None),
+            "f2p_history": r.get("f2p_history"),
             "restart": (r.get("second_chance")
                         if "first_verdict" in (r.get("second_chance") or {}) else None),
             "lost": _lost_turns(d)}
@@ -418,6 +419,17 @@ def build(root: Path = OUT) -> str:
                 f"{len(restarted) - first_no} after a BROKEN); **{len(won)}** ended "
                 f"fail-to-pass on the second attempt: "
                 + (", ".join(f"`{r['id']}`" for r in won) or "none") + ".", ""]
+
+    # The agent had a fail-to-pass test by its own `verify` and handed in something else.
+    # Record only -- the agent's last file is what is scored.
+    worse = [r for r in rows if (r.get("f2p_history") or {}).get("made_worse")]
+    tracked = [r for r in rows if r.get("f2p_history")]
+    if tracked:
+        out += ["", "### Fail-to-pass, then lost", "",
+                f"**{len(tracked)}** run(s) had a test their own `verify` called "
+                f"fail-to-pass; **{len(worse)}** handed in a test that is not: "
+                + (", ".join(f"`{r['id']}`" for r in worse) or "none")
+                + ". Each such test is kept in the run's `f2p_snapshots/`.", ""]
 
     # The column only exists when something filled it. A `mutants` column of dashes on
     # every row of every table describes nothing and pushes the rest sideways.
