@@ -9,6 +9,7 @@ it and saying what it is for, the same convention as the agent's `prompts/`.
 |---|---|
 | `00-role.md` | who the judge is, what it is given, the comparative 1-5 scale |
 | `10-context.md` | what each author could know (developer experience); the developer's test is added lines, the generated one a whole file; the judge cannot run either |
+| `15-meaningful.md` | the first label and the only absolute one: is the generated test meaningful at all, `yes`/`no`, no questions (user, 2026-10-04) |
 | `20-concept.md` | concept: questions C1-C5 with their labels, and the level anchors |
 | `30-issue.md` | issue coverage: the behaviour list, questions I1-I5, and the level anchors |
 | `40-readability.md` | readability: review outcomes, questions R1-R5, and the level anchors |

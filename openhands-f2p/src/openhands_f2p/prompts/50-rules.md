@@ -26,8 +26,8 @@ job: The constraints. The first one is load-bearing for the measurement rather t
 
   The third paragraph is there because eight "fail-to-pass" tests across every run read
   the patched function with `inspect.getsource` and asserted that the patch's lines were
-  in it. That flips -- the agent was shown the patch -- and tests nothing. The harness
-  also refuses such a stop (`V.source_gap`); the rule says it before the work starts.
+  in it. That flips -- the agent was shown the patch -- and tests nothing. The harness no
+  longer refuses such a stop (2026-10-04, user); the judge's `meaningful` label reads it.
 ---
 **Do not modify or delete any file that is already here.** Not the library source, not
 an existing test, not an existing fixture. The test is supposed to fail on this code —

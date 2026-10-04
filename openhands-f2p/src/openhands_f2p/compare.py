@@ -140,7 +140,7 @@ SCALES: dict[str, dict[int, str]] = {
 SCALE_VERSION = 6
 # The questions under each level (judge_prompts/, 2026-09-29). Same scale 6 levels, so the
 # levels stay comparable; `rubric` says whether the questions were asked.
-RUBRIC = "questions-v1"
+RUBRIC = "questions-v2"     # v2 (2026-10-04): + `meaningful`, yes/no, first
 SCALES_V5: dict[str, dict[int, str]] = {
     "concept":  {1: "different", 2: "tangential", 3: "narrower", 4: "close",
                  5: "equivalent"},
@@ -177,6 +177,13 @@ def _levels(out: dict[str, Any]) -> dict[str, Any]:
     is missing or not on its list is not guessed at -- the whole answer becomes
     `unparsed`.
     """
+    # The first label (user, 2026-10-04): absolute, yes or no, read before anything else.
+    # Required like every other field -- a missing or misspelled answer makes the whole
+    # judgement `unparsed` and re-asked, never a guessed "yes".
+    meaningful = out.pop("meaningful")
+    answer = str(meaningful.get("answer", "")).strip().lower()
+    if answer not in ("yes", "no"):
+        raise ValueError(f"meaningful={meaningful.get('answer')!r} is not yes or no")
     concept = out.pop("concept")
     c = _level(concept.pop("level"))
     concept["questions"] = _labels(concept, "concept")
@@ -192,6 +199,7 @@ def _levels(out: dict[str, Any]) -> dict[str, Any]:
     out["issue_coverage"]["uncovered"] = [
         b.get("behaviour", "") for b in beh
         if str(b.get("generated", "none")).strip().lower() in ("none", "", "'none'")]
+    out["meaningful"] = {"answer": answer, "rests_on": meaningful.get("rests_on", "")}
     out["scale"] = SCALE_VERSION
     out["rubric"] = RUBRIC
     return out
@@ -261,7 +269,9 @@ def line(result: dict[str, Any]) -> str:
     test that is 'same' and unreadable and half-complete looks like a success."""
     uncovered = (result.get("issue_coverage") or {}).get("uncovered") or []
     tail = f"  misses: {uncovered[0][:52]}" if uncovered else ""
-    return (f"concept {shown(result)} | issue {shown(result.get('issue_coverage'))} | "
+    meaningful = (result.get("meaningful") or {}).get("answer", "?")
+    return (f"meaningful {meaningful} | "
+            f"concept {shown(result)} | issue {shown(result.get('issue_coverage'))} | "
             f"readable {shown(result.get('readability'))} "
             f"({result.get('confidence', '?')} conf){tail}")
 

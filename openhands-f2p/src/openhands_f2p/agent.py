@@ -311,9 +311,7 @@ def _f2p_history(tool_log: list, final_code: str, final_f2p: str, d: Path) -> di
     return {"verified_f2p": len(shots), "last_f2p_at_tool": last_i,
             "final_is_last_f2p": final_code == last_text,
             "final_verdict": final_f2p,
-            # Not when what `verify` called fail-to-pass read the source as text: that
-            # was never a behavioural test, and it is scored NO for that alone.
-            "made_worse": final_f2p != "YES" and not V.reads_source(last_text)}
+            "made_worse": final_f2p != "YES"}
 
 
 def _first_refusals(injected: list[dict]) -> dict[str, int]:
@@ -531,27 +529,22 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             # Independent grounds for refusing the stop, each with its own flag. They share
             # one message because sending two would spend two turns saying one thing.
             gaps: list[tuple[str, str]] = []
-            # A test that asserts on the project's source text rather than on behaviour.
-            # It reads only the test file. See `V.source_gap`. Asked first, because while
-            # it is open the duties are not: "the checks after fail-to-pass are not done"
-            # beside "remove that" told django-13406 (fix check) ten times both to polish
-            # and to discard the same test -- which is now scored NO in any case.
-            source = V.source_gap(box, rel) if left > 0 else None
             if left > 0:
                 # The harness's own base run first: when it finds the file missing, empty
                 # or passing, that is the whole story, told with the file and its output,
                 # and the agent's last `verify` would only repeat it. The duties only
                 # start once the test flips by its own verify.
+                # No source-reading refusal since 2026-10-04 (user): a regex for
+                # `inspect.getsource` caught 2 of 1,373 YES tests and nothing else of the
+                # kind (`isinstance`-only, `hasattr`-only ...); meaningfulness is the
+                # judge's `meaningful` label instead.
                 found = (V.shortfall(box, instance, rel)
                          or V.verify_gap(tool_log, rel)
-                         or (None if source else
-                             V.duty_gap(tool_log, instruments(features), rel, scored=scored,
-                                        refused=_first_refusals(injected),
-                                        last_refused=_last_refusals(injected))))
+                         or V.duty_gap(tool_log, instruments(features), rel, scored=scored,
+                                       refused=_first_refusals(injected),
+                                       last_refused=_last_refusals(injected)))
                 if found:
                     gaps.append(found)
-            if source:
-                gaps.append(source)
             # A test that flips while running none of the changed lines: asked once, and
             # only when nothing else is open and the agent holds `coverage`.
             if (left > 0 and not gaps and "coverage-tool" in features
@@ -999,19 +992,6 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
             # An edited one can. Outside the branch that scores a written test, so an agent
             # that wrote none and patched the library instead is caught too
             # (`scikit-learn-10297` without the guard).
-            # A test that flips by reading the project's source as text is not scored YES
-            # (user, 2026-10-04). It flips because the agent was shown the fix's wording;
-            # it tests no behaviour and fails on an equivalent fix written differently.
-            # django-13406 (fix check) asserted `inspect.getsourcelines(...)` held the
-            # fix's two lines, took ten `reads_source` refusals, and scored YES at 0%
-            # coverage. NO, so the second chance can still take it.
-            source_line = V.reads_source(code or "")
-            if verdict.f2p == "YES" and source_line:
-                verdict = replace(
-                    verdict, f2p="NO", changed_line_coverage={},
-                    why=f"it asserts on the project's source text, not on behaviour "
-                        f"(`{source_line}`)")
-                field("audit", f"NO -- reads source: {source_line}")
             if checks["tree_altered"]:
                 verdict = replace(
                     verdict, f2p="BROKEN",
@@ -1097,7 +1077,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               "test_path": test_file,
               "test_path_default": default_path,
               # The line of the final test that reads project source as text, or None.
-              # Since 2026-10-04 such a test is scored NO (user); see `score`.
+              # A record only: neither refused nor scored since 2026-10-04 (user).
               "reads_source": V.reads_source(code or ""),
               "usage": usage,
               "model": run["model"], "agent_status": run["status"],

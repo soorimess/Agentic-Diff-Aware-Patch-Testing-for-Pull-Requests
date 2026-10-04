@@ -689,10 +689,17 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   "reached N% earlier" counts only fail-to-pass measurements. While a test reads source,
   duties are not asked, `verify` warns and `mutation` refuses. Unmeasurable coverage
   ("never imported") names the changed modules, in the tool and the reach diagnosis.
-- **A source-reading test scores NO (user, 2026-10-04).** A YES whose final test matches
-  `V.reads_source` becomes NO ("asserts on the project's source text, not on behaviour"),
-  coverage dropped, so the second chance can take it. It was recorded beside a YES:
-  django-13406 (fix check) ignored ten `reads_source` refusals and scored YES at 0%.
+- **No source-reading gate (user, 2026-10-04).** The `reads_source` refusal, the NO
+  verdict for it, verify's warning and mutation's refusal are gone: the regex caught 2 of
+  1,373 YES tests and nothing else of the kind (`isinstance`-only, `hasattr`-only ...).
+  `reads_source` stays in result.json as a record. Meaningfulness is the judge's job now.
+- **The judge's first label: `meaningful`, yes/no (user, 2026-10-04).**
+  `judge_prompts/15-meaningful.md`, before concept, issue and readability; absolute (the
+  generated test alone against the report and the fix), no questions, one sentence on
+  what the flip rests on. `concept.meaningful = {answer, rests_on}`; a missing or
+  misspelled answer makes the judgement unparsed (re-asked). Rubric `questions-v2`.
+  RUNS.md shows it as the first judge column and counts meaningful YES. The judge is
+  still off by default (`run_exp.py --judge <exp>`).
 - **The guard also removes files the patch creates (2026-10-04).** A new file the fix
   adds, written by the agent, stops the patch applying; `_undo_edits` deletes it after the
   action and tells the agent, as it puts back an edited pre-existing file.

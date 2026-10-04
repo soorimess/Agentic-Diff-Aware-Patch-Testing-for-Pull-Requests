@@ -604,6 +604,10 @@ Found reading the fix check's 18 trajectories (2026-10-04):
   tool and prompt now state one rule. RUNS.md stray quote; trajectory timestamps fixed
   to millisecond precision.
 
+- **Source-reading gate removed (user, 2026-10-04).** After the fix check it refused
+  pylint-4970 eight times and spent its budget on a rule that had matched 2 tests in
+  1,373. Replaced by the judge's `meaningful` label, which covers the whole class.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

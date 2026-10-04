@@ -1,6 +1,6 @@
 ---
 name: answer
-job: The answer's shape. The model writes numbers and labels only; `compare.py` looks the
+job: The answer's shape, `meaningful` first (user, 2026-10-04). The model writes numbers and labels only; `compare.py` looks the
   level labels up and checks every question label against the lists in 20-40, so a label
   cannot drift from its definition. The levels are the judge's own decision: no rule ties
   them to the question labels (user, 2026-09-29).
@@ -9,6 +9,7 @@ Answer with JSON only, no prose around it, in exactly this shape. Every question
 label from its list, spelled exactly as listed:
 
 {
+  "meaningful": {"answer": "yes" | "no", "rests_on": "one sentence: what the generated test's flip actually rests on"},
   "concept": {
     "questions": {"C1": "<label>", "C2": "<label>", "C3": "<label>", "C4": "<label>", "C5": "<label>"},
     "level": 1 | 2 | 3 | 4 | 5,

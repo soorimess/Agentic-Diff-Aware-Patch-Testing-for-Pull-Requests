@@ -627,14 +627,6 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
         # is no sign of anything -- the test cannot tell the fix from no fix -- yet the
         # nine NO runs of the base at cap 125 made 18 such calls, and pylint-6903 went on
         # to work a survivor of a test that was never fail-to-pass.
-        source_line = V.reads_source(self.box.read(action.target.split("::")[0]) or "")
-        if source_line:
-            self.log.append({"tool": "mutation", "target": action.target,
-                             "error": "reads source"})
-            return MutationObservation.from_text(
-                f"not run: {action.target} reads the project's source as text "
-                f"(`{source_line}`), and such a test is scored NO. Replace that with an "
-                f"assertion about behaviour first.", is_error=True)
         if not V.verify_settled(self.log, V._relative(action.target.split("::")[0])):
             self.log.append({"tool": "mutation", "target": action.target,
                              "error": "not fail-to-pass by its last verify"})
@@ -863,14 +855,6 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     "does not exercise this pull request.")
         else:
             head = f"Fail-to-pass: {len(flipped)} test(s) fail before and pass after."
-            # Said here too: the harness scores a source-reading test NO (user,
-            # 2026-10-04), and "Fail-to-pass" alone was the opposite signal (django-13406).
-            source_line = V.reads_source(self.box.read(action.target.split("::")[0]) or "")
-            if source_line:
-                head += (f" But it reads the project's source as text (`{source_line}`), "
-                         f"and such a test is scored NO whatever this says: it checks how "
-                         f"the fix is worded, not what the code does. Assert on behaviour.")
-
         # The harness's rule, in one place, for everything below the headline. The
         # headline was always right, but the duty line, the coverage pointer, the mutation
         # pointer and the error flag all asked `flipped` -- "did anything flip" -- which is

@@ -368,21 +368,6 @@ def reads_source(text: str) -> str | None:
     return None
 
 
-def source_gap(box: Sandbox, rel: str) -> tuple[str, str] | None:
-    """Refuse a stop whose test asserts on source text rather than behaviour."""
-    line = reads_source(box.read(rel) or "")
-    if not line:
-        return None
-    flow.record(flow.VERIFY, "reads source", f"{rel}: {line}")
-    return ("reads_source",
-            f"`{rel}` reads the project's source code as text (`{line}`). A test that "
-            f"checks what the fix *says* passes on this exact wording and fails on an "
-            f"equivalent fix written differently; it tests nothing the pull request "
-            f"changes about how the code behaves. Remove that. Call the code the change "
-            f"modifies, with an input that goes through it, and assert on what it returns, "
-            f"raises or does.")
-
-
 def no_reach_gap(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str, str] | None:
     """A test that flips while running none of the changed lines: worth one question.
 

@@ -72,7 +72,7 @@ def _ran_at(d: Path, f: Path, r: dict) -> datetime:
 # built was over `out/` with all twenty-six results present -- and a KeyError the first
 # time a series directory held five of them.
 BLANK = {"f2p": "\u2014", "when": "", "cov": None, "covered": None, "total": None,
-         "actions": None, "why": "never run", "body": None, "judge": "\u2014", "issue": "\u2014",
+         "actions": None, "why": "never run", "body": None, "meaningful": "\u2014", "judge": "\u2014", "issue": "\u2014",
          "tools": "\u2014",
          "readable": "\u2014", "uncovered": [], "rechecked": False,
          "config": "\u2014", "tokens": 0, "cost": 0.0, "mutation": {},
@@ -160,6 +160,8 @@ def _row(pr: dict, root: Path) -> dict:
             "tools": _tools(d),
             # `narrower (3)` on the five-level judge, the bare word on the old one.
             "judge": shown(r.get("concept")),
+            # The judge's first label, absolute: yes / no / "—" when not judged.
+            "meaningful": ((r.get("concept") or {}).get("meaningful") or {}).get("answer", "\u2014"),
             "issue": shown((r.get("concept") or {}).get("issue_coverage")),
             "readable": shown((r.get("concept") or {}).get("readability")),
             "scale": (r.get("concept") or {}).get("scale"),
@@ -373,6 +375,7 @@ def build(root: Path = OUT) -> str:
             corpus_lines += changed_source_lines(fd.read_text(errors="replace"))
     stamps = sorted(r["when"] for r in rows if r["when"])
     chance_on = any(r.get("second_chance_on") for r in rows)
+    judged_m = [r for r in yes if r.get("meaningful") in ("yes", "no")]
     rescued = [r for r in rows if r.get("restart") and not r["restart"].get("skipped")
                and r["f2p"] == "YES"]
 
@@ -409,6 +412,9 @@ def build(root: Path = OUT) -> str:
             # Escaped: a bare `$` opens LaTeX math in renderers that support it, and a
             # second `$` later in the line closes it -- the cost line and every figure
             # after it then render as typeset algebra.
+            (f"- **{sum(r['meaningful'] == 'yes' for r in yes)}/{len(judged_m)}** of the "
+             f"judged YES tests are meaningful by the judge's first label")
+            if judged_m else "",
             f"- \\${sum(r['cost'] for r in rows):.2f} and "
             f"{sum(r['tokens'] for r in rows) / 1e6:.1f}M tokens in total",
             ""]
@@ -509,9 +515,9 @@ def build(root: Path = OUT) -> str:
             *_judge_legend({r["scale"] for r in rows}),
             f"| instance | version | verdict | coverage |"
             f"{' mutants: agent test | mutants: dev test |' if has_mutation else ''}"
-            f" actions | tools used | concept | issue | readable | last run |",
+            f" actions | tools used | meaningful | concept | issue | readable | last run |",
             f"|---|---|---|---|{'---|---|' if has_mutation else ''}"
-            f"---|---|---|---|---|---|"]
+            f"---|---|---|---|---|---|---|"]
     for r in rows:
         cov = (f"{r['cov']:.0f}% ({r['covered']}/{r['total']})"
                if r["cov"] is not None else "—")
@@ -539,7 +545,7 @@ def build(root: Path = OUT) -> str:
                    f"{r['f2p']}{' ¹' if r['rechecked'] else ''} | {cov} |{cell} "
                    f"{r['actions'] if r['actions'] is not None else '—'} | "
                    f"{r['tools']} | "
-                   f"{r['judge']} | {r['issue']} | {r['readable']} | "
+                   f"{r['meaningful']} | {r['judge']} | {r['issue']} | {r['readable']} | "
                    f"{r['when'] or '—'} |")
     if has_mutation:
         out += ["", "Mutation cells: *none held out* -- the only mutant(s) went to the half "
