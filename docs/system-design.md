@@ -689,6 +689,11 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   "reached N% earlier" counts only fail-to-pass measurements. While a test reads source,
   duties are not asked, `verify` warns and `mutation` refuses. Unmeasurable coverage
   ("never imported") names the changed modules, in the tool and the reach diagnosis.
+- **Rule B, tightened (2026-10-04).** The refusal an attempt must follow is the first
+  *shortfall* refusal for that duty (`_first_refusals` filters on `SHORTFALL_SAID`); the
+  attempt must measure content the tool never measured before; a loop that closed on some
+  content stays closed while the file holds it (`_no_better` / `_attempt_failed`). The
+  reach diagnosis hedges for tests that spawn a process (`V.SPAWNS`).
 - **Images stay loaded on a roomy disk; loads run six at once (2026-10-04).** After a run
   `image_cache.release` keeps Docker's copy while the volume has 100 GB free
   (`F2P_KEEP_IMAGES_FREE_GB`); `make_room` still evicts when short. Archive loads use

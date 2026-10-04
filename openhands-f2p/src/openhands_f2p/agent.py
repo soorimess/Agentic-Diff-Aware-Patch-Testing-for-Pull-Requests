@@ -314,19 +314,28 @@ def _f2p_history(tool_log: list, final_code: str, final_f2p: str, d: Path) -> di
             "made_worse": final_f2p != "YES"}
 
 
+# How a refusal for each duty reads when it is about a shortfall -- lines missed,
+# variants surviving -- rather than a stale or a missing answer.
+SHORTFALL_SAID = {"coverage": "`coverage` last listed", "mutation": "`mutation` last reported"}
+
+
 def _first_refusals(injected: list[dict]) -> dict[str, int]:
-    """Where the first refusal naming each duty landed in the tool log, by duty."""
+    """Where the first *shortfall* refusal for each duty landed in the tool log.
+
+    Only those: a loop may close short of its goal on an attempt made after the agent was
+    told what falls short (user, choice B). Any refusal naming the duty used to count --
+    "you changed the test after the last `coverage`, call it again" too -- and
+    django-13279 (base at c1d704b2) closed its coverage loop at 83% having never been told
+    a line was missed; matplotlib-13989 and astropy-13398 closed loops the same way."""
     first: dict[str, int] = {}
     for m in injected:
         reason = m.get("reason") or ""
         if "duties_open[" not in reason:
             continue
         for duty in reason.split("duties_open[", 1)[1].split("]", 1)[0].split("+"):
-            first.setdefault(duty, m.get("at_tool", 0))
+            if SHORTFALL_SAID.get(duty, "\0") in (m.get("text") or ""):
+                first.setdefault(duty, m.get("at_tool", 0))
     return first
-# How a refusal for each duty reads when it is about a shortfall -- lines missed,
-# variants surviving -- rather than a stale or a missing answer.
-SHORTFALL_SAID = {"coverage": "`coverage` last listed", "mutation": "`mutation` last reported"}
 
 
 def _last_refusals(injected: list[dict]) -> dict[str, int]:

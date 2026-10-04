@@ -608,6 +608,23 @@ Found reading the fix check's 18 trajectories (2026-10-04):
   pylint-4970 eight times and spent its budget on a rule that had matched 2 tests in
   1,373. Replaced by the judge's `meaningful` label, which covers the whole class.
 
+Found reading the base at c1d704b2 (2026-10-04):
+
+- **A loop could close short of its goal without one shortfall refusal.**
+  `_first_refusals` took any refusal naming the duty ("you changed the test after the
+  last `coverage`") as the point after which an attempt counts. django-13279 closed its
+  coverage loop at 83% never told `base.py:113` was missed; matplotlib-13989 and
+  astropy-13398 closed loops the same way. Now only shortfall refusals count (rule B).
+- **A revert to any earlier-measured file counted as an attempt** (only the previous call
+  was compared; matplotlib-13989). An attempt now measures content the tool has never
+  measured.
+- **A closed loop reopened** when the agent tried again, broke the flip and put the file
+  back (django-11119: one extra refusal). A loop closed on some content stays closed for it.
+- **"It does not reach the change" to a test running pytest in a subprocess**
+  (pytest-7982, three times): coverage does not follow child processes. The diagnosis now
+  says so when the test spawns one.
+- A mutant deleting a line had an empty label (sklearn-25232); now "(line removed)".
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

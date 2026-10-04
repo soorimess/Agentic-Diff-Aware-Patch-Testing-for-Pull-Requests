@@ -200,7 +200,10 @@ def _rewrite(a: list[str], b: list[str]) -> tuple[set[int], str, str]:
                 touched.update(line_of(c) for c in range(c1, c2) if not block_a[c].isspace())
             else:
                 touched.add(line_of(min(c1, max(len(block_a) - 1, 0))))
-    return touched, " | ".join(befores), " | ".join(afters)
+    # A mutant that deletes a line had an empty right side (sklearn-25232: `fill_value=
+    # self.fill_value,   ->   `), which reads as a rendering fault.
+    return (touched, " | ".join(befores),
+            " | ".join(x if x.strip() else "(line removed)" for x in afters))
 
 
 def _candidates(source: str, filename: str, changed: set[int]) -> list[tuple]:

@@ -227,6 +227,11 @@ def _evidence(box: Sandbox, rel: str, run_output: str) -> str:
             f"```\n{out}\n```")
 
 
+# A test that runs code in another process: coverage records only its own.
+SPAWNS = re.compile(r"\bsubprocess\b|sys\.executable|runpytest_subprocess|\bos\.system\b"
+                    r"|\bPopen\b|\bspawnu?\b|multiprocessing")
+
+
 def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
     """For a test that passes at base: which of the two very different mistakes is it?
 
@@ -267,6 +272,16 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
     flow.record(flow.VERIFY, "stop-check reach",
                 f"{rel}: runs {cov.get('covered', 0)} of the changed lines"
                 + ("" if cov.get("measured") else " (changed file never imported)"))
+    if not cov.get("covered") and SPAWNS.search(box.read(rel) or ""):
+        # Coverage follows this process only. pytest-7982 (base at c1d704b2) ran
+        # `python -m pytest` on a symlinked directory -- which does run the changed line,
+        # in the child -- and was told three times it "executes none of the lines".
+        return ("\n\n**Coverage saw none of the changed lines run, and your test starts a "
+                "child process**, which coverage does not follow -- the change may run there "
+                "unseen. Either way the assertion is checking something true before the fix "
+                "as well. Call the changed code in the test's own process where you can, so "
+                "its result is what you assert, and assert on what the change makes "
+                "different.")
     if not cov.get("covered"):
         # When the changed module is never imported, `coverage` has no lines to show, so
         # the module is named here (seaborn-3069, fix check: tested through `catplot`,
@@ -640,6 +655,22 @@ def _no_better(tool_log: list, tool: str, rel: str, score,
     if not calls:
         return False
     i_last, last = calls[-1]
+    # Closed stays closed for the same file. django-11119 (base at c1d704b2) closed its
+    # mutation loop, tried once more, broke the flip, put the file back -- and measuring
+    # the very content the loop had closed on reopened it for another refusal.
+    now = _content_at(tool_log, i_last, rel)
+    if any(_content_at(tool_log, i, rel) == now
+           and _attempt_failed(tool_log[:i + 1], tool, rel, score, since)
+           for i, _ in calls[:-1]):
+        return True
+    return _attempt_failed(tool_log, tool, rel, score, since)
+
+
+def _attempt_failed(tool_log: list, tool: str, rel: str, score, since: int) -> bool:
+    """`_no_better` for the last call alone, without carrying an earlier close forward."""
+    calls = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
+             and "error" not in e and names_test(tool_log, e.get("target", ""), rel)]
+    i_last, last = calls[-1]
     # The attempt is the latest edit before the last call, measured against the last
     # call before that edit. It was the last two calls, so calling the tool again with no
     # edit between -- what the refusal itself asks for ("call `verify`, then `mutation`
@@ -653,10 +684,13 @@ def _no_better(tool_log: list, tool: str, rel: str, score,
     if not before:
         return False
     i_prev, prev = before[-1]
-    # A write that puts back what the earlier call measured is a revert, not an attempt:
-    # matplotlib-26208 (base, cap 125) tried at 31, broke the flip, restored the file of
-    # 26 at 34, and the second measurement of one file closed the loop.
-    if _content_at(tool_log, i_prev, rel) == _content_at(tool_log, i_last, rel):
+    # An attempt measures a file this tool has not measured before. A write that puts
+    # back what any earlier call measured is a revert: matplotlib-26208 (base, cap 125)
+    # restored the file of 26 at 34; matplotlib-13989 (base at c1d704b2) went back to a
+    # version measured two calls earlier, which comparing with the previous call alone
+    # took for an attempt.
+    now = _content_at(tool_log, i_last, rel)
+    if any(_content_at(tool_log, i, rel) == now for i, _ in calls[:-1]):
         return False
     a, b = score(prev), score(last)
     # A score below the best this file ever had is a regression, not a plateau: the loop
