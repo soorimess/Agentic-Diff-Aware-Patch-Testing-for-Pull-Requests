@@ -389,9 +389,12 @@ def build(root: Path = OUT) -> str:
             (f"- **{len(rescued)}** of those rescued by the second chance (no YES on the "
              f"first attempt, YES after the restart); first attempts alone: "
              f"**{len(yes) - len(rescued)}/{len(decided)}**") if chance_on else "",
-            (f"- **{len(covs)}** measured for changed-line coverage: "
-             f"**mean {sum(covs) / len(covs):.0f}%** per test, "
-             f"median {sorted(covs)[len(covs) // 2]:.0f}%") if covs else "",
+            # The run's main coverage number (user, 2026-10-04): the mean of the per-PR
+            # percentages over its YES PRs. Two runs are compared on another one -- pooled
+            # covered/all changed lines over the PRs YES in both -- in the compare report.
+            (f"- **Changed-line coverage (main): mean {sum(covs) / len(covs):.1f}%** of "
+             f"the per-PR figures over the {len(covs)} measured YES PRs; median "
+             f"{sorted(covs)[len(covs) // 2]:.0f}%") if covs else "",
             (f"- **{100 * hit / lines_changed:.0f}%** of the changed lines those tests "
              f"were measured against ({hit}/{lines_changed}, pooled)")
             if lines_changed else "",
@@ -399,8 +402,9 @@ def build(root: Path = OUT) -> str:
              f"on import ({body_hit}/{body_lines})")
             if body_lines and body_lines != lines_changed else "",
             (f"- **{100 * hit / corpus_lines:.0f}%** of every source line all "
-             f"{len(present or PRS)} patches change ({hit}/{corpus_lines}) -- a fixed "
-             f"denominator, so this is the figure that compares across arms")
+             f"{len(present or PRS)} patches change ({hit}/{corpus_lines}), a fixed "
+             f"denominator (secondary; arms are compared on pooled lines over the PRs YES "
+             f"in both, in the compare report)")
             if corpus_lines else "",
             # Escaped: a bare `$` opens LaTeX math in renderers that support it, and a
             # second `$` later in the line closes it -- the cost line and every figure
