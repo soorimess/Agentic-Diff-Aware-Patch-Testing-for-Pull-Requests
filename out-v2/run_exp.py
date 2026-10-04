@@ -1,9 +1,9 @@
 """Run experiments on the laptop's 36 local instances, one folder per experiment.
 
     cd openhands-f2p
-    uv run python ../out-v2/run_exp.py --parallel 18 base
-    uv run python ../out-v2/run_exp.py --parallel 18 base base-repeat      # noise floor
-    uv run python ../out-v2/run_exp.py --parallel 18 \
+    uv run python ../out-v2/run_exp.py --parallel 36 base
+    uv run python ../out-v2/run_exp.py --parallel 36 base base-repeat      # noise floor
+    uv run python ../out-v2/run_exp.py --parallel 36 \
         no-mutation=--add-verify-tool,--add-coverage-tool,--add-guard,--add-require-tools,--add-second-chance
 
 Each spec is `name` or `name=--flag,--flag`. A bare name runs the base configuration --
@@ -38,6 +38,10 @@ ROOT = HERE.parent
 # Set before the harness is imported: `prs.py` and `image_cache.py` read them at import.
 os.environ.setdefault("F2P_PRS_FILE", str(ROOT / "evaluation" / "local-36-prs.json"))
 os.environ.setdefault("F2P_IMAGE_CACHE", "image-cache" + os.pathsep + "image-cache-evaluation")
+# The server pulls from Docker Hub (~85 MB/s for one stream; a 5.3 GB image in 64 s), and
+# one pull at a time would leave the last of 36 jobs waiting half an hour. Six at once.
+# Irrelevant on the laptop, where every image loads from the local cache.
+os.environ.setdefault("F2P_PULL_CONCURRENCY", "6")
 
 from openhands_f2p import agent as A  # noqa: E402
 from openhands_f2p import runs  # noqa: E402
@@ -82,7 +86,8 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("specs", nargs="+", help="name or name=--flag,--flag")
-    p.add_argument("--parallel", type=int, default=18)
+    # 36 on the server (since 2026-10-04: 16 CPUs, 31 GB, 287 GB disk); the laptop ran 18.
+    p.add_argument("--parallel", type=int, default=36)
     p.add_argument("--only", default="", help="comma-separated instance ids, for a smoke run")
     p.add_argument("--retry-broken", action="store_true")
     p.add_argument("--dry-run", action="store_true")

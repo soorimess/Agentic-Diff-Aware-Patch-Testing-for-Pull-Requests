@@ -452,7 +452,16 @@ That makes every shared resource a hazard, and two were real:
 - Two 3 GB image pulls sharing a slow link finished neither. Pulls are serialised behind
   a lock file, and one attempt gets the whole link.
 
-### On the laptop (since 2026-09-27)
+### On the server (since 2026-10-04)
+
+Runs moved to a server: 16 CPUs, 31 GB RAM, 287 GB disk, Docker logged in to Docker Hub,
+checkout at `<repo>`. `uv` is on the system PATH; `.env` is
+the laptop's without `LLM_PROXY` -- the server reaches the gateway directly (health in
+12 ms), so no proxy is set there. `run_exp.py` defaults to `--parallel 36` and six
+concurrent pulls (`F2P_PULL_CONCURRENCY`); every image used is archived to
+`image-cache/` in the checkout (git-ignored), so a later run loads it instead of pulling.
+
+### On the laptop (2026-09-27 to 2026-10-03)
 
 Experiments go in **`out-v2/<name>/`**, one folder per experiment, named after the change
 it tests, run by `out-v2/run_exp.py` (the 36 local instances, both caches, `--mutants 20`,
