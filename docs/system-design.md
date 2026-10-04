@@ -673,6 +673,11 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   result's `f2p_history` says how many there were and `made_worse` when the agent handed in
   a test the harness does not score YES. Nothing is picked or restored -- the agent's last
   file is its answer (user). RUNS.md counts them under "Fail-to-pass, then lost".
+- **RUNS.md says what the second chance rescued (user, 2026-10-04).** In any folder whose
+  runs had `second-chance` on, the headline gives the number rescued (no YES on the first
+  attempt, YES after the restart) and the first-attempts-only score, and "The second
+  chance" section is always written -- "rescued 0" included -- with restarts skipped for
+  too few actions listed.
 - **An answer at goal is re-asked after an edit, like a short one.** `duty_gap` used to
   check "no missed line / no survivor" before "edited since", so a `coverage` of 100% was
   believed for the rest of the run whatever the mutation loop then did to the test (and

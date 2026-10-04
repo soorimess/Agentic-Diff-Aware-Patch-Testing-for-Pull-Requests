@@ -76,7 +76,7 @@ BLANK = {"f2p": "\u2014", "when": "", "cov": None, "covered": None, "total": Non
          "tools": "\u2014",
          "readable": "\u2014", "uncovered": [], "rechecked": False,
          "config": "\u2014", "tokens": 0, "cost": 0.0, "mutation": {},
-         "lost": (0, 0)}
+         "lost": (0, 0), "second_chance_on": False}
 
 
 def _tools(d: Path) -> str:
@@ -176,6 +176,8 @@ def _row(pr: dict, root: Path) -> dict:
             "f2p_history": r.get("f2p_history"),
             "restart": (r.get("second_chance")
                         if "first_verdict" in (r.get("second_chance") or {}) else None),
+            "second_chance_on": "second-chance" in ((r.get("features") or {}).get("on")
+                                                    or []),
             "lost": _lost_turns(d)}
 
 
@@ -365,6 +367,9 @@ def build(root: Path = OUT) -> str:
         if fd.is_file():
             corpus_lines += changed_source_lines(fd.read_text(errors="replace"))
     stamps = sorted(r["when"] for r in rows if r["when"])
+    chance_on = any(r.get("second_chance_on") for r in rows)
+    rescued = [r for r in rows if r.get("restart") and not r["restart"].get("skipped")
+               and r["f2p"] == "YES"]
 
     out = ["# Run status, per pull request", "",
            f"Last run in this table: {stamps[-1] if stamps else 'none'}.", ""]
@@ -373,6 +378,12 @@ def build(root: Path = OUT) -> str:
             f"**{len({r['id'].split('__')[0] for r in rows})}** repositories",
             f"- **{len(yes)}/{len(decided)}** fail-to-pass, of those that reached a "
             f"verdict",
+            # Said up front whenever the second chance was on (user, 2026-10-04): how
+            # much of the YES count the restart bought, so an arm with it and an arm
+            # without it can be compared on first attempts too.
+            (f"- **{len(rescued)}** of those rescued by the second chance (no YES on the "
+             f"first attempt, YES after the restart); first attempts alone: "
+             f"**{len(yes) - len(rescued)}/{len(decided)}**") if chance_on else "",
             (f"- **{len(covs)}** measured for changed-line coverage: "
              f"**mean {sum(covs) / len(covs):.0f}%** per test, "
              f"median {sorted(covs)[len(covs) // 2]:.0f}%") if covs else "",
@@ -410,15 +421,21 @@ def build(root: Path = OUT) -> str:
                     f"**{len(won)}** of them ended fail-to-pass", ""]
         out += _refusal_table(retried)
     restarted = [r for r in rows if r.get("restart") and not r["restart"].get("skipped")]
-    if restarted:
+    skipped = [r for r in rows if (r.get("restart") or {}).get("skipped")]
+    # Written whenever the second chance was on, a zero included: "rescued none" is a
+    # finding about the add-on, and a missing section reads as "not measured".
+    if restarted or chance_on:
         first_no = sum(1 for r in restarted if r["restart"]["first_verdict"] == "NO")
-        won = [r for r in restarted if r["f2p"] == "YES"]
         out += ["", "### The second chance", "",
-                f"**{len(restarted)}** run(s) ended without a YES and were restarted with "
-                f"the record of their first attempt ({first_no} after a NO, "
-                f"{len(restarted) - first_no} after a BROKEN); **{len(won)}** ended "
+                f"**Rescued {len(rescued)}** of {len(restarted)} restarted run(s): "
+                f"{len(restarted)} ended without a YES and were restarted with the record "
+                f"of their first attempt ({first_no} after a NO, "
+                f"{len(restarted) - first_no} after a BROKEN), and {len(rescued)} ended "
                 f"fail-to-pass on the second attempt: "
-                + (", ".join(f"`{r['id']}`" for r in won) or "none") + ".", ""]
+                + (", ".join(f"`{r['id']}`" for r in rescued) or "none") + "."
+                + (f" {len(skipped)} more ended without a YES with too few actions left "
+                   f"to restart: " + ", ".join(f"`{r['id']}`" for r in skipped) + "."
+                   if skipped else ""), ""]
 
     # The agent had a fail-to-pass test by its own `verify` and handed in something else.
     # Record only -- the agent's last file is what is scored.
