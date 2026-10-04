@@ -124,29 +124,55 @@ def _clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n] + f" ... [{len(text) - n} more characters]"
 
 
+def _clip_ends(text: str, n: int) -> str:
+    """`text` cut to `n` characters from both ends. A command's output says what failed
+    at its end: django-13406's "no such table: test_toy" sat 4,000 characters into a
+    `run_tests` output that the restart's history clipped to its first 900."""
+    text = (text or "").strip()
+    if len(text) <= n:
+        return text
+    head = n // 3
+    return (text[:head] + f"\n... [{len(text) - n} characters left out] ...\n"
+            + text[-(n - head):])
+
+
 # How much of the first attempt the restart carries. Its record is the agent's own tool
-# calls and the text each returned (`shown` is exactly what the model read), clipped per
-# step and, past the cap, kept from the end: the last steps are the ones nearest the
-# state the restart begins in. About 10k tokens at the cap.
+# calls and the text each returned (`shown` is exactly what the model read), condensed and
+# clipped per step. Past the cap the *middle* goes: the opening steps hold what the agent
+# found out about the repository and the closing ones the state the restart begins in.
+# Kept from the end only, django-13406 (base, cap 125) lost its first 22 steps -- the "no
+# such table" errors that explained the whole attempt -- to a tail of repeated
+# `assertTrue(True)` runs, and all nine second attempts repeated their first mistake.
+# About 10k tokens at the cap.
 HISTORY_CHARS = 40000
+HISTORY_HEAD_CHARS = 14000
 
 
 def _history(run: dict) -> str:
     """The first attempt, step by step, in the terms the agent saw it."""
-    refusals: dict[int, list[str]] = {}
+    from openhands_f2p.sandbox_tools import _condense
+    refusals: dict[int, list[tuple[str, str]]] = {}
     for m in run.get("injected") or []:
-        refusals.setdefault(m.get("at_tool", 0), []).append(m.get("text", ""))
+        refusals.setdefault(m.get("at_tool", 0), []).append(
+            (m.get("reason") or "", m.get("text", "")))
     steps: list[str] = []
     log = run.get("tool_log") or []
+    said_before: set[str] = set()
     for i, e in enumerate(log + [{}]):
-        for text in refusals.get(i, []):
-            steps.append("[the harness refused your stop]\n" + _clip(text, 900))
+        for reason, text in refusals.get(i, []):
+            # The refusal's first paragraph is what it was about; the rest restates the
+            # rules, and nine copies of them took the room of fifty steps (pylint-6903).
+            first = (text or "").strip().split("\n\n")[0]
+            again = " (the same as an earlier one)" if text in said_before else ""
+            said_before.add(text)
+            steps.append(f"[the harness refused your stop: {reason}{again}]"
+                         + ("" if again else "\n" + _clip(first, 400)))
         tool = e.get("tool")
         if not tool:
             continue
         if tool == "run":
             steps.append(f"run: {_clip(e.get('command', ''), 300)}\n"
-                         f"{_clip(e.get('shown') or e.get('output', ''), 700)}")
+                         f"{_clip_ends(_condense(e.get('shown') or e.get('output', '')), 700)}")
         elif tool == "write_file":
             steps.append(f"write_file {e.get('path', '')} ({e.get('lines', '?')} lines)"
                          + (f" -- failed: {e['error']}" if e.get("error") else
@@ -156,19 +182,28 @@ def _history(run: dict) -> str:
                          f"{', '.join(e.get('reverted') or [])}]")
         else:
             steps.append(f"{tool} {e.get('target', '')}\n"
-                         f"{_clip(e.get('shown') or e.get('error', ''), 900)}")
+                         f"{_clip_ends(_condense(e.get('shown') or e.get('error', '')), 900)}")
     last = next((r for r in reversed(run.get("transcript") or [])
                  if r.get("action") == "FinishAction"), None)
     if last:
         steps.append(f"finish: {_clip(last.get('detail', ''), 500)}")
-    out, total = [], 0
-    for step in reversed(steps):
-        if total + len(step) > HISTORY_CHARS:
-            out.append(f"[... {len(steps) - len(out)} earlier step(s) left out ...]")
+    if sum(len(x) for x in steps) <= HISTORY_CHARS:
+        return "\n\n".join(steps) or "(no tool calls)"
+    head, used = [], 0
+    for step in steps:
+        if used + len(step) > HISTORY_HEAD_CHARS:
             break
-        out.append(step)
-        total += len(step)
-    return "\n\n".join(reversed(out)) or "(no tool calls)"
+        head.append(step)
+        used += len(step)
+    tail, room = [], HISTORY_CHARS - used
+    for step in reversed(steps[len(head):]):
+        if len(step) > room:
+            break
+        tail.append(step)
+        room -= len(step)
+    gap = len(steps) - len(head) - len(tail)
+    return "\n\n".join(head + [f"[... {gap} step(s) in the middle left out ...]"]
+                        + list(reversed(tail)))
 
 
 def _outcomes(side: dict) -> str:
@@ -181,7 +216,7 @@ def _outcomes(side: dict) -> str:
 
 
 def _restart_note(run: dict, verdict: V.Verdict, test_file: str, code: str | None,
-                  cap: int, budget: int) -> str:
+                  cap: int, budget: int, diagnosis: str = "") -> str:
     """The second chance's message: why the first attempt was not accepted, the test it
     left, and its record.
 
@@ -195,6 +230,8 @@ def _restart_note(run: dict, verdict: V.Verdict, test_file: str, code: str | Non
     if verdict.base or verdict.head:
         why.append(f"Before the fix: {_outcomes(verdict.base)}.")
         why.append(f"After the fix: {_outcomes(verdict.head)}.")
+    if diagnosis:
+        why.append(diagnosis.strip())
     if code:
         block = (f"The test it left at `{test_file}` is still there. As it is on disk now:"
                  f"\n\n```python\n{_clip(code, 6000)}\n```")
@@ -280,12 +317,24 @@ def _first_refusals(injected: list[dict]) -> dict[str, int]:
         for duty in reason.split("duties_open[", 1)[1].split("]", 1)[0].split("+"):
             first.setdefault(duty, m.get("at_tool", 0))
     return first
+def _last_refusals(injected: list[dict]) -> dict[str, int]:
+    """Where the latest refusal naming each duty landed in the tool log, by duty."""
+    last: dict[str, int] = {}
+    for m in injected:
+        reason = m.get("reason") or ""
+        if "duties_open[" not in reason:
+            continue
+        for duty in reason.split("duties_open[", 1)[1].split("]", 1)[0].split("+"):
+            last[duty] = m.get("at_tool", 0)
+    return last
+
+
 # Fewer actions than this cannot answer a refusal or use a restart: rewriting the test and
 # calling `verify` is two, and stopping is a third. sphinx-9602 (fix check, 2026-09-29) was
 # refused with 1 action left, and a restart can be handed 1 or 2.
 MIN_USEFUL_ACTIONS = 3
 # A test that cannot be scored -- `passes_at_base` or `collects_nothing` -- refused at
-# most this many rounds in a row. On the new system's first run seven of eight instances
+# most this many rounds per conversation (in a row until 2026-10-04). On the new system's first run seven of eight instances
 # that reached `passes_at_base` stayed there for all five rounds; the one that recovered
 # left it after the first. `collects_nothing` joined after eval5-arms, where one run spent
 # five rounds on a file that never collected; the one collects_nothing conversion on
@@ -471,7 +520,8 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 found = (V.shortfall(box, instance, rel)
                          or V.verify_gap(tool_log, rel)
                          or V.duty_gap(tool_log, instruments(features), rel, scored=scored,
-                                       refused=_first_refusals(injected)))
+                                       refused=_first_refusals(injected),
+                                       last_refused=_last_refusals(injected)))
                 if found:
                     gaps.append(found)
             # A test that asserts on the project's source text rather than on behaviour.
@@ -541,15 +591,17 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             def stuck(why: str) -> bool:
                 return any(k in why for k in V.UNSCOREABLE)
 
-            streak = 0
-            for r in reversed(rounds):
-                if not stuck(r["reason"]):
-                    break
-                streak += 1
+            # Counted over the whole conversation, not in a row (user, 2026-10-04). In a
+            # row, any other refusal between reset it: pylint-6903 (base, cap 125)
+            # alternated passes_at_base with verify_open, never had two running, and took
+            # ten refusals and 91 actions before the restart -- left with 34. `rounds` is
+            # this conversation's, so a restart gets its own two.
+            streak = sum(1 for r in rounds if stuck(r["reason"]))
             if stuck(reason) and streak >= MAX_PASSES_AT_BASE_ROUNDS:
                 flow.record(flow.AGENT, "stop check",
                             f"not scoreable (passes or is skipped at base, or collects "
-                            f"nothing) after {streak} refusals running; not refusing again")
+                            f"nothing) after {streak} such refusals in this conversation; "
+                            f"not refusing again")
                 break
             # Which of the two mistakes a passing-at-base test is making. Only with the
             # coverage tool registered: see `V.reach_diagnosis`.
@@ -948,7 +1000,15 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                 restart["skipped"] = f"{max(remaining, 0)} action(s) left, too few for a restart"
                 flow.record(flow.AGENT, "second chance", restart["skipped"])
             else:
-                note = _restart_note(run, verdict, test_file, code, max_iterations, remaining)
+                # Which way a passing-at-base test is wrong, as its refusals said -- the
+                # restart carried the verdict alone, and every one of the nine second
+                # attempts of the base at cap 125 repeated its first approach.
+                diagnosis = (V.reach_diagnosis(box, inst, test_file)
+                             if (code and "coverage-tool" in features
+                                 and "passes before the fix" in (verdict.why or ""))
+                             else "")
+                note = _restart_note(run, verdict, test_file, code, max_iterations,
+                                     remaining, diagnosis)
                 field("restart", f"{verdict.f2p} after {run['actions']} actions -- starting "
                                  f"again with {remaining} left")
                 again = run_agent(inst, box, default_path, remaining, d, features, n_mutants,

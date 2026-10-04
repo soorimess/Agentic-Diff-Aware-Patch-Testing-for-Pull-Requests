@@ -19,7 +19,9 @@ job: Says what `mutation` is for, and how to read a survivor without gaming it.
 ---
 - `mutation` — breaks the fix in small ways on purpose, runs your test against each
   broken version, and tells you which ones your test still passes on. A variant your test
-  does not notice is a behaviour this change makes that your test does not check.
+  does not notice is a behaviour this change makes that your test does not check. It runs
+  once `verify` says your test is fail-to-pass: before that, a test that cannot tell the
+  fix from no fix has nothing to say about wrong versions of it.
 
 Use it, and act on what it says. A test can flip from failing to passing{?coverage-tool}, execute every
 changed line,{/coverage-tool} and still be satisfied by a fix with a comparison inverted or a boundary off

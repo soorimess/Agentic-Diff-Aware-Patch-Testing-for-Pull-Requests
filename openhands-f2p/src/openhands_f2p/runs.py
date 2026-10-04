@@ -72,7 +72,7 @@ def _ran_at(d: Path, f: Path, r: dict) -> datetime:
 # built was over `out/` with all twenty-six results present -- and a KeyError the first
 # time a series directory held five of them.
 BLANK = {"f2p": "\u2014", "when": "", "cov": None, "covered": None, "total": None,
-         "actions": None, "why": "never run", "judge": "\u2014", "issue": "\u2014",
+         "actions": None, "why": "never run", "body": None, "judge": "\u2014", "issue": "\u2014",
          "tools": "\u2014",
          "readable": "\u2014", "uncovered": [], "rechecked": False,
          "config": "\u2014", "tokens": 0, "cost": 0.0, "mutation": {},
@@ -154,6 +154,8 @@ def _row(pr: dict, root: Path) -> dict:
             "when": when.strftime("%Y-%m-%d %H:%M UTC"),
             "cov": c.get("percent") if c.get("measured") else None,
             "covered": c.get("covered"), "total": c.get("executable_changed_lines"),
+            # Without the changed lines that run on import (user, 2026-10-04: both).
+            "body": c.get("excluding_import_time") if c.get("measured") else None,
             "actions": r.get("actions"), "why": (r.get("why") or "").strip(),
             "tools": _tools(d),
             # `narrower (3)` on the five-level judge, the bare word on the old one.
@@ -357,6 +359,9 @@ def build(root: Path = OUT) -> str:
     # touched, against the ones some generated test actually executed -- and is the
     # one that answers "how much of the work did we cover".
     hit = sum(r["covered"] for r in measured if r["covered"] is not None)
+    bodies = [r["body"] for r in measured if r.get("body")]
+    body_hit = sum(b["covered"] for b in bodies)
+    body_lines = sum(b["executable_changed_lines"] for b in bodies)
     lines_changed = sum(r["total"] for r in measured if r["total"] is not None)
     # Every instance in the set, whether or not a test was ever measured against it. A
     # pull request nobody covered is a pull request nobody covered, and dropping it from
@@ -390,6 +395,9 @@ def build(root: Path = OUT) -> str:
             (f"- **{100 * hit / lines_changed:.0f}%** of the changed lines those tests "
              f"were measured against ({hit}/{lines_changed}, pooled)")
             if lines_changed else "",
+            (f"- **{100 * body_hit / body_lines:.0f}%** pooled without the lines that run "
+             f"on import ({body_hit}/{body_lines})")
+            if body_lines and body_lines != lines_changed else "",
             (f"- **{100 * hit / corpus_lines:.0f}%** of every source line all "
              f"{len(present or PRS)} patches change ({hit}/{corpus_lines}) -- a fixed "
              f"denominator, so this is the figure that compares across arms")
@@ -503,6 +511,11 @@ def build(root: Path = OUT) -> str:
     for r in rows:
         cov = (f"{r['cov']:.0f}% ({r['covered']}/{r['total']})"
                if r["cov"] is not None else "—")
+        b = r.get("body") or {}
+        if r["cov"] is not None and b.get("import_time_lines"):
+            cov += (f"; {b['percent']:.0f}% ({b['covered']}/{b['executable_changed_lines']}) "
+                    f"without import-time" if b.get("percent") is not None
+                    else "; all import-time")
         m = r["mutation"]
         # Killed over total, not a percentage: `2/2` says more than `100%` when the
         # denominator is two, and the denominator is the interesting part.
@@ -510,7 +523,10 @@ def build(root: Path = OUT) -> str:
             if not m.get("measured"):
                 return "—"
             if not m.get("total"):
-                return "no mutants"
+                # The only mutant(s) went to the agent's half: there was a pool, none of
+                # it was left to score on -- not the same as mutmut offering nothing.
+                return ("none held out" if "reserved" in (m.get("why") or "")
+                        else "no mutants")
             if m[side].get("killed") is None:
                 return "n/a"
             return f"{m[side]['killed']}/{m['total']}"
@@ -521,6 +537,16 @@ def build(root: Path = OUT) -> str:
                    f"{r['tools']} | "
                    f"{r['judge']} | {r['issue']} | {r['readable']} | "
                    f"{r['when'] or '—'} |")
+    if has_mutation:
+        out += ["", "Mutation cells: *none held out* -- the only mutant(s) went to the half "
+                    "shown by the agent's `mutation` tool, so none were left to score on; "
+                    "*no mutants* -- mutmut offers none on the changed lines; *n/a* -- none "
+                    "of the developer's tests pass offline here, so its column is not "
+                    "measured."]
+    if any(r.get("body") and r["body"].get("import_time_lines") for r in rows):
+        out += ["", "Coverage cells: the second figure leaves out changed lines that run on "
+                    "import (imports, module constants, decorators, `def` and class lines) "
+                    "-- any test that imports the module runs them."]
     if any(r["rechecked"] for r in rows):
         out += ["", "¹ re-judged by `--recheck`: the same saved test run again under a "
                     "later harness, with no new model call. The trajectory and token "

@@ -191,7 +191,17 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
 
     # flow.jsonl carries wall-clock offsets; without it everything lands on one second,
     # which makes the timeline useless.
+    # Anchored on when the run ended (`ran_at`, written with the result) minus the last
+    # flow offset, so each timestamp is the moment it happened. `now()` stamped a rebuilt
+    # trajectory after the run's real end -- sympy-24562 "ran to 14:08", recorded 12:28.
     base = datetime.now(timezone.utc)
+    ran_at = result.get("ran_at")
+    if ran_at and flow_rows:
+        try:
+            base = (datetime.fromisoformat(ran_at.replace("Z", "+00:00"))
+                    - timedelta(seconds=flow_rows[-1].get("t", 0.0)))
+        except ValueError:
+            pass
     # One flow row per tool call, in call order -- only those. Every agent row was taken
     # before, so `tools registered`, `task sent`, each think, finish and stop check pushed
     # the tool calls after it one row later in time, and the harness's own events (the
@@ -231,8 +241,15 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
     # size with nothing to navigate by. Markdown headings give the renderer something to
     # scale, so each piece becomes a section you can skim past. The text is unchanged;
     # only the heading level in front of each piece is added.
+    # Stamped just before the first setup event it precedes, not at offset 0: the setup
+    # rows carry process offsets, so flask-5014 (base, cap 125) showed 23.6 minutes --
+    # its image pull -- between the task and "container up".
+    first_setup = next((r["t"] for r in flow_rows
+                        if r.get("phase") == "setup" and r.get("event") == "container up"),
+                       None)
     add({"source": "user", "action": "message", "message": "task",
-         "args": {"content": _as_markdown(task), "images_urls": []}}, 0.0)
+         "args": {"content": _as_markdown(task), "images_urls": []}},
+        max(first_setup - 0.01, 0.0) if first_setup is not None else 0.0)
 
     # --- setup, as environment events -----------------------------------------
     for row in flow_rows:
@@ -253,6 +270,7 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
     # --- the agent's tool calls ---------------------------------------------
     used: dict[str, int] = {}
     k = 0                                  # tool calls so far; `i` also counts reverts
+    prev_offset = None
     for i, entry in enumerate(tool_log):
         offset = offsets[k] if k < len(offsets) else float(k)
         for msg in injected:
@@ -262,11 +280,17 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
         if tool == "guard":
             # The harness undoing an edit to a file that existed at base -- ours, not a
             # call the agent made, so it is not drawn as one.
+            # Right after the call that made the edit (the previous one), not inside the
+            # next: at the next call's time + 0.05 it sorted between that call and its
+            # result (django-13406, base at cap 125: a revert inside a `write_file`, 48 s
+            # after the `sed -i` that caused it).
             add({"source": "environment", "key": "guard: reverted",
                  "value": ", ".join(entry.get("reverted") or []),
-                 "message": ", ".join(entry.get("reverted") or [])}, offset + 0.05)
+                 "message": ", ".join(entry.get("reverted") or [])},
+                prev_offset + 0.15 if prev_offset is not None else offset - 0.05)
             continue
         k += 1
+        prev_offset = offset
         mine = thoughts.get(tool, [])
         why = mine[used.get(tool, 0)] if used.get(tool, 0) < len(mine) else ""
         used[tool] = used.get(tool, 0) + 1

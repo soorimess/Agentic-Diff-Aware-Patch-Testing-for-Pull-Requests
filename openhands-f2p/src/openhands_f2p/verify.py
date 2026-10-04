@@ -177,7 +177,7 @@ def shortfall(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str, st
         return None
 
     r = box.exec(E.test_command(box, [rel]), timeout=3600)
-    outcomes = E.parse_output(r.output)
+    outcomes = own_outcomes(E.parse_output(r.output), [rel])
     flow.record(flow.VERIFY, "stop-check probe",
                 f"{rel}: " + (", ".join(sorted(set(outcomes.values()))) or "nothing collected"))
     if not outcomes:
@@ -277,6 +277,22 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
     # the module, so "it runs the change" says nothing about the input; see
     # `E.import_time_hits` (django-15098: told "keep the input" twice while asserting on
     # its own copy of the changed regex).
+    missed = cov.get("missed") or []
+    shown_missed = (", ".join(f"`{m}`" for m in missed[:5])
+                    + (" ..." if len(missed) > 5 else ""))
+    # Every line it runs runs on import, and some changed lines never run: the lines that
+    # matter are the missed ones, and "only imports the change" did not name them.
+    # pytest-5262 (base, cap 125) added a property: `@property` and `def mode` run on
+    # import, its body never ran, and four refusals talked about "the changed value"
+    # without once naming `capture.py:452`.
+    if at_import and len(at_import) == len(cov.get("hit") or []) and missed:
+        shown = ", ".join(f"`{h}`" for h in at_import[:4])
+        return ("\n\n**It does not run the changed code.** The changed lines it runs are "
+                f"module-level ({shown}) -- `def`, decorator, import or assignment lines "
+                "that execute when the module is imported, whatever the test does. These "
+                f"never run: {shown_missed}. Call the code that contains them, with an "
+                "input that sends execution through them, and assert on what it returns "
+                "or does. `coverage` shows each one and the conditions above it.")
     if at_import and len(at_import) == len(cov.get("hit") or []):
         shown = ", ".join(f"`{h}`" for h in at_import[:4])
         return ("\n\n**It only imports the change.** The changed lines it runs are "
@@ -290,21 +306,26 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
     # went out for sphinx-9602 (loop check) at 7 of 8 lines, and the line it never ran was
     # the one that turns the new nodes back into text -- the input was not yet right, and
     # the refusal told it to keep it.
-    missed = cov.get("missed") or []
     if missed:
-        shown = ", ".join(f"`{m}`" for m in missed[:5]) + (" ..." if len(missed) > 5 else "")
         return (f"\n\n**It reaches part of the change, and still passes before the fix.** "
                 f"It runs {cov['covered']} of the {cov['executable_changed_lines']} lines "
-                f"this pull request changes; these never run: {shown}. Either the "
+                f"this pull request changes; these never run: {shown_missed}. Either the "
                 f"assertion checks something true on both sides of the change, or the "
                 f"difference lies on a line the input never reaches. `coverage` shows those "
                 f"lines and the conditions above each; work out what the changed lines "
                 f"compute differently and assert that.")
-    return ("\n\n**It does reach the change, and still passes before the fix.** It runs "
-            "every line this pull request changes, so the input is aimed at the right code "
-            "-- the assertion is what is wrong: it checks something that is true both "
-            "before and after the change. Keep the input. Work out what the changed lines "
-            "compute differently, and assert that value or behaviour instead.")
+    # "So the input is aimed at the right code ... Keep the input" claimed more than a
+    # line count shows. Running a changed line is not taking the path the fix changes:
+    # django-16333's form had no many-to-many field, sympy-21612's base was a `Mul` where
+    # the fix is about a `Pow` -- every line ran, and both were told four times to keep
+    # an input that could never tell the two versions apart (base, cap 125).
+    return ("\n\n**It runs every line this pull request changes, and still passes before "
+            "the fix.** Running a line is not the same as taking the path the fix changes: "
+            "either the input is a case where the old and the new code give the same "
+            "result, or the assertion checks something true on both sides. Work out what "
+            "the changed lines compute differently -- the condition the fix adds, the "
+            "value it changes -- choose an input for which the old code gives a different "
+            "result, and assert that result.")
 
 
 # Reading the project's own source and asserting on the text. Eight "fail-to-pass" tests
@@ -386,6 +407,21 @@ def no_reach_gap(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str,
             f"say so in one sentence and finish.")
 
 
+def own_outcomes(outcomes: dict, targets: list[str]) -> dict:
+    """`outcomes` without pytest node ids from another file.
+
+    A test that runs pytest inside itself (`pytester`) prints the inner session's ids too,
+    and they were read as the agent's own tests: pytest-10081 (base, cap 125) carried
+    three `test_unittest_skip_class_pdb_bug_reproduction.py::MyTestCase::...` ids in its
+    verdict, and an inner test that errors after the fix would have turned a YES into a
+    NO, or killed a mutant. Ids without a `.py::` file part (django, sympy) are kept."""
+    def mine(n: str) -> bool:
+        head = n.split("::", 1)[0]
+        return ("::" not in n or not head.endswith(".py")
+                or any(same_file(n, t) for t in targets))
+    return {n: v for n, v in outcomes.items() if mine(n)}
+
+
 def same_file(named: str, rel: str) -> bool:
     """Whether a path or target the agent gave names the test file `rel`.
 
@@ -416,14 +452,37 @@ def _verifies_of(tool_log: list, rel: str | None) -> list[tuple[int, dict]]:
             and (rel is None or same_file(e.get("target", ""), rel))]
 
 
+def test_writes(tool_log: list, rel: str | None) -> list[int]:
+    """Tool-log positions of the writes that changed the test file's content.
+
+    A write of the same text the file was last given is not an edit. Counted as one, it
+    made answers "stale" that described the file exactly, and it was taken as the attempt
+    that ends a duty loop: matplotlib-26208 (base, cap 125) closed its coverage loop at
+    50% on a byte-identical rewrite, seaborn-3069 a mutation loop the same way. The test
+    is only ever written with `write_file` (no shell edit of it in 472 writes), whose
+    entry carries the content."""
+    last: dict[str, str | None] = {}
+    out: list[int] = []
+    for j, e in enumerate(tool_log):
+        if e.get("tool") != "write_file" or "error" in e:
+            continue
+        path = e.get("path", "")
+        if rel is not None and not same_file(path, rel):
+            continue
+        key = rel if rel is not None else path
+        text = e.get("content")
+        if text is None or key not in last or last[key] != text:
+            out.append(j)
+        last[key] = text
+    return out
+
+
 def wrote_test_after(tool_log: list, i: int, rel: str | None) -> bool:
-    """Whether the test file was written after entry `i`. Only `rel` counts: a scratch
+    """Whether the test file was changed after entry `i`. Only `rel` counts: a scratch
     file written after a passing verify produced "you edited the test since" in two runs
     that had not touched it (no-mutation-tool django-14915, no-coverage+mutation
-    matplotlib-20859)."""
-    return any(e.get("tool") == "write_file" and "error" not in e
-               and (rel is None or same_file(e.get("path", ""), rel))
-               for e in tool_log[i + 1:])
+    matplotlib-20859). Only a write that changed it counts (`test_writes`)."""
+    return any(j > i for j in test_writes(tool_log, rel))
 
 
 def verify_settled(tool_log: list, rel: str | None = None) -> bool:
@@ -439,9 +498,12 @@ def verify_settled(tool_log: list, rel: str | None = None) -> bool:
 def _last(tool_log: list, tool: str, rel: str) -> tuple[int, dict] | None:
     """The last call of `tool` on the scored file. An answer about another file is not an
     answer about this one."""
+    # A call that errored answered nothing. A `mutation` refused for want of a
+    # fail-to-pass test, read as the last answer, has no survivors and would have closed
+    # the loop it never entered.
     found = (_verifies_of(tool_log, rel) if tool == "verify" else
              [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
-              and same_file(e.get("target", ""), rel)])
+              and "error" not in e and same_file(e.get("target", ""), rel)])
     return found[-1] if found else None
 
 
@@ -518,6 +580,10 @@ def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
             say = (f"You edited the test after the last `verify`, so the fail-to-pass "
                    f"result describes a file that no longer exists. Call `verify` again on "
                    f"what is on disk now.")
+            # The headline below said "not fail-to-pass yet" here too, about a file whose
+            # last answer *was* fail-to-pass (requests-1142, base at cap 125).
+            return ("verify_open", f"`{rel}` has changed since its last `verify`, which "
+                                   f"said fail-to-pass.\n\n* {say}")
         else:
             return None
     return ("verify_open", f"`{rel}` is not fail-to-pass yet by its own last `verify`.\n\n"
@@ -526,9 +592,9 @@ def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
 
 def _no_better(tool_log: list, tool: str, rel: str, score,
                since: int | None = None) -> bool:
-    """Whether the agent's last attempt to improve this answer did not improve it: the two
-    latest calls of `tool` on the scored file have the test written between them, and the
-    later score is no higher. That is what ends a coverage or mutation loop short of its
+    """Whether the agent's last attempt to improve this answer did not improve it: the test
+    was changed after the last call of `tool` before that change, and the latest call
+    scores no higher. That is what ends a coverage or mutation loop short of its
     goal -- a line no test can reach, a variant that breaks nothing observable. Trying and
     not moving is an answer; refusing again would only ask for padding.
 
@@ -540,19 +606,43 @@ def _no_better(tool_log: list, tool: str, rel: str, score,
     if since is None:
         return False
     calls = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
-             and same_file(e.get("target", ""), rel)]
-    if len(calls) < 2:
+             and "error" not in e and same_file(e.get("target", ""), rel)]
+    if not calls:
         return False
-    (i_prev, prev), (i_last, last) = calls[-2], calls[-1]
-    start = max(i_prev + 1, since)
-    tried = any(e.get("tool") == "write_file" and same_file(e.get("path", ""), rel)
-                for e in tool_log[start:i_last])
+    i_last, last = calls[-1]
+    # The attempt is the latest edit before the last call, measured against the last
+    # call before that edit. It was the last two calls, so calling the tool again with no
+    # edit between -- what the refusal itself asks for ("call `verify`, then `mutation`
+    # again") -- had nothing written between them and reopened a loop that had closed:
+    # requests-1142 ran into MAX_REFUSALS that way, seaborn-3069 and scikit-learn-10908
+    # took a refusal each (base, cap 125).
+    edits = [j for j in test_writes(tool_log, rel) if j < i_last]
+    if not edits or edits[-1] < since:
+        return False
+    before = [(i, e) for i, e in calls if i < edits[-1]]
+    if not before:
+        return False
+    i_prev, prev = before[-1]
+    # A write that puts back what the earlier call measured is a revert, not an attempt:
+    # matplotlib-26208 (base, cap 125) tried at 31, broke the flip, restored the file of
+    # 26 at 34, and the second measurement of one file closed the loop.
+    if _content_at(tool_log, i_prev, rel) == _content_at(tool_log, i_last, rel):
+        return False
     a, b = score(prev), score(last)
     # A score below the best this file ever had is a regression, not a plateau: the loop
     # stays open so the agent gets back what it lost.
     if b is not None and b < (_best_before(tool_log, tool, rel, score) or b):
         return False
-    return tried and a is not None and b is not None and b <= a
+    return a is not None and b is not None and b <= a
+
+
+def _content_at(tool_log: list, i: int, rel: str) -> str | None:
+    """What the test file held when entry `i` ran: the last write to it before `i`."""
+    for e in reversed(tool_log[:i]):
+        if (e.get("tool") == "write_file" and "error" not in e
+                and same_file(e.get("path", ""), rel)):
+            return e.get("content")
+    return None
 
 
 def _best_before(tool_log: list, tool: str, rel: str, score) -> float | None:
@@ -579,7 +669,8 @@ def mutation_score(e: dict) -> float | None:
 
 def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
              scored: bool = False,
-             refused: dict[str, int] | None = None) -> tuple[str, str] | None:
+             refused: dict[str, int] | None = None,
+             last_refused: dict[str, int] | None = None) -> tuple[str, str] | None:
     """The coverage and mutation loops, once the test flips. `require-tools`.
 
     Two loops (user, 2026-09-29), each on the tool's answer about the scored file:
@@ -608,10 +699,29 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
     the reason is `duties_open[coverage+mutation]`, naming the open loops.
     """
     refused = refused or {}
+    last_refused = last_refused or {}
+
+    def unchanged_since_refusal(duty: str) -> str:
+        # Said when the round since the last refusal for this duty never changed the test:
+        # requests-1142 (base, cap 125) argued in `run` and `think` for eight rounds and
+        # got the same paragraph back eight times, never told that none of it counted.
+        at = last_refused.get(duty)
+        if at is None or any(j >= at for j in test_writes(tool_log, rel)):
+            return ""
+        return ("Your last round did not change the test, so it was not an attempt -- "
+                "explaining why a case cannot be caught does not end this. ")
+
     if not verify_settled(tool_log, rel):
         return None
     gaps: list[tuple[str, str]] = []
-    if "coverage" in instruments:
+    # `verify` measures the change's coverage itself when the test flips (`reach_full` on
+    # its log entry). When that said every changed line runs, on this very file (settled:
+    # nothing changed since), the coverage question is answered; asking for `coverage`
+    # again cost five refusals in the base run at cap 125 (user, 2026-10-04: only at
+    # 100% -- a shortfall still needs the tool, which names the lines).
+    v = _last(tool_log, "verify", rel)
+    full_by_verify = bool(v and v[1].get("reach_full"))
+    if "coverage" in instruments and not full_by_verify:
         got = _last(tool_log, "coverage", rel)
         if got is None:
             gaps.append(("coverage",
@@ -640,14 +750,15 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                                 refused.get("coverage")):
                 lost = _lost(tool_log, "coverage", rel, coverage_score, pct, "%")
                 gaps.append(("coverage",
-                             f"{score}{lost}`coverage` last listed {len(cov['missed'])} changed "
+                             f"{score}{unchanged_since_refusal('coverage')}{lost}`coverage` last listed {len(cov['missed'])} changed "
                              f"line(s) your test never runs. Keep going: work the missed "
                              f"lines one at a time -- the same behaviour by another route, a "
                              f"separate case that deserves its own test -- change the test, "
                              f"call `verify`, then `coverage` again. Reach each line through "
                              f"behaviour you assert; a call with no assertion behind it does "
                              f"not count. If an honest attempt leaves the lines missed, "
-                             f"that ends this."))
+                             f"that ends this -- an attempt is a changed test followed by "
+                             f"`coverage`."))
     if "mutation" in instruments:
         got = _last(tool_log, "mutation", rel)
         if got is None:
@@ -671,14 +782,16 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                                 refused.get("mutation")):
                 lost = _lost(tool_log, "mutation", rel, mutation_score, ms, "%")
                 gaps.append(("mutation",
-                             f"{score}{lost}`mutation` last reported {len(e['survived'])} wrong "
+                             f"{score}{unchanged_since_refusal('mutation')}{lost}`mutation` last reported {len(e['survived'])} wrong "
                              f"version(s) of the fix your test does not notice. Keep going: "
                              f"for each, work out the behaviour it breaks, add an assertion "
                              f"about that behaviour -- what the code returns, raises or does "
                              f"-- call `verify`, then `mutation` again. Never assert on the "
                              f"exact expression a variant changed just to make it fail. If "
                              f"an honest attempt catches no more of them, that ends this: "
-                             f"what is left breaks nothing a test here can observe."))
+                             f"what is left breaks nothing a test here can observe. An "
+                             f"attempt is a changed test followed by `mutation`; arguing "
+                             f"that a variant is harmless is not one."))
     if not gaps:
         return None
     names = "+".join(dict.fromkeys(n for n, _ in gaps))
@@ -713,6 +826,7 @@ def _decide(iid: str, repo: str, base: dict, head: dict, targets: list[str],
         flipped = [n for n, b, h in pairs if b in BEHAVIOURAL and h == "PASSED"]
         missing = [n for n, b, _ in pairs if b is None]
     else:
+        base, head = own_outcomes(base, targets), own_outcomes(head, targets)
         failed_before = {n for n, s in base.items() if s in BEHAVIOURAL}
         passed_after = {n for n, s in head.items() if s == "PASSED"}
         flipped = sorted(failed_before & passed_after)
@@ -867,14 +981,33 @@ def verify(
         if coverage and v.f2p == "YES":
             cov = E.changed_line_coverage(box, targets, instance["patch"],
                                           base_files=base_files)
+            # The same figure without the lines that run on import (user, 2026-10-04:
+            # report both). astropy-13398 (base, cap 125) scored 32% (31/96) on 31 lines
+            # that were every one imports, constants, decorators and `def` lines -- none
+            # inside a function body. Read here, at head, as `import_time_hits` needs.
+            if cov.get("measured"):
+                module = set(E.import_time_hits(
+                    box, {"hit": (cov.get("hit") or []) + (cov.get("missed") or [])}))
+                body_hit = [h for h in cov.get("hit") or [] if h not in module]
+                body_total = cov["executable_changed_lines"] - len(module)
+                cov["excluding_import_time"] = {
+                    "covered": len(body_hit), "executable_changed_lines": body_total,
+                    "percent": (round(100 * len(body_hit) / body_total, 1)
+                                if body_total else None),
+                    "import_time_lines": sorted(module)}
             v.changed_line_coverage = cov
     finally:
         box.apply_patch(instance["patch"], revert=True)
 
     if cov.get("measured"):
+        body = cov.get("excluding_import_time") or {}
         flow.record(flow.VERIFY, "changed-line coverage",
                     f"{cov['percent']}% ({cov['covered']}/"
-                    f"{cov['executable_changed_lines']} executable changed lines)")
+                    f"{cov['executable_changed_lines']} executable changed lines)"
+                    + (f"; without import-time lines {body['percent']}% "
+                       f"({body['covered']}/{body['executable_changed_lines']})"
+                       if body.get("import_time_lines") and body.get("percent") is not None
+                       else ""))
     elif cov:
         flow.record(flow.VERIFY, "changed-line coverage", f"not measured: {cov['reason']}")
     elif coverage and v.f2p != "YES":

@@ -673,6 +673,27 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   result's `f2p_history` says how many there were and `made_worse` when the agent handed in
   a test the harness does not score YES. Nothing is picked or restored -- the agent's last
   file is its answer (user). RUNS.md counts them under "Fail-to-pass, then lost".
+- **Duty loops after the base at cap 125 (2026-10-04).** An edit is a write that changes
+  the test's content (`V.test_writes`); staleness and attempts both use it. `_no_better`
+  compares the last call with the last call before the latest edit (a re-run with no edit
+  no longer reopens a closed loop), and the two must have measured different content (a
+  revert is not an attempt). `verify` logs `reach_full`, and a settled verify that ran
+  every changed line answers the coverage loop (user: at 100% only). Errored tool calls
+  are not answers. Refusals say when the round since the last refusal for that duty
+  changed nothing, and that an attempt is a changed test followed by the tool.
+- **`mutation` needs a fail-to-pass test (user, 2026-10-04).** The tool refuses unless the
+  agent's own last `verify` said fail-to-pass for the file as it is.
+- **Passes-at-base cap: 2 per conversation (user, 2026-10-04)**, no longer 2 in a row.
+- **Reach diagnosis:** "does not run the changed code" when every line it runs is
+  import-time and some are missed (with the missed lines); "runs every line ... running a
+  line is not taking the path" replaces "keep the input". The restart message carries it.
+- **Restart history:** head (14k chars) and tail kept, middle dropped; refusals cut to
+  their first paragraph (repeats marked); tool outputs condensed and clipped at both ends.
+- **Outcomes are the agent's file's only** (`V.own_outcomes`): pytester inner ids dropped
+  in verify, the verdict, the stop-check probe and mutation.
+- **Mutants must rewrite a changed line** (statement widening is for selection only).
+- **Coverage reported both ways (user):** `changed_line_coverage.excluding_import_time` in
+  result.json, and a second figure in RUNS.md when import-time lines are involved.
 - **Timeouts kill inside the container; mutant runs scale with the fix's test time
   (2026-10-04).** `Sandbox.exec` runs every command under coreutils `timeout -k 10 N`, so a
   timed-out command is really gone (before, only the `docker exec` client died). A mutant

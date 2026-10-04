@@ -201,10 +201,21 @@ def _candidates(source: str, filename: str, changed: set[int]) -> list[tuple]:
         if mutated == source:
             continue
         rows_b = mutated.splitlines()
-        line = next((i + 1 for i, (a, b) in enumerate(zip(original, rows_b)) if a != b),
-                    0)
-        if not line or line not in wide:
-            continue                   # mutmut reformatted something outside the patch
+        # The lines of the original the mutant actually rewrites, and only a mutant that
+        # rewrites one the patch changed is kept. Widening selects whole statements, so
+        # mutmut also mutated tokens on a statement's *unchanged* first line:
+        # sphinx-7454 (base, cap 125) changed line 80 only, and its two survivors were
+        # `''` -> `None` / `'XXXX'` on line 79 -- code the pull request never touched,
+        # scored as gaps in both tests. Checking against `wide` let them through.
+        touched: set[int] = set()
+        for op, i1, i2, _, _ in difflib.SequenceMatcher(
+                a=original, b=rows_b, autojunk=False).get_opcodes():
+            if op != "equal":
+                touched.update(range(i1 + 1, max(i2, i1 + 1) + 1))
+        hit = sorted(touched & changed) if changed else sorted(touched)
+        if not hit:
+            continue                   # outside the patch: reformatting, or a wide line
+        line = hit[0]
         index = seen_on_line.get(line, 0)
         seen_on_line[line] = index + 1
         rows.append((filename, line, index, mutated))
@@ -356,8 +367,8 @@ def probe(box: Sandbox, patch: str, test_path: str, n: int) -> dict:
             if text is not None:
                 box.write(f"{BASE_COPIES}/{path}", text)
         box.apply_patch(patch)
-        collected = R.parse_output(
-            box.exec(R.test_command(box, [test_path]), timeout=1800).output)
+        collected = V.own_outcomes(R.parse_output(
+            box.exec(R.test_command(box, [test_path]), timeout=1800).output), [test_path])
         if not collected:
             return {"ok": False, "why": f"{test_path} collects nothing on the fixed code"}
         expected = list(collected)
@@ -459,7 +470,10 @@ def line(score: dict) -> str:
     if not score.get("measured"):
         return f"not measured -- {score.get('why') or 'no reason recorded'}"
     if not score.get("total"):
-        return "no mutants -- mutmut offers none on the lines this patch changed"
+        # The reason recorded, not a fixed sentence: a pool of one goes to the agent's
+        # half, and this said "mutmut offers none" for astropy-7336, astropy-14995 and
+        # xarray-3677 (base, cap 125), whose result said otherwise.
+        return f"no mutants -- {score.get('why') or 'mutmut offers none on the lines this patch changed'}"
     a, d = score["agent"], score["developer"]
     gaps = sum(1 for m in score.get("mutants", [])
                if m.get("verdict") == "developer only")
@@ -528,8 +542,8 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
         box.write(gen_path, generated_test)
 
         gold_targets = V.targets_for_gold(box, instance)
-        collected = R.parse_output(
-            box.exec(R.test_command(box, [gen_path]), timeout=1800).output)
+        collected = V.own_outcomes(R.parse_output(
+            box.exec(R.test_command(box, [gen_path]), timeout=1800).output), [gen_path])
         if not collected:
             score.why = "the generated test collects nothing on the fixed code"
             return score

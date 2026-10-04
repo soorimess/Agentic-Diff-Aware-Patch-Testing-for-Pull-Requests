@@ -486,7 +486,11 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
             return CoverageObservation.from_text(
                 score + "Your test runs every executable line this pull request changed."
                 + import_only + failing)
-        lines = [score + "Some lines this pull request changed never ran under your test."]
+        # The import-time note went out only when nothing was missed, so astropy-13398
+        # (base, cap 125), whose 31 "covered" lines were all imports, constants and `def`
+        # lines, never saw it in four calls.
+        lines = [score + "Some lines this pull request changed never ran under your test."
+                 + import_only]
 
         # The source and the guards, not just the numbers. "line 1631 is uncovered" is
         # not something an agent can act on; "line 1631 is `Q *= q.p`, and it sits under
@@ -581,6 +585,20 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
     def __call__(self, action: MutationAction,
                  conversation=None) -> MutationObservation:
         from openhands_f2p import mutants as M
+        from openhands_f2p import verify as V
+        # Only for a test that is fail-to-pass by its own last `verify`, unchanged since
+        # (user, 2026-10-04). On a test that passes before the fix too, "2 of 2 caught"
+        # is no sign of anything -- the test cannot tell the fix from no fix -- yet the
+        # nine NO runs of the base at cap 125 made 18 such calls, and pylint-6903 went on
+        # to work a survivor of a test that was never fail-to-pass.
+        if not V.verify_settled(self.log, action.target):
+            self.log.append({"tool": "mutation", "target": action.target,
+                             "error": "not fail-to-pass by its last verify"})
+            return MutationObservation.from_text(
+                f"not run: `mutation` asks whether {action.target} tells the fix from "
+                f"wrong versions of it, which only means something once the test tells "
+                f"the fix from no fix. Its last `verify` did not say fail-to-pass for the "
+                f"file as it is now. Call `verify` and get it there first.", is_error=True)
         r = M.probe(self.box, self.patch, action.target, self.n)
         if not r.get("ok"):
             self.log.append({"tool": "mutation", "target": action.target,
@@ -619,11 +637,16 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
                       "assert on the exact expression a variant changed just to make it "
                       "fail."]
             if self.scored or self.require_tools:
+                # "Leave it" above, and a loop that closes only on an attempt: requests-1142
+                # (base, cap 125) said in eight rounds that its survivor was harmless and
+                # was sent back eight times. What ends the loop is said here.
                 lines += ["",
                           ("Maximise the score: y" if self.scored else "Y")
                           + "ou will be sent back while variants survive: add assertions "
                           "about the behaviour they break and call `mutation` again, until "
-                          "none survives or an honest attempt catches no more."]
+                          "none survives or an honest attempt catches no more. An attempt "
+                          "is a changed test followed by `mutation`; saying a variant is "
+                          "harmless does not end it."]
         else:
             lines += ["", "Every variant tried was caught."]
         return MutationObservation.from_text("\n".join(lines))
@@ -720,14 +743,16 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                 f"cannot verify: the working tree is in an unexpected state ({state})",
                 is_error=True)
         cmd = E.test_command(self.box, [action.target])
+        from openhands_f2p import verify as V
         before = self.box.exec(cmd, timeout=3600)
-        base_out = E.parse_output(before.output)
+        base_out = V.own_outcomes(E.parse_output(before.output), [action.target])
         self._base = E.base_texts(self.box, self.patch)
+        self._reach_full = False
         self.box.apply_patch(self.patch)
         missed = ""
         try:
             after = self.box.exec(cmd, timeout=3600)
-            head_out = E.parse_output(after.output)
+            head_out = V.own_outcomes(E.parse_output(after.output), [action.target])
             # Inside the patched window, which is the only moment the lines the change
             # adds exist at all. Computed here rather than after the revert -- doing it
             # afterwards measures coverage of a tree where those line numbers hold
@@ -752,8 +777,11 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         passed_after = {n for n, v in head_out.items() if v == "PASSED"}
         flipped = sorted(failed_before & passed_after)
         still_failing = [n for n, v in head_out.items() if v in ("FAILED", "ERROR")]
+        # `reach_full`: this call's own coverage said every changed line runs, which
+        # answers the coverage loop for this file (`V.duty_gap`, user 2026-10-04).
         self.log.append({"tool": "verify", "target": action.target,
-                         "before": base_out, "after": head_out, "flipped": flipped})
+                         "before": base_out, "after": head_out, "flipped": flipped,
+                         "reach_full": self._reach_full})
 
         # `inverted` before `still_failing`. A test that passed at base and fails at head
         # is the closest possible near-miss -- it found the behaviour and asserted the
@@ -880,9 +908,11 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             return ""
         missed = len(cov.get("missed") or [])
         pct = (f" Changed-line coverage: {cov['percent']}%." if self.scored else "")
+        import_only = _import_only(self.box, cov)
         if not missed:
+            self._reach_full = True
             return ("\n\nIt runs every line this pull request changed." + pct
-                    + _import_only(self.box, cov))
+                    + import_only)
         # Called only with `coverage` registered, so there is always a tool to point at.
         # The duty sentence was keyed on `require_tools` alone and went out in arms with
         # no `coverage`, where no check enforced it -- a rule nothing carried out.
@@ -897,7 +927,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                 "another assertion, a separate case that deserves its own test "
                 "function, or genuinely outside what this test is for. If you change "
                 "the test, run `verify` again -- a new test is a new answer and the "
-                "old one no longer describes it.")
+                "old one no longer describes it." + import_only)
 
 
 class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):

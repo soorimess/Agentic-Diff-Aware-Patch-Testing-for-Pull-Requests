@@ -512,6 +512,57 @@ now retry 60 times and the per-job ceiling is 6 h.
   now enforced inside the container with coreutils `timeout -k 10`, the client-side limit
   kept as a backstop. Affects every exec -- the agent's 120 s `run` included.
 
+Read afterwards (three trajectory passes: the nine NOs, the duty loops, tool output):
+
+- **A closed duty loop reopened on a re-run with no edit.** `_no_better` compared the last
+  two calls of the tool; the refusal's own "call `verify`, then `mutation` again" put two
+  calls with nothing written between them, and the loop opened again (requests-1142 ran
+  into MAX_REFUSALS that way; seaborn-3069 and scikit-learn-10908 took a refusal each).
+  Now the last call is compared with the last call before the latest edit.
+- **A byte-identical rewrite, or a revert, counted as an edit and as an attempt.** It made
+  answers stale that described the file exactly, and closed matplotlib-26208's coverage
+  loop at 50% (the attempt had broken the flip and was reverted). Edits are now writes
+  that change the content (`V.test_writes`), and an attempt must change what was measured.
+- **`coverage` re-asked right after `verify` said every line runs** -- 5 refusals. `verify`
+  now logs `reach_full`, which answers the coverage loop (user: only at 100%).
+- **verify_open's headline said "not fail-to-pass yet"** of a file whose last verify was
+  fail-to-pass and had only been edited since. Says so now.
+- **"It only imports the change" hid the missed lines.** A new method's `@property` and
+  `def` run on import; pytest-5262 was told four times about "the changed value" and never
+  given `capture.py:452`, the body. Now "It does not run the changed code" with the lines.
+  The coverage tool's and verify's import-time note also went out only with nothing
+  missed (astropy-13398 never saw it); now with missed lines too.
+- **"It does reach the change ... Keep the input" claimed too much.** django-16333 (no M2M
+  field) and sympy-21612 (`Mul` base, the fix is about `Pow`) ran every changed line and
+  were told four times each to keep an input that could not tell the versions apart.
+  Reworded: running a line is not taking the path the fix changes.
+- **`mutation` answered for tests that were not fail-to-pass** -- 18 calls in the nine NOs,
+  "2 of 2 caught" for a test passing at base. Now it answers only once the agent's own last
+  verify says fail-to-pass for the file as it is (user). An errored call no longer counts
+  as the loop's last answer (it would have closed the loop with no survivors listed).
+- **The tool text said "say so and leave it" of a harmless survivor, the loop needed an
+  attempt.** requests-1142 argued for eight rounds. The tool, the prompt and the refusal
+  now say an attempt is a changed test followed by the tool, and later refusals say when
+  the round since the last one did not change the test.
+- **Mutants on unchanged code.** Widening to the statement let mutmut mutate a statement's
+  unchanged first line: sphinx-7454's only two survivors were on line 79 when only 80
+  changed (10/12 reported, 9/9 on changed code). Now a mutant must rewrite a changed line.
+- **"No mutants" where the only mutant went to the agent's half** (astropy-7336,
+  astropy-14995, xarray-3677) in child.log and RUNS.md; now the recorded reason / "none
+  held out".
+- **pytester's inner test ids were read as the agent's** (pytest-10081, harmless there).
+  Outcomes now keep only ids from the agent's file (`V.own_outcomes`).
+- **The passes-at-base cap counted in a row**, so a verify_open between reset it: pylint-6903
+  took ten refusals and 91 actions before its restart. Now 2 per conversation (user).
+- **The restart's history kept only the end** and clipped each output's head: django-13406
+  lost its "no such table" errors, and all nine second attempts repeated the first. Now the
+  middle goes, refusals shrink to their first paragraph, outputs keep both ends, and the
+  restart carries the reach diagnosis.
+- Coverage is also reported without import-time lines (user): astropy-13398's 32% (31/96)
+  is 0 lines inside function bodies.
+- Trajectory: guard reverts drawn inside the next call, the task stamped 0 s before a pull,
+  timestamps anchored on `now()`. Fixed.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each
