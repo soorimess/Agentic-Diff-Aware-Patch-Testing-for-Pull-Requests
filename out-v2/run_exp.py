@@ -19,6 +19,12 @@ evaluation), both image caches, the model, `--mutants 20`, the default temperatu
 Several specs run as one job pool, instance-major, so an image is loaded once for every
 experiment that needs it.
 
+`--max-iterations 125` for every run (since 2026-10-04; it was 100). The judge does not run
+by default (user, 2026-10-04): runs are scored on fail-to-pass, coverage and mutation, and
+the judge is added on request, afterwards, with `--judge` -- which grades the saved test of
+every YES in the named experiments and writes `concept` (and `judge/completions/`) into
+each result, without running the agent again. `--with-judge` judges inside the run instead.
+
 `--retry-broken` reruns only jobs the model or the network never let finish: no result,
 or BROKEN with an outside-failure reason (gateway credit or key limit, connection, a child
 that died). A BROKEN the agent caused -- nothing collected, a pre-existing file edited --
@@ -28,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor
 import os
 import sys
 import time
@@ -51,6 +58,8 @@ from openhands_f2p.prs import PRS  # noqa: E402
 
 MODEL = "openrouter/qwen/qwen3-coder-30b-a3b-instruct"
 MUTANTS = "20"
+# The action cap for every run (user, 2026-10-04: 125, up from 100).
+MAX_ITERATIONS = "125"
 # The base configuration: every add-on added, except variants of another add-on
 # (`require-tools-with-score-report` is require-tools with scores, an experiment of its
 # own). Read off the registry, so an add-on added later is in base without anyone
@@ -82,6 +91,53 @@ def parse_spec(spec: str) -> tuple[str, list[str]]:
     return name, ([f for f in flags.split(",") if f] if eq else list(BASE_FLAGS))
 
 
+def judge_saved(names: list[str], parallel: int, only: list[str] | None) -> int:
+    """Add the judge to finished runs: every YES with a saved test and no judgement.
+
+    Nothing else in a result changes. The judge reads the issue, the patch, the developer's
+    test and the saved test -- no container -- so the calls run in threads. A failed call
+    is written as `{"verdict": "error"}`, as inside a run, and is retried by running this
+    again (an error does not count as a judgement).
+    """
+    from openhands_f2p import compare
+    from openhands_f2p.checks import token_usage
+    from openhands_f2p.dataset import load
+
+    todo = []
+    for name in names:
+        root = HERE / name
+        for d in sorted(p for p in root.iterdir() if (p / "result.json").exists()):
+            if only and d.name not in only:
+                continue
+            r = json.loads((d / "result.json").read_text())
+            judged = (r.get("concept") or {}).get("verdict") not in (None, "error")
+            saved = next(d.glob("test_f2p_*.py"), None)
+            if r.get("f2p") == "YES" and saved is not None and not judged:
+                todo.append((name, d, saved))
+    print(f"judging {len(todo)} saved test(s), {parallel} at a time")
+
+    def one(job):
+        name, d, saved = job
+        rj = d / "result.json"
+        try:
+            concept = compare.compare(load(d.name), saved.read_text(), quiet=True,
+                                      completions_dir=d / "judge" / "completions")
+        except Exception as exc:                                  # noqa: BLE001
+            concept = {"verdict": "error", "reasoning": str(exc)[:200]}
+        r = json.loads(rj.read_text())
+        r["concept"] = concept
+        r["judge_usage"] = token_usage(d / "judge")
+        rj.write_text(json.dumps(r, indent=2))
+        return name, d.name, concept.get("verdict")
+
+    with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
+        for name, iid, verdict in pool.map(one, todo):
+            print(f"  {name:24s} {iid:34s} {verdict}")
+    for name in names:
+        runs.main(HERE / name)
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -91,7 +147,15 @@ def main() -> int:
     p.add_argument("--only", default="", help="comma-separated instance ids, for a smoke run")
     p.add_argument("--retry-broken", action="store_true")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--with-judge", action="store_true",
+                   help="judge each YES inside the run (off by default)")
+    p.add_argument("--judge", action="store_true",
+                   help="do not run the agent: judge the saved test of every YES in the "
+                        "named experiments that has no judgement yet")
     a = p.parse_args()
+    if a.judge:
+        return judge_saved([parse_spec(s)[0] for s in a.specs], a.parallel,
+                           a.only.split(",") if a.only else None)
 
     if len(PRS) != 36 and not a.only:
         raise SystemExit(f"  expected the 36 local instances, got {len(PRS)}")
@@ -100,7 +164,9 @@ def main() -> int:
     per_exp = {}
     for spec in a.specs:
         name, flags = parse_spec(spec)
-        args = parser.parse_args(["all", "--mutants", MUTANTS, "--model", MODEL, *flags])
+        args = parser.parse_args(["all", "--mutants", MUTANTS, "--model", MODEL,
+                                  "--max-iterations", MAX_ITERATIONS,
+                                  *([] if a.with_judge else ["--no-compare"]), *flags])
         per_exp[name] = (args, FeatureSet.from_args(args))
 
     jobs = []

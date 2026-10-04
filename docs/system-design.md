@@ -461,6 +461,12 @@ the laptop's without `LLM_PROXY` -- the server reaches the gateway directly (hea
 concurrent pulls (`F2P_PULL_CONCURRENCY`); every image used is archived to
 `image-cache/` in the checkout (git-ignored), so a later run loads it instead of pulling.
 
+Since 2026-10-04 every run has an action cap of 125 (was 100) and **no judge by default**:
+`run_exp.py` passes `--no-compare` unless `--with-judge` is given, and `--judge <exp>`
+grades the saved test of every unjudged YES of a finished experiment afterwards (threads,
+no containers), writing `concept`, `judge_usage` and `judge/completions/` into each run.
+The experiment plan is `out-v2/tool-experiments-out-v2-36-prs.md`.
+
 ### On the laptop (2026-09-27 to 2026-10-03)
 
 Experiments go in **`out-v2/<name>/`**, one folder per experiment, named after the change
