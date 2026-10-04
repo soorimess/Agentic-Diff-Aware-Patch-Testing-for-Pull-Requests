@@ -569,6 +569,10 @@ Read afterwards (three trajectory passes: the nine NOs, the duty loops, tool out
   `verify` and the verdict met "tree not at base" -- BROKEN. The guard now removes files
   the patch creates (`V.files_the_patch_creates`, `box.reserved_paths`), and says why.
 
+- **A source-reading test still scored YES.** django-13406 asserted that
+  `inspect.getsourcelines(QuerySet.query.fset)` contained the fix's two lines, took ten
+  `reads_source` refusals, and was YES at 0% coverage. Now NO (user).
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

@@ -978,6 +978,19 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
             # An edited one can. Outside the branch that scores a written test, so an agent
             # that wrote none and patched the library instead is caught too
             # (`scikit-learn-10297` without the guard).
+            # A test that flips by reading the project's source as text is not scored YES
+            # (user, 2026-10-04). It flips because the agent was shown the fix's wording;
+            # it tests no behaviour and fails on an equivalent fix written differently.
+            # django-13406 (fix check) asserted `inspect.getsourcelines(...)` held the
+            # fix's two lines, took ten `reads_source` refusals, and scored YES at 0%
+            # coverage. NO, so the second chance can still take it.
+            source_line = V.reads_source(code or "")
+            if verdict.f2p == "YES" and source_line:
+                verdict = replace(
+                    verdict, f2p="NO", changed_line_coverage={},
+                    why=f"it asserts on the project's source text, not on behaviour "
+                        f"(`{source_line}`)")
+                field("audit", f"NO -- reads source: {source_line}")
             if checks["tree_altered"]:
                 verdict = replace(
                     verdict, f2p="BROKEN",
@@ -1063,8 +1076,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               "test_path": test_file,
               "test_path_default": default_path,
               # The line of the final test that reads project source as text, or None.
-              # Recorded beside the verdict, not folded into it: such a test is
-              # mechanically fail-to-pass and the verdict says so. See `V.reads_source`.
+              # Since 2026-10-04 such a test is scored NO (user); see `score`.
               "reads_source": V.reads_source(code or ""),
               "usage": usage,
               "model": run["model"], "agent_status": run["status"],

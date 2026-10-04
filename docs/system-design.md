@@ -681,6 +681,10 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   every changed line answers the coverage loop (user: at 100% only). Errored tool calls
   are not answers. Refusals say when the round since the last refusal for that duty
   changed nothing, and that an attempt is a changed test followed by the tool.
+- **A source-reading test scores NO (user, 2026-10-04).** A YES whose final test matches
+  `V.reads_source` becomes NO ("asserts on the project's source text, not on behaviour"),
+  coverage dropped, so the second chance can take it. It was recorded beside a YES:
+  django-13406 (fix check) ignored ten `reads_source` refusals and scored YES at 0%.
 - **The guard also removes files the patch creates (2026-10-04).** A new file the fix
   adds, written by the agent, stops the patch applying; `_undo_edits` deletes it after the
   action and tells the agent, as it puts back an edited pre-existing file.
