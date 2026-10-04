@@ -268,11 +268,19 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
                 f"{rel}: runs {cov.get('covered', 0)} of the changed lines"
                 + ("" if cov.get("measured") else " (changed file never imported)"))
     if not cov.get("covered"):
+        # When the changed module is never imported, `coverage` has no lines to show, so
+        # the module is named here (seaborn-3069, fix check: tested through `catplot`,
+        # never imported `seaborn/_core/plot.py`).
+        files = cov.get("changed_files") or []
+        where = (f" It never imports {', '.join(f'`{f}`' for f in files[:4])}, which the "
+                 f"change modifies: call code from there."
+                 if not cov.get("measured") and files else
+                 " `coverage` shows which they are and the conditions above each.")
         return ("\n\n**It does not reach the change.** Running it executes none of the "
                 "lines this pull request changes, so whatever it asserts is about code the "
                 "fix does not touch. Keep the idea and move the input: call the code the "
                 "change modifies, with an input that sends execution through the changed "
-                "lines. `coverage` shows which they are and the conditions above each.")
+                "lines." + where)
     # Run only by importing it. A module-level line executes for any test that imports
     # the module, so "it runs the change" says nothing about the input; see
     # `E.import_time_hits` (django-15098: told "keep the input" twice while asserting on
@@ -450,6 +458,32 @@ def same_file(named: str, rel: str) -> bool:
                         and (rel.endswith("/" + t) or t.endswith("/" + rel)))
 
 
+def wrote_to(path: str, rel: str) -> bool:
+    """Whether a `write_file` path is the test file `rel`. A write names a real path from
+    the repository root, so a bare `test_x.py` is a file at the root -- not
+    `tests/test_x.py`, which `same_file` also accepts for a tool target."""
+    t = _relative((path or "").split("::")[0])
+    return t == rel or ("/" in t and same_file(path, rel))
+
+
+def names_test(tool_log: list, named: str, rel: str) -> bool:
+    """Whether a tool's `target` names the scored file `rel`, given what the agent wrote.
+
+    A bare `test_x.py` usually means the scored file (django's runner resolves it under
+    `tests/`: django-15098 verified that way and it ran the right file). But when the
+    agent wrote a file of that name at the root, the target is that copy: pylint-4970
+    (fix check) verified only a root-level copy in its second conversation and was told
+    about the scored file from the copy's results."""
+    if not same_file(named, rel):
+        return False
+    t = _relative((named or "").split("::")[0])
+    if "/" in t or not t.endswith(".py") or t == rel:
+        return True
+    roots = {_relative(e.get("path", "")) for e in tool_log
+             if e.get("tool") == "write_file" and "error" not in e}
+    return t not in roots
+
+
 def _verifies_of(tool_log: list, rel: str | None) -> list[tuple[int, dict]]:
     """The `verify` calls that ran, on `rel` when it is given.
 
@@ -460,7 +494,7 @@ def _verifies_of(tool_log: list, rel: str | None) -> list[tuple[int, dict]]:
     run (tree not at base) answered nothing and is left out too."""
     return [(i, e) for i, e in enumerate(tool_log)
             if e.get("tool") == "verify" and "error" not in e
-            and (rel is None or same_file(e.get("target", ""), rel))]
+            and (rel is None or names_test(tool_log, e.get("target", ""), rel))]
 
 
 def test_writes(tool_log: list, rel: str | None) -> list[int]:
@@ -478,10 +512,10 @@ def test_writes(tool_log: list, rel: str | None) -> list[int]:
         if e.get("tool") != "write_file" or "error" in e:
             continue
         path = e.get("path", "")
-        if rel is not None and not same_file(path, rel):
+        if rel is not None and not wrote_to(path, rel):
             continue
         key = rel if rel is not None else path
-        text = e.get("content")
+        text = e.get("sha") or e.get("content")
         if text is None or key not in last or last[key] != text:
             out.append(j)
         last[key] = text
@@ -514,7 +548,7 @@ def _last(tool_log: list, tool: str, rel: str) -> tuple[int, dict] | None:
     # the loop it never entered.
     found = (_verifies_of(tool_log, rel) if tool == "verify" else
              [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
-              and "error" not in e and same_file(e.get("target", ""), rel)])
+              and "error" not in e and names_test(tool_log, e.get("target", ""), rel)])
     return found[-1] if found else None
 
 
@@ -537,7 +571,7 @@ def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
     """
     got = _last(tool_log, "verify", rel)
     elsewhere = [e.get("target") for _, e in _verifies_of(tool_log, None)
-                 if not same_file(e.get("target", ""), rel)]
+                 if not names_test(tool_log, e.get("target", ""), rel)]
     if got is None and elsewhere:
         say = (f"Your `verify` calls ran on `{elsewhere[-1]}`, but the test this run is "
                f"scored on is `{rel}`, and nothing has verified that file. Only `{rel}` "
@@ -617,7 +651,7 @@ def _no_better(tool_log: list, tool: str, rel: str, score,
     if since is None:
         return False
     calls = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
-             and "error" not in e and same_file(e.get("target", ""), rel)]
+             and "error" not in e and names_test(tool_log, e.get("target", ""), rel)]
     if not calls:
         return False
     i_last, last = calls[-1]
@@ -651,15 +685,20 @@ def _content_at(tool_log: list, i: int, rel: str) -> str | None:
     """What the test file held when entry `i` ran: the last write to it before `i`."""
     for e in reversed(tool_log[:i]):
         if (e.get("tool") == "write_file" and "error" not in e
-                and same_file(e.get("path", ""), rel)):
-            return e.get("content")
+                and wrote_to(e.get("path", ""), rel)):
+            return e.get("sha") or e.get("content")
     return None
 
 
 def _best_before(tool_log: list, tool: str, rel: str, score) -> float | None:
-    """The best score any earlier call of `tool` on the scored file reported."""
-    calls = [e for e in tool_log if e.get("tool") == tool and same_file(e.get("target", ""), rel)]
-    earlier = [x for x in (score(e) for e in calls[:-1]) if x is not None]
+    """The best score an earlier call of `tool` reported on the scored file while it was
+    fail-to-pass by its own `verify`. A version that did not flip is not one to get back
+    to: matplotlib-26208 (fix check) was told "it reached 100.0% earlier" of two
+    measurements whose own output said the test did not pass with the change applied."""
+    calls = [(j, e) for j, e in enumerate(tool_log) if e.get("tool") == tool
+             and names_test(tool_log, e.get("target", ""), rel)]
+    earlier = [x for x in (score(e) for j, e in calls[:-1]
+                           if verify_settled(tool_log[:j], rel)) if x is not None]
     return max(earlier) if earlier else None
 
 
@@ -719,8 +758,10 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
         at = last_refused.get(duty)
         if at is None or any(j >= at for j in test_writes(tool_log, rel)):
             return ""
-        return ("Your last round did not change the test, so it was not an attempt -- "
-                "explaining why a case cannot be caught does not end this. ")
+        why = ("explaining why a line cannot run" if duty == "coverage"
+               else "explaining why a variant cannot be caught")
+        return (f"Your last round did not change the test, so it was not an attempt -- "
+                f"{why} does not end this. ")
 
     if not verify_settled(tool_log, rel):
         return None

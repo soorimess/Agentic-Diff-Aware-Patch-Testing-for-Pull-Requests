@@ -41,7 +41,9 @@ from openhands_f2p.layout import OUT
 
 
 def _ts(base: datetime, offset: float) -> str:
-    return (base + timedelta(seconds=offset)).isoformat().replace("+00:00", "Z")
+    # Fixed precision: `isoformat()` drops the fraction at whole seconds, and "…39Z"
+    # sorts after "…39.100000Z" as text.
+    return (base + timedelta(seconds=offset)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 # The first line of each prompt piece, mapped to the heading it should render under.

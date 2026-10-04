@@ -267,7 +267,7 @@ def _refusal_table(retried: list[dict]) -> list[str]:
         by_reason.setdefault(r["refusals"]["reason"], []).append(r)
 
     lines = ["", "### What the refused runs did next", "",
-             "Every refusal is `require-tools`'; the last column says which part of the "
+             "Every refusal comes from `require-tools`; the last column says which part of the "
              "check the first reason was.", "",
              "| told | runs | ended YES | ended NO | ended BROKEN | |",
              "|---|---|---|---|---|---|"]

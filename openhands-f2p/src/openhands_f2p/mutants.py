@@ -35,6 +35,7 @@ a survivor, or a score -- a score in front of the agent is a score to raise.
 """
 from __future__ import annotations
 
+import bisect
 import difflib
 import json
 import time
@@ -160,6 +161,48 @@ def _configure_mutmut() -> None:
     C._config = C.Config(**zeros)
 
 
+def _rewrite(a: list[str], b: list[str]) -> tuple[set[int], str, str]:
+    """What a mutant rewrites: the original lines whose non-blank text changed, and the
+    changed text before and after, one line each.
+
+    Line by line was not enough. Dropping an argument makes libcst join a wrapped call
+    onto one line, and a line diff then marks the untouched continuation line as rewritten
+    too: sphinx-7454 (fix check) kept `pending_xref(..., nodes.Text(text), ...)` minus its
+    `nodes.Text(text)` -- on line 79, which the pull request never touched -- as a mutant
+    of line 80, and labelled it `reftarget=text)   ->   ` from the shifted mutated file.
+    Characters, not lines, say which line lost something."""
+    touched: set[int] = set()
+    befores, afters = [], []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if op == "equal":
+            continue
+        befores.append(" ".join(x.strip() for x in a[i1:i2]))
+        afters.append(" ".join(x.strip() for x in b[j1:j2]))
+        if i1 == i2:                       # whole lines inserted
+            touched.add(min(i1 + 1, max(len(a), 1)))
+            continue
+        block_a, block_b = "\n".join(a[i1:i2]), "\n".join(b[j1:j2])
+        starts, pos = [], 0
+        for x in a[i1:i2]:
+            starts.append(pos)
+            pos += len(x) + 1
+
+        def line_of(c: int) -> int:
+            return i1 + bisect.bisect_right(starts, c)
+        for cop, c1, c2, d1, d2 in difflib.SequenceMatcher(
+                a=block_a, b=block_b, autojunk=False).get_opcodes():
+            if cop == "equal":
+                continue
+            gone, came = block_a[c1:c2], block_b[d1:d2]
+            if not gone.strip() and not came.strip():
+                continue                   # re-wrapping only
+            if gone.strip():
+                touched.update(line_of(c) for c in range(c1, c2) if not block_a[c].isspace())
+            else:
+                touched.add(line_of(min(c1, max(len(block_a) - 1, 0))))
+    return touched, " | ".join(befores), " | ".join(afters)
+
+
 def _candidates(source: str, filename: str, changed: set[int]) -> list[tuple]:
     """Every mutation `mutmut` offers on a changed line, in a stable order.
 
@@ -207,11 +250,7 @@ def _candidates(source: str, filename: str, changed: set[int]) -> list[tuple]:
         # sphinx-7454 (base, cap 125) changed line 80 only, and its two survivors were
         # `''` -> `None` / `'XXXX'` on line 79 -- code the pull request never touched,
         # scored as gaps in both tests. Checking against `wide` let them through.
-        touched: set[int] = set()
-        for op, i1, i2, _, _ in difflib.SequenceMatcher(
-                a=original, b=rows_b, autojunk=False).get_opcodes():
-            if op != "equal":
-                touched.update(range(i1 + 1, max(i2, i1 + 1) + 1))
+        touched, _, _ = _rewrite(original, rows_b)
         hit = sorted(touched & changed) if changed else sorted(touched)
         if not hit:
             continue                   # outside the patch: reformatting, or a wide line
@@ -268,9 +307,7 @@ def _build(picked: list[tuple], heads: dict[str, str]) -> list[Mutant]:
     out: list[Mutant] = []
     for path, line, index, mutated in picked:
         source = heads[path]
-        rows_a, rows_b = source.splitlines(), mutated.splitlines()
-        before = rows_a[line - 1].strip() if len(rows_a) >= line else ""
-        after = rows_b[line - 1].strip() if len(rows_b) >= line else ""
+        _, before, after = _rewrite(source.splitlines(), mutated.splitlines())
         out.append(Mutant(
             name=f"{Path(path).stem}-L{line}-{index}",
             file=path, line=line, operator=f"{before}   ->   {after}",

@@ -30,6 +30,7 @@ Three tools, deliberately not more:
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -336,8 +337,11 @@ class WriteExecutor(ToolExecutor[WriteAction, WriteObservation]):
                              "error": str(exc)[:400]})
             return WriteObservation.from_text(f"write failed: {exc}", is_error=True)
         lines = action.content.count("\n") + 1
+        # `sha` of the whole text: `content` is clipped for the log, and whether a write
+        # changed the test (`V.test_writes`) must not depend on its first 4000 characters.
         self.log.append({"tool": "write_file", "path": action.path,
-                         "lines": lines, "content": action.content[:4000]})
+                         "lines": lines, "content": action.content[:4000],
+                         "sha": hashlib.sha1(action.content.encode()).hexdigest()})
         undone = _undo_edits(self.box, self.log, self.guard)
         dropped = _ignored(action, "write_file")
         return WriteObservation.from_text(
@@ -490,8 +494,17 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
 
         self.log.append({"tool": "coverage", "target": action.target, "result": cov})
         if not cov.get("measured"):
+            # Named, not just reported: seaborn-3069 (fix check) was told four times to see
+            # the changed lines in `coverage` and got this bare sentence each time.
+            files = cov.get("changed_files") or []
+            hint = (f" This pull request changes {', '.join(f'`{f}`' for f in files[:4])}; "
+                    f"your test has to import that code and call it before any changed "
+                    f"line can run."
+                    if files and cov.get("reason") == "the changed file was never imported by this test"
+                    else "")
             return CoverageObservation.from_text(
-                f"could not measure change coverage: {cov.get('reason')}", is_error=True)
+                f"could not measure change coverage: {cov.get('reason')}.{hint}",
+                is_error=True)
 
         score = (f"Changed-line coverage: {cov['percent']}% ({cov['covered']} of "
                  f"{cov['executable_changed_lines']} executable changed lines).\n\n"
@@ -614,7 +627,15 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
         # is no sign of anything -- the test cannot tell the fix from no fix -- yet the
         # nine NO runs of the base at cap 125 made 18 such calls, and pylint-6903 went on
         # to work a survivor of a test that was never fail-to-pass.
-        if not V.verify_settled(self.log, action.target):
+        source_line = V.reads_source(self.box.read(action.target.split("::")[0]) or "")
+        if source_line:
+            self.log.append({"tool": "mutation", "target": action.target,
+                             "error": "reads source"})
+            return MutationObservation.from_text(
+                f"not run: {action.target} reads the project's source as text "
+                f"(`{source_line}`), and such a test is scored NO. Replace that with an "
+                f"assertion about behaviour first.", is_error=True)
+        if not V.verify_settled(self.log, V._relative(action.target.split("::")[0])):
             self.log.append({"tool": "mutation", "target": action.target,
                              "error": "not fail-to-pass by its last verify"})
             return MutationObservation.from_text(
@@ -667,9 +688,10 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
                           ("Maximise the score: y" if self.scored else "Y")
                           + "ou will be sent back while variants survive: add assertions "
                           "about the behaviour they break and call `mutation` again, until "
-                          "none survives or an honest attempt catches no more. An attempt "
-                          "is a changed test followed by `mutation`; saying a variant is "
-                          "harmless does not end it."]
+                          "none survives or an honest attempt catches no more. A survivor "
+                          "you judged harmless still brings that one attempt: change the "
+                          "test to try to catch it, call `mutation`, and if it catches no "
+                          "more the loop ends."]
         else:
             lines += ["", "Every variant tried was caught."]
         return MutationObservation.from_text("\n".join(lines))
@@ -841,6 +863,13 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     "does not exercise this pull request.")
         else:
             head = f"Fail-to-pass: {len(flipped)} test(s) fail before and pass after."
+            # Said here too: the harness scores a source-reading test NO (user,
+            # 2026-10-04), and "Fail-to-pass" alone was the opposite signal (django-13406).
+            source_line = V.reads_source(self.box.read(action.target.split("::")[0]) or "")
+            if source_line:
+                head += (f" But it reads the project's source as text (`{source_line}`), "
+                         f"and such a test is scored NO whatever this says: it checks how "
+                         f"the fix is worded, not what the code does. Assert on behaviour.")
 
         # The harness's rule, in one place, for everything below the headline. The
         # headline was always right, but the duty line, the coverage pointer, the mutation

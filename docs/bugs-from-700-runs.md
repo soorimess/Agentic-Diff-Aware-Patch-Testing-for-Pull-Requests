@@ -573,6 +573,37 @@ Read afterwards (three trajectory passes: the nine NOs, the duty loops, tool out
   `inspect.getsourcelines(QuerySet.query.fset)` contained the fix's two lines, took ten
   `reads_source` refusals, and was YES at 0% coverage. Now NO (user).
 
+Found reading the fix check's 18 trajectories (2026-10-04):
+
+- **"Your last round did not change the test" after a refusal that only asked for the
+  tool** (requests-1142, matplotlib-26208); it also used mutation wording for coverage.
+  Now only after a shortfall refusal for that duty, worded per duty.
+- **"It reached 100% earlier ... get that back" about versions that were not
+  fail-to-pass** (matplotlib-26208). The best earlier score now counts only measurements
+  taken while the file was fail-to-pass by its own verify.
+- **Joined-line mutants slipped past the changed-line filter.** Dropping an argument
+  joins a wrapped call onto one line, and the line diff counted the untouched
+  continuation; sphinx-7454's agent was shown `reftarget=text)   ->   ` (empty) for a
+  mutant on unchanged line 79. A character-level diff now decides which lines a mutant
+  rewrites, and labels it.
+- **A root-level copy counted as the scored test** (`same_file` suffix match):
+  pylint-4970's second conversation verified only `test_x.py` at the root and was told
+  about `tests/test_x.py` from its results. A bare target names the scored file unless the
+  agent wrote that bare path; a `write_file` to the root never edits the nested test.
+- **Write log clipped at 4000 characters decided "changed?"** -- a later edit past that
+  point would read as none. Writes now carry a hash of the whole text.
+- **Restart history refusals were the template header only** ("Stop refused: the task is
+  not done.") and never matched as repeats (the recap differs every round). Now the body's
+  first paragraphs, repeats marked on reason + body.
+- **"Does not reach ... `coverage` shows which"** when the changed module is never
+  imported, where `coverage` names nothing (seaborn-3069). Both now name the module.
+- **Source reading:** duty refusals went out beside "remove that" (django-13406), and
+  `verify` said "Fail-to-pass" with no warning. Duties wait while it is open; `verify`
+  warns; `mutation` refuses; `made_worse` is not set for a source-reading test.
+- The mutation tool said both "leave it" and "saying it is harmless does not end it";
+  tool and prompt now state one rule. RUNS.md stray quote; trajectory timestamps fixed
+  to millisecond precision.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

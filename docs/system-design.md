@@ -681,6 +681,14 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   every changed line answers the coverage loop (user: at 100% only). Errored tool calls
   are not answers. Refusals say when the round since the last refusal for that duty
   changed nothing, and that an attempt is a changed test followed by the tool.
+- **Second pass after the fix check (2026-10-04).** Which file a tool target names:
+  `V.names_test` (a bare `test_x.py` is the scored file unless the agent wrote that root
+  path); which write edits it: `V.wrote_to` (exact path) and the write's `sha`. Mutants
+  are kept and labelled by a character-level diff (`mutants._rewrite`). The "last round
+  did not change the test" note follows only a shortfall refusal (`SHORTFALL_SAID`);
+  "reached N% earlier" counts only fail-to-pass measurements. While a test reads source,
+  duties are not asked, `verify` warns and `mutation` refuses. Unmeasurable coverage
+  ("never imported") names the changed modules, in the tool and the reach diagnosis.
 - **A source-reading test scores NO (user, 2026-10-04).** A YES whose final test matches
   `V.reads_source` becomes NO ("asserts on the project's source text, not on behaviour"),
   coverage dropped, so the second chance can take it. It was recorded beside a YES:

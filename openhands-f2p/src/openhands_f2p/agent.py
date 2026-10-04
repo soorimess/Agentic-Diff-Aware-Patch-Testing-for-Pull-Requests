@@ -160,13 +160,20 @@ def _history(run: dict) -> str:
     said_before: set[str] = set()
     for i, e in enumerate(log + [{}]):
         for reason, text in refusals.get(i, []):
-            # The refusal's first paragraph is what it was about; the rest restates the
-            # rules, and nine copies of them took the room of fifty steps (pylint-6903).
-            first = (text or "").strip().split("\n\n")[0]
-            again = " (the same as an earlier one)" if text in said_before else ""
-            said_before.add(text)
+            # What the refusal said, without the template around it: the header ("Stop
+            # refused: the task is not done.", identical every time -- it was all the
+            # first version kept) and the recap of actions and budget, which changes
+            # every round and made no two refusals look alike. Nine full copies took the
+            # room of fifty steps (pylint-6903, base at cap 125).
+            body = (text or "").split("\n\nWhat you have done so far", 1)[0]
+            paras = [x for x in body.strip().split("\n\n")
+                     if x.strip() and not x.startswith("Stop refused")]
+            gist = "\n\n".join(paras[:2])
+            key = f"{reason}\n{gist}"
+            again = " (the same as an earlier one)" if key in said_before else ""
+            said_before.add(key)
             steps.append(f"[the harness refused your stop: {reason}{again}]"
-                         + ("" if again else "\n" + _clip(first, 400)))
+                         + ("" if again else "\n" + _clip(gist, 700)))
         tool = e.get("tool")
         if not tool:
             continue
@@ -178,7 +185,7 @@ def _history(run: dict) -> str:
                          + (f" -- failed: {e['error']}" if e.get("error") else
                             f"\n{_clip(e.get('content', ''), 1500)}"))
         elif tool == "guard":
-            steps.append(f"[the harness put back pre-existing files you changed: "
+            steps.append(f"[the harness put back or removed files you must not change: "
                          f"{', '.join(e.get('reverted') or [])}]")
         else:
             steps.append(f"{tool} {e.get('target', '')}\n"
@@ -304,7 +311,9 @@ def _f2p_history(tool_log: list, final_code: str, final_f2p: str, d: Path) -> di
     return {"verified_f2p": len(shots), "last_f2p_at_tool": last_i,
             "final_is_last_f2p": final_code == last_text,
             "final_verdict": final_f2p,
-            "made_worse": final_f2p != "YES"}
+            # Not when what `verify` called fail-to-pass read the source as text: that
+            # was never a behavioural test, and it is scored NO for that alone.
+            "made_worse": final_f2p != "YES" and not V.reads_source(last_text)}
 
 
 def _first_refusals(injected: list[dict]) -> dict[str, int]:
@@ -317,15 +326,25 @@ def _first_refusals(injected: list[dict]) -> dict[str, int]:
         for duty in reason.split("duties_open[", 1)[1].split("]", 1)[0].split("+"):
             first.setdefault(duty, m.get("at_tool", 0))
     return first
+# How a refusal for each duty reads when it is about a shortfall -- lines missed,
+# variants surviving -- rather than a stale or a missing answer.
+SHORTFALL_SAID = {"coverage": "`coverage` last listed", "mutation": "`mutation` last reported"}
+
+
 def _last_refusals(injected: list[dict]) -> dict[str, int]:
-    """Where the latest refusal naming each duty landed in the tool log, by duty."""
+    """Where the latest *shortfall* refusal for each duty landed in the tool log.
+
+    Only those: "your last round did not change the test" is about a round that was asked
+    to change it. requests-1142 and matplotlib-26208 (fix check) were told it after a
+    refusal that had only asked them to call the tool -- which they had done."""
     last: dict[str, int] = {}
     for m in injected:
         reason = m.get("reason") or ""
         if "duties_open[" not in reason:
             continue
         for duty in reason.split("duties_open[", 1)[1].split("]", 1)[0].split("+"):
-            last[duty] = m.get("at_tool", 0)
+            if SHORTFALL_SAID.get(duty, "\0") in (m.get("text") or ""):
+                last[duty] = m.get("at_tool", 0)
     return last
 
 
@@ -512,6 +531,12 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             # Independent grounds for refusing the stop, each with its own flag. They share
             # one message because sending two would spend two turns saying one thing.
             gaps: list[tuple[str, str]] = []
+            # A test that asserts on the project's source text rather than on behaviour.
+            # It reads only the test file. See `V.source_gap`. Asked first, because while
+            # it is open the duties are not: "the checks after fail-to-pass are not done"
+            # beside "remove that" told django-13406 (fix check) ten times both to polish
+            # and to discard the same test -- which is now scored NO in any case.
+            source = V.source_gap(box, rel) if left > 0 else None
             if left > 0:
                 # The harness's own base run first: when it finds the file missing, empty
                 # or passing, that is the whole story, told with the file and its output,
@@ -519,18 +544,14 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 # start once the test flips by its own verify.
                 found = (V.shortfall(box, instance, rel)
                          or V.verify_gap(tool_log, rel)
-                         or V.duty_gap(tool_log, instruments(features), rel, scored=scored,
-                                       refused=_first_refusals(injected),
-                                       last_refused=_last_refusals(injected)))
+                         or (None if source else
+                             V.duty_gap(tool_log, instruments(features), rel, scored=scored,
+                                        refused=_first_refusals(injected),
+                                        last_refused=_last_refusals(injected))))
                 if found:
                     gaps.append(found)
-            # A test that asserts on the project's source text rather than on behaviour.
-            # Checked in every configuration: it reads only the test file. See
-            # `V.source_gap`.
-            if left > 0:
-                found = V.source_gap(box, rel)
-                if found:
-                    gaps.append(found)
+            if source:
+                gaps.append(source)
             # A test that flips while running none of the changed lines: asked once, and
             # only when nothing else is open and the agent holds `coverage`.
             if (left > 0 and not gaps and "coverage-tool" in features

@@ -21,8 +21,9 @@ this pull request fixes. If it is, add the assertion about that behaviour and ca
 `verify` and `mutation` again. If it is not, leave it.{?require-tools} This is a loop, and
 it is checked: while survivors remain you will be sent back to work them and call
 `mutation` again, until none survives or an honest attempt catches no more -- what is left
-then breaks nothing a test here can observe. An attempt is a changed test followed by
-`mutation`; saying a variant is harmless does not end the loop.{/require-tools} What you must not do is close
+then breaks nothing a test here can observe. A survivor you judged out of scope still brings
+that one attempt: change the test to try to catch it and call `mutation`; if it catches no
+more, the loop ends.{/require-tools} What you must not do is close
 the list for its own sake: a run once answered `0 killed` by adding a
 second test that failed on both sides, which turned a file whose first test flipped
 correctly into no result at all. Keep `verify` saying fail-to-pass while you work.
