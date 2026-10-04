@@ -162,10 +162,20 @@ class Sandbox:
     def exec(self, command: str, workdir: str = REPO_DIR,
              timeout: int = 1800) -> ExecResult:
         t0 = time.time()
+        # The limit is enforced *inside* the container by coreutils `timeout` (in every
+        # SWE-bench image). Until 2026-10-04 only the `docker exec` client was killed:
+        # the command itself ran on, so "was killed" was false -- sympy-24562's
+        # developer tests sat in an endless loop on a mutant after their run had been
+        # given up on. `-k 10` follows the TERM with a KILL for a command that ignores
+        # it; the client-side limit stays as a backstop for a wedged daemon.
         try:
             r = _run(["docker", "exec", "-w", workdir, self.container,
-                      "bash", "-lc", command], timeout=timeout)
+                      "timeout", "-k", "10", str(timeout), "bash", "-lc", command],
+                     timeout=timeout + 60)
             out = ExecResult(r.returncode, r.stdout, r.stderr)
+            if r.returncode in (124, 137) and time.time() - t0 >= timeout:
+                out = ExecResult(124, r.stdout, (r.stderr or "")
+                                 + f"\ntimed out after {timeout}s and was killed")
         except subprocess.TimeoutExpired:
             # Returned rather than raised. An agent that runs `grep -R x ..` recurses
             # out of /testbed into /proc and hangs; letting that propagate killed the

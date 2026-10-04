@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -360,7 +361,10 @@ def probe(box: Sandbox, patch: str, test_path: str, n: int) -> dict:
         if not collected:
             return {"ok": False, "why": f"{test_path} collects nothing on the fixed code"}
         expected = list(collected)
-        if _fails(box, [test_path], expected):
+        t0 = time.monotonic()
+        failed = _fails(box, [test_path], expected)
+        limit = _mutant_timeout(time.monotonic() - t0)
+        if failed:
             return {"ok": False,
                     "why": "your test does not pass on the fixed code yet, so asking "
                            "what it notices about a wrong fix has no answer"}
@@ -372,7 +376,7 @@ def probe(box: Sandbox, patch: str, test_path: str, n: int) -> dict:
         for m in shown:
             box.write(m.file, m.source)
             try:
-                m.agent_kills = _fails(box, [test_path], expected)
+                m.agent_kills = _fails(box, [test_path], expected, timeout=limit)
             finally:
                 box.write(m.file, originals[m.file])
         return {"ok": True, "mutants": shown}
@@ -385,7 +389,21 @@ def probe(box: Sandbox, patch: str, test_path: str, n: int) -> dict:
             box.apply_patch(patch, revert=True)
 
 
-def _fails(box: Sandbox, targets: list[str], expected: list[str]) -> bool:
+# A mutant run is given ten times what the same tests took on the unmutated fix, and
+# never less than a minute (user, 2026-10-04) -- mutmut's own rule. It was a flat 1800 s:
+# a mutant that loops forever cost half an hour per run, and sympy-24562's developer
+# tests (7.6 s on the fix) hung that long on a `Rational` mutant. A run that times out
+# objects to the mutant -- killed, as before -- since its output parses to nothing.
+MUTANT_TIMEOUT_FACTOR = 10
+MUTANT_TIMEOUT_MIN = 60
+
+
+def _mutant_timeout(unmutated_s: float) -> int:
+    return max(MUTANT_TIMEOUT_MIN, int(MUTANT_TIMEOUT_FACTOR * unmutated_s) + 1)
+
+
+def _fails(box: Sandbox, targets: list[str], expected: list[str],
+           timeout: int = 1800) -> bool:
     """True when the test objects to the code as it currently stands.
 
     "Objects" is `FAILED` or `ERROR` on a node expected to pass, or the node vanishing
@@ -393,7 +411,7 @@ def _fails(box: Sandbox, targets: list[str], expected: list[str]) -> bool:
     failed assertion, and reading a missing node as "passed" would count that as a
     survivor.
     """
-    out = R.parse_output(box.exec(R.test_command(box, targets), timeout=1800).output)
+    out = R.parse_output(box.exec(R.test_command(box, targets), timeout=timeout).output)
     if not out:
         return True                    # nothing collected at all
     return any(R.outcome_of(out, node) in (None, "FAILED", "ERROR")
@@ -526,12 +544,17 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
         # base run (2026-09-30) had no mutation score for a test that passed. Now the
         # developer's column uses the tests that pass, names the ones left out, and is
         # marked unmeasured only when none pass.
+        t0 = time.monotonic()
         gold_out = R.parse_output(
             box.exec(R.test_command(box, gold_targets), timeout=1800).output)
+        gold_limit = _mutant_timeout(time.monotonic() - t0)
         gold_ok = [n for n in gold_expected if R.outcome_of(gold_out, n) == "PASSED"]
         score.developer_excluded = [n for n in gold_expected if n not in gold_ok]
         score.developer_measured = bool(gold_ok)
-        if _fails(box, [gen_path], gen_expected):
+        t0 = time.monotonic()
+        gen_failed = _fails(box, [gen_path], gen_expected)
+        gen_limit = _mutant_timeout(time.monotonic() - t0)
+        if gen_failed:
             score.why = "the generated test does not pass on the fixed code here"
             return score
 
@@ -556,9 +579,9 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
         for m in mutants:
             box.write(m.file, m.source)
             try:
-                m.agent_kills = _fails(box, [gen_path], gen_expected)
-                m.developer_kills = (_fails(box, gold_targets, gold_ok) if gold_ok
-                                     else None)
+                m.agent_kills = _fails(box, [gen_path], gen_expected, timeout=gen_limit)
+                m.developer_kills = (_fails(box, gold_targets, gold_ok, timeout=gold_limit)
+                                     if gold_ok else None)
             finally:
                 box.write(m.file, originals[m.file])
             m.source = ""              # written; no reason to keep it in the record

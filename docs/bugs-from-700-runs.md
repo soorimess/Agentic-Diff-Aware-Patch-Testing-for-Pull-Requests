@@ -498,6 +498,20 @@ now retry 60 times and the per-job ceiling is 6 h.
   but a special command in this environment"), the pattern astropy-13398 showed before the
   refusal was reworded; the model reads "fails now" as done. Not changed.
 
+## Found in the base run at cap 125 (36, server, 2026-10-04)
+
+- **A mutant run had a flat 30-minute limit.** sympy-24562 finished YES, then mutation
+  scoring ran the developer's `test_numbers.py` (7.6 s on the fix) against a `Rational`
+  mutant that loops forever, and waited the full 1800 s -- per looping mutant. Now each
+  mutant run gets ten times what the same tests took on the unmutated fix, at least 60 s
+  (user), in the harness's scoring and the agent's `mutation` tool alike. A timeout still
+  reads as killed. Verdicts and scores are unchanged; only time was lost.
+- **A timed-out command kept running in the container.** `Sandbox.exec` killed only the
+  `docker exec` client, so the command ran on and "timed out ... and was killed" was
+  false (seen: the hung sympy test; checked: `sleep` survives the old form). The limit is
+  now enforced inside the container with coreutils `timeout -k 10`, the client-side limit
+  kept as a backstop. Affects every exec -- the agent's 120 s `run` included.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

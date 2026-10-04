@@ -673,6 +673,12 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   result's `f2p_history` says how many there were and `made_worse` when the agent handed in
   a test the harness does not score YES. Nothing is picked or restored -- the agent's last
   file is its answer (user). RUNS.md counts them under "Fail-to-pass, then lost".
+- **Timeouts kill inside the container; mutant runs scale with the fix's test time
+  (2026-10-04).** `Sandbox.exec` runs every command under coreutils `timeout -k 10 N`, so a
+  timed-out command is really gone (before, only the `docker exec` client died). A mutant
+  run is limited to `max(60, 10 x` the unmutated run's seconds`)`, per side (agent's test,
+  developer's tests), in `mutants.measure` and the `mutation` tool; it was 1800 s, which a
+  looping mutant used in full (sympy-24562). A timeout reads as killed.
 - **RUNS.md says what the second chance rescued (user, 2026-10-04).** In any folder whose
   runs had `second-chance` on, the headline gives the number rescued (no YES on the first
   attempt, YES after the restart) and the first-attempts-only score, and "The second
