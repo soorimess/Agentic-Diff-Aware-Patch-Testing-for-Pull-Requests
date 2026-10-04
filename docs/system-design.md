@@ -681,6 +681,9 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   every changed line answers the coverage loop (user: at 100% only). Errored tool calls
   are not answers. Refusals say when the round since the last refusal for that duty
   changed nothing, and that an attempt is a changed test followed by the tool.
+- **The guard also removes files the patch creates (2026-10-04).** A new file the fix
+  adds, written by the agent, stops the patch applying; `_undo_edits` deletes it after the
+  action and tells the agent, as it puts back an edited pre-existing file.
 - **`mutation` needs a fail-to-pass test (user, 2026-10-04).** The tool refuses unless the
   agent's own last `verify` said fail-to-pass for the file as it is.
 - **Passes-at-base cap: 2 per conversation (user, 2026-10-04)**, no longer 2 in a row.

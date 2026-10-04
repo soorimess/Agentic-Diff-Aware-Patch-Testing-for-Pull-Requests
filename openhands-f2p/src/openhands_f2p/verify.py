@@ -407,6 +407,17 @@ def no_reach_gap(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str,
             f"say so in one sentence and finish.")
 
 
+def files_the_patch_creates(patch: str) -> list[str]:
+    """Paths `patch` adds as new files (`new file mode` after a `diff --git` header)."""
+    out, current = [], None
+    for line in (patch or "").splitlines():
+        if line.startswith("diff --git "):
+            current = line.split(" b/", 1)[1] if " b/" in line else None
+        elif line.startswith("new file mode") and current:
+            out.append(current)
+    return out
+
+
 def own_outcomes(outcomes: dict, targets: list[str]) -> dict:
     """`outcomes` without pytest node ids from another file.
 

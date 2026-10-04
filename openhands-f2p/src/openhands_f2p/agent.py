@@ -850,6 +850,12 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
         box.strip_git()
         # Before the agent, so the diff afterwards is exactly what the agent did.
         box.snapshot_tree()
+        # The files the fix creates. Absent at base, so the guard's diff never saw them:
+        # astropy-13398 (fix check, 2026-10-04) wrote the patch's new
+        # `itrs_observed_transforms.py` itself, after which the patch could not apply,
+        # every `verify` met "tree not at base" and the run was BROKEN. The guard removes
+        # them like an edit to a file that was here (`sandbox_tools._undo_edits`).
+        box.reserved_paths = V.files_the_patch_creates(inst["patch"])
         test_file = V.gen_test_path(pr["id"], box)
         flow.record(flow.SETUP, "test path", test_file)
         field("sandbox", f"{image.split('.')[-1]}   network=none, git stripped")

@@ -220,18 +220,41 @@ def _undo_edits(box: Sandbox, log: list, on: bool = True) -> str:
         # dirty tree as BROKEN; what is withheld is the repair, so the arm measures how
         # often the agent reaches for the library rather than how often it is stopped.
         return ""
+    # A file the fix itself creates, written by the agent: the patch can no longer be
+    # applied over it, so every `verify` and the verdict fail on "tree not at base"
+    # (astropy-13398, fix check). Removed, as an edit to an existing file is put back.
+    reserved = list(getattr(box, "reserved_paths", None) or [])
+    created = []
+    if reserved:
+        quoted = " ".join("'" + p.replace("'", "'\\''") + "'" for p in reserved)
+        r = box.exec(f"for f in {quoted}; do [ -e \"$f\" ] && echo \"$f\"; done; true",
+                     timeout=60)
+        created = [ln.strip() for ln in r.output.splitlines() if ln.strip()]
+        if created:
+            box.exec("rm -f " + " ".join("'" + p.replace("'", "'\\''") + "'"
+                                         for p in created), timeout=60)
     altered = box.altered_paths()
-    if not altered:
+    if not altered and not created:
         return ""
-    restored = box.restore(altered)
-    log.append({"tool": "guard", "reverted": restored})
-    flow.record(flow.AGENT, "reverted edit", ", ".join(restored[:4]))
-    shown = ", ".join(f"`{p}`" for p in restored[:4])
-    more = f" (and {len(restored) - 4} more)" if len(restored) > 4 else ""
-    return (f"\n\n[harness] You changed {shown}{more}, which existed before you started, "
-            f"so it has been put back. The test has to fail on this code as it is -- "
-            f"editing what it tests destroys the measurement rather than passing it. "
-            f"Create new files freely; do not edit the ones that were already here.")
+    restored = box.restore(altered) if altered else []
+    log.append({"tool": "guard", "reverted": restored + created})
+    flow.record(flow.AGENT, "reverted edit", ", ".join((restored + created)[:4]))
+    say = ""
+    if restored:
+        shown = ", ".join(f"`{p}`" for p in restored[:4])
+        more = f" (and {len(restored) - 4} more)" if len(restored) > 4 else ""
+        say += (f"\n\n[harness] You changed {shown}{more}, which existed before you "
+                f"started, so it has been put back. The test has to fail on this code as "
+                f"it is -- editing what it tests destroys the measurement rather than "
+                f"passing it. Create new files freely; do not edit the ones that were "
+                f"already here.")
+    if created:
+        shown = ", ".join(f"`{p}`" for p in created[:4])
+        say += (f"\n\n[harness] You created {shown}, a file this pull request adds -- "
+                f"writing it is writing the fix, and the change could no longer be applied "
+                f"over it. It has been removed. Your test has to work against the code as "
+                f"it is here, without that file.")
+    return say
 
 
 # --------------------------------------------------------------------------- run

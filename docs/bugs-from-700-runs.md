@@ -563,6 +563,12 @@ Read afterwards (three trajectory passes: the nine NOs, the duty loops, tool out
 - Trajectory: guard reverts drawn inside the next call, the task stamped 0 s before a pull,
   timestamps anchored on `now()`. Fixed.
 
+- **The guard let the agent write a file the fix creates** (fix check, 2026-10-04).
+  astropy-13398 wrote the patch's new `itrs_observed_transforms.py` itself; the guard only
+  watches files that existed at base, the patch could no longer apply over it, and every
+  `verify` and the verdict met "tree not at base" -- BROKEN. The guard now removes files
+  the patch creates (`V.files_the_patch_creates`, `box.reserved_paths`), and says why.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each
