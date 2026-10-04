@@ -285,9 +285,15 @@ PULL_LOCK = Path("/tmp/f2p-pull.lock")
 PULL_SLOTS = max(1, int(os.getenv("F2P_PULL_CONCURRENCY") or 1))
 
 
+# Loads at once. One until 2026-10-04: on the server, with every image dropped after its
+# run, thirty jobs started one image-minute apart -- half an hour of ramp before the last
+# container came up. `F2P_LOAD_CONCURRENCY=6` (run_exp) opens six.
+LOAD_SLOTS = max(1, int(os.getenv("F2P_LOAD_CONCURRENCY") or 1))
+
+
 @contextlib.contextmanager
-def _pull_slot():
-    """Hold one of `PULL_SLOTS` slots, waiting for one if they are all taken.
+def _pull_slot(kind: str = "pull", slots: int | None = None):
+    """Hold one of `PULL_SLOTS` slots (or `slots` of `kind`), waiting if all are taken.
 
     A file per slot, tried without blocking in turn; if none is free we block on the
     first, which is as fair as this needs to be. Each is released when the process
@@ -295,8 +301,8 @@ def _pull_slot():
     """
     handles = []
     try:
-        for i in range(PULL_SLOTS):
-            fh = Path(f"/tmp/f2p-pull-{i}.lock").open("w")
+        for i in range(slots or PULL_SLOTS):
+            fh = Path(f"/tmp/f2p-{kind}-{i}.lock").open("w")
             handles.append(fh)
             try:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -311,7 +317,6 @@ def _pull_slot():
             with contextlib.suppress(OSError):
                 fcntl.flock(fh, fcntl.LOCK_UN)
                 fh.close()
-LOAD_LOCK = Path("/tmp/f2p-load.lock")
 
 
 def make_room(keep: str, need_gb: float, quiet: bool = True) -> float | None:
@@ -369,33 +374,29 @@ def pull_image(image: str, quiet: bool = False,
         # Under its own lock, not the pull lock: the check and the load have to be one
         # step or two workers both see room for the last image, and a load is seconds
         # where a pull is hours, so queueing behind another *load* costs nothing.
-        with LOAD_LOCK.open("w") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                # Short of room while jobs are running: wait for one to finish, and its
-                # image becomes evictable. Falling through instead went to the pull path,
-                # which on the laptop has no registry to pull from and fails the job.
-                # The lock is held while waiting, so the loads queued behind this one
-                # wait too rather than each taking the room this one is waiting for.
-                while True:
-                    running = running_containers()
-                    need = need_gb + CONTAINER_RESERVE_GB * running
-                    free = make_room(image, need, quiet)
-                    if free is None or free >= need or running == 0:
-                        break
-                    if not quiet:
-                        print(f"  {free:.0f} GB free, {need:.0f} needed with {running} "
-                              f"job(s) running; waiting for one to finish")
-                    time.sleep(30)
-                need_gb = need
-                if free is None or free >= need_gb:
-                    if image_cache.load(image, quiet=quiet):
-                        return
-                elif not quiet:
-                    print(f"  {free:.0f} GB free and this image needs about "
-                          f"{need_gb:.0f}; falling through to the pull path")
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with _pull_slot("load", LOAD_SLOTS):
+            # Short of room while jobs are running: wait for one to finish, and its
+            # image becomes evictable. Falling through instead went to the pull path,
+            # which on the laptop has no registry to pull from and fails the job.
+            # The lock is held while waiting, so the loads queued behind this one
+            # wait too rather than each taking the room this one is waiting for.
+            while True:
+                running = running_containers()
+                need = need_gb + CONTAINER_RESERVE_GB * running
+                free = make_room(image, need, quiet)
+                if free is None or free >= need or running == 0:
+                    break
+                if not quiet:
+                    print(f"  {free:.0f} GB free, {need:.0f} needed with {running} "
+                          f"job(s) running; waiting for one to finish")
+                time.sleep(30)
+            need_gb = need
+            if free is None or free >= need_gb:
+                if image_cache.load(image, quiet=quiet):
+                    return
+            elif not quiet:
+                print(f"  {free:.0f} GB free and this image needs about "
+                      f"{need_gb:.0f}; falling through to the pull path")
     with _pull_slot():
         _pull_locked(image, quiet, need_gb)
 

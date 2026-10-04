@@ -689,6 +689,12 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   "reached N% earlier" counts only fail-to-pass measurements. While a test reads source,
   duties are not asked, `verify` warns and `mutation` refuses. Unmeasurable coverage
   ("never imported") names the changed modules, in the tool and the reach diagnosis.
+- **Images stay loaded on a roomy disk; loads run six at once (2026-10-04).** After a run
+  `image_cache.release` keeps Docker's copy while the volume has 100 GB free
+  (`F2P_KEEP_IMAGES_FREE_GB`); `make_room` still evicts when short. Archive loads use
+  `pigz` and up to `F2P_LOAD_CONCURRENCY` slots (6 from run_exp). Before, every image was
+  dropped after its run and loads took one lock: the 30-PR base started one container a
+  minute.
 - **No source-reading gate (user, 2026-10-04).** The `reads_source` refusal, the NO
   verdict for it, verify's warning and mutation's refusal are gone: the regex caught 2 of
   1,373 YES tests and nothing else of the kind (`isinstance`-only, `hasattr`-only ...).

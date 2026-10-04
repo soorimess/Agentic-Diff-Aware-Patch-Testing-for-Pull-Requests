@@ -157,7 +157,9 @@ def load(image: str, quiet: bool = False) -> bool:
     if not quiet:
         print(f"  loading {image.split('.')[-1]} from {path.name} "
               f"({path.stat().st_size / 1e9:.1f} GB)", flush=True)
-    r = _sh(f"gunzip -c '{path}' | docker load")
+    # pigz when present: gunzip is one core, about a minute per image on the server.
+    unzip = "pigz -dc" if shutil.which("pigz") else "gunzip -c"
+    r = _sh(f"{unzip} '{path}' | docker load")
     if r.returncode != 0:
         if not quiet:
             print(f"  load failed, will pull instead: "
@@ -191,6 +193,9 @@ def drop_image(image: str, quiet: bool = False) -> bool:
     return ok
 
 
+KEEP_IF_FREE_GB = float(os.getenv("F2P_KEEP_IMAGES_FREE_GB") or 100)
+
+
 def release(image: str, quiet: bool = True) -> bool:
     """Give back the disk this image is holding, once its run is finished with it.
 
@@ -203,6 +208,12 @@ def release(image: str, quiet: bool = True) -> bool:
     which is the guard that matters under `--parallel`.
     """
     from openhands_f2p import images as I
+    # Kept while the disk has room: the next experiment needs the same 36 images, and
+    # dropping each after its run made every job reload its archive (server, 2026-10-04).
+    # `make_room` still evicts when a load or pull is short of space.
+    free = I.vm_free_gb()
+    if free is not None and free >= KEEP_IF_FREE_GB:
+        return True
     if not ARCHIVING:
         if not I.have_image(image):
             return True

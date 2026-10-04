@@ -49,6 +49,9 @@ os.environ.setdefault("F2P_IMAGE_CACHE", "image-cache" + os.pathsep + "image-cac
 # one pull at a time would leave the last of 36 jobs waiting half an hour. Six at once.
 # Irrelevant on the laptop, where every image loads from the local cache.
 os.environ.setdefault("F2P_PULL_CONCURRENCY", "6")
+# Archive loads at once (2026-10-04): one at a time, a 36-job launch ramped up over half an
+# hour. Six pigz loads keep the disk busy without starving the running containers.
+os.environ.setdefault("F2P_LOAD_CONCURRENCY", "6")
 
 from openhands_f2p import agent as A  # noqa: E402
 from openhands_f2p import runs  # noqa: E402
