@@ -655,6 +655,12 @@ Found reading no-second-chance (2026-10-05):
 - **`verify` typed in bash got only "command not found"** (pylint-4970, never called the
   tool); the run tool now says it is a tool.
 
+- **After the rewind, the refusal still said "get that back"** (astropy-13398 base, beside
+  "your last round did not change the test"); dropped once the rewind was offered.
+- **The never-entered functions sat in a file the fix creates**, and the agent took "absent
+  before the fix" for "cannot run". The note now says such a file is added by the change,
+  that the tools apply it before measuring, and to reach it through the code that uses it.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

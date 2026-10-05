@@ -385,7 +385,12 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
             "test_run_returncode": traced.get("returncode"),
             "test_output_tail": traced.get("test_output_tail", "")[-600:],
             "missed_source": _annotate(box, missed),
-            "missed_by_function": _by_function(box, hit, missed)}
+            "missed_by_function": _by_function(box, hit, missed),
+            # Files the fix creates (`new file mode`): `V._never_entered` says so.
+            "new_files": [ln.split(" b/", 1)[1] for ln, nxt in zip(patch.splitlines(),
+                          patch.splitlines()[1:])
+                          if ln.startswith("diff --git ") and " b/" in ln
+                          and nxt.startswith("new file mode")]}
 
 
 def _by_function(box: "Sandbox", hit: list[str], missed: list[str]) -> list[dict]:

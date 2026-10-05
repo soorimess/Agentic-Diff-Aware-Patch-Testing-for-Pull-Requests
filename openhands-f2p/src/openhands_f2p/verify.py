@@ -817,8 +817,17 @@ def _never_entered(cov: dict) -> str:
     shown = ", ".join(f"`{g['function']}` ({g['path'].rsplit('/', 1)[-1]}, {g['missed']} "
                       f"line{'s' if g['missed'] > 1 else ''})" for g in cold[:6])
     more = f" and {len(cold) - 6} more" if len(cold) > 6 else ""
+    # A file the fix creates is absent before the fix. astropy-13398 (base) concluded its
+    # functions "cannot be executed" and stopped calling them; they can -- the tools apply
+    # the change first -- through the code that uses them.
+    added = sorted({g["path"] for g in cold} & set(cov.get("new_files") or []))
+    new = (f" {', '.join(f'`{a}`' for a in added)} {'is a file' if len(added) == 1 else 'are files'} "
+           f"this change adds: absent before the fix, as expected -- `coverage` and `mutation` "
+           f"apply the change before they measure, so those lines can run. Reach them through "
+           f"the public code that uses them, the behaviour the issue describes."
+           if added else "")
     return (f"Most of them are in functions your test never calls: {shown}{more}. Call those "
-            f"with inputs that matter to this change and assert on what they return or do. ")
+            f"with inputs that matter to this change and assert on what they return or do.{new} ")
 
 
 def coverage_score(e: dict) -> float | None:
@@ -915,9 +924,12 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                 pass
             elif not _no_better(tool_log, "coverage", rel, coverage_score,
                                 refused.get("coverage"), "coverage" in rewound):
-                lost = ((_rewind(tool_log, "coverage", rel, coverage_score, pct, "%")
-                         if "coverage" not in rewound else "")
-                        or _lost(tool_log, "coverage", rel, coverage_score, pct, "%"))
+                # After the rewind was offered, no "get that back" either: it promised that a
+                # lower score then counts like any attempt (astropy-13398 base was told both
+                # "your last round did not change the test" and "your last change lowered it").
+                lost = (_rewind(tool_log, "coverage", rel, coverage_score, pct, "%")
+                        or _lost(tool_log, "coverage", rel, coverage_score, pct, "%")
+                        if "coverage" not in rewound else "")
                 lost += _never_entered(cov)
                 gaps.append(("coverage",
                              f"{score}{unchanged_since_refusal('coverage')}{lost}`coverage` last listed {len(cov['missed'])} changed "
@@ -950,9 +962,12 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                 pass
             elif not _no_better(tool_log, "mutation", rel, mutation_score,
                                 refused.get("mutation"), "mutation" in rewound):
-                lost = ((_rewind(tool_log, "mutation", rel, mutation_score, ms, "%")
-                         if "mutation" not in rewound else "")
-                        or _lost(tool_log, "mutation", rel, mutation_score, ms, "%"))
+                # After the rewind was offered, no "get that back" either: it promised that a
+                # lower score then counts like any attempt (astropy-13398 base was told both
+                # "your last round did not change the test" and "your last change lowered it").
+                lost = (_rewind(tool_log, "mutation", rel, mutation_score, ms, "%")
+                        or _lost(tool_log, "mutation", rel, mutation_score, ms, "%")
+                        if "mutation" not in rewound else "")
                 gaps.append(("mutation",
                              f"{score}{unchanged_since_refusal('mutation')}{lost}`mutation` last reported {len(e['survived'])} wrong "
                              f"version(s) of the fix your test does not notice. Keep going: "
