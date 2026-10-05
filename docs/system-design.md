@@ -704,7 +704,8 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
 - **Images stay loaded on a roomy disk; loads run six at once (2026-10-04).** After a run
   `image_cache.release` keeps Docker's copy while the volume has 100 GB free
   (`F2P_KEEP_IMAGES_FREE_GB`); `make_room` still evicts when short. Archive loads use
-  `pigz` and up to `F2P_LOAD_CONCURRENCY` slots (6 from run_exp). Before, every image was
+  `pigz` and up to `F2P_LOAD_CONCURRENCY` slots (run_exp: one per parallel job, user
+  2026-10-05). Before, every image was
   dropped after its run and loads took one lock: the 30-PR base started one container a
   minute.
 - **No source-reading gate (user, 2026-10-04).** The `reads_source` refusal, the NO

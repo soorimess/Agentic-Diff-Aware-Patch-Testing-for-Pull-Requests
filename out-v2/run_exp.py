@@ -49,9 +49,9 @@ os.environ.setdefault("F2P_IMAGE_CACHE", "image-cache" + os.pathsep + "image-cac
 # one pull at a time would leave the last of 36 jobs waiting half an hour. Six at once.
 # Irrelevant on the laptop, where every image loads from the local cache.
 os.environ.setdefault("F2P_PULL_CONCURRENCY", "6")
-# Archive loads at once (2026-10-04): one at a time, a 36-job launch ramped up over half an
-# hour. Six pigz loads keep the disk busy without starving the running containers.
-os.environ.setdefault("F2P_LOAD_CONCURRENCY", "6")
+# Archive loads at once: set to `--parallel` in `main` (user, 2026-10-05: every image is
+# local and the server has room, so all of them load together). It was one at a time
+# until 2026-10-04 -- a 36-job launch ramped up over half an hour -- then six.
 
 from openhands_f2p import agent as A  # noqa: E402
 from openhands_f2p import runs  # noqa: E402
@@ -156,6 +156,8 @@ def main() -> int:
                    help="do not run the agent: judge the saved test of every YES in the "
                         "named experiments that has no judgement yet")
     a = p.parse_args()
+    # Read by each child at import (`images.LOAD_SLOTS`); the children inherit this env.
+    os.environ.setdefault("F2P_LOAD_CONCURRENCY", str(a.parallel))
     if a.judge:
         return judge_saved([parse_spec(s)[0] for s in a.specs], a.parallel,
                            a.only.split(",") if a.only else None)
