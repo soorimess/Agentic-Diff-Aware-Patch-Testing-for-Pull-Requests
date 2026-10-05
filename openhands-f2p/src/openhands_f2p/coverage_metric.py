@@ -408,9 +408,14 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
 
 
 ENVIRONMENT_PROBE = "test_f2p_environment_probe.py"
-_EMPTY_TEST = ("import unittest\n\n\ndef test_environment_probe():\n    pass\n\n\n"
-               "class TestEnvironmentProbe(unittest.TestCase):\n"
-               "    def test_environment_probe(self):\n        pass\n")
+# The smallest test the runner collects, and nothing more. django's runner only runs
+# `TestCase` classes; pytest and sympy run a plain function. A `unittest.TestCase` under
+# pytest runs pytest's unittest plugin -- the very code pytest-10081 changes, so all of
+# its changed lines were left out as "environment" and no test could be measured
+# (no-require-tools, 2026-10-05).
+_EMPTY_FUNCTION = "def test_environment_probe():\n    pass\n"
+_EMPTY_CLASS = ("import unittest\n\n\nclass TestEnvironmentProbe(unittest.TestCase):\n"
+                "    def test_environment_probe(self):\n        pass\n")
 
 
 def environment_lines(box: "Sandbox", targets: list[str]) -> dict[str, set[int]]:
@@ -427,7 +432,7 @@ def environment_lines(box: "Sandbox", targets: list[str]) -> dict[str, set[int]]
     first = targets[0].split("::", 1)[0]
     folder = first.rsplit("/", 1)[0] if "/" in first else ""
     probe = f"{folder}/{ENVIRONMENT_PROBE}" if folder else ENVIRONMENT_PROBE
-    box.write(probe, _EMPTY_TEST)
+    box.write(probe, _EMPTY_CLASS if runner_for(box)["args"] == "labels" else _EMPTY_FUNCTION)
     try:
         traced = measure_coverage(box, [probe], limit_files=0)
     finally:

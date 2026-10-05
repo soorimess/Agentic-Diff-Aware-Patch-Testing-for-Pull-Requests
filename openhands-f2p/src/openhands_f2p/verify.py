@@ -24,6 +24,7 @@ than an error:
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 from dataclasses import dataclass, field
@@ -227,9 +228,33 @@ def _evidence(box: Sandbox, rel: str, run_output: str) -> str:
             f"```\n{out}\n```")
 
 
-# A test that runs code in another process: coverage records only its own.
-SPAWNS = re.compile(r"\bsubprocess\b|sys\.executable|runpytest_subprocess|\bos\.system\b"
-                    r"|\bPopen\b|\bspawnu?\b|multiprocessing")
+# A test that runs code in another process: coverage records only its own. Read from the
+# names in the code, never its text: pylint-6903 (no-require-tools) called `_query_cpu()`
+# in-process, said "multiprocessing" only in a docstring, comments and an assert message,
+# and its restart was told it "starts a child process".
+SPAWN_NAMES = {"subprocess", "Popen", "runpytest_subprocess", "multiprocessing",
+               "spawn", "spawnu"}
+SPAWN_ATTRS = {("sys", "executable"), ("os", "system")}
+
+
+def starts_process(text: str) -> bool:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False                    # a file that does not parse runs nothing
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in SPAWN_NAMES:
+            return True
+        if isinstance(node, ast.Attribute):
+            if node.attr in SPAWN_NAMES:
+                return True
+            if isinstance(node.value, ast.Name) and (node.value.id, node.attr) in SPAWN_ATTRS:
+                return True
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            mods = [a.name for a in node.names] + [getattr(node, "module", None) or ""]
+            if any(set(m.split(".")) & SPAWN_NAMES for m in mods):
+                return True
+    return False
 
 
 def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
@@ -272,7 +297,7 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
     flow.record(flow.VERIFY, "stop-check reach",
                 f"{rel}: runs {cov.get('covered', 0)} of the changed lines"
                 + ("" if cov.get("measured") else " (changed file never imported)"))
-    if not cov.get("covered") and SPAWNS.search(box.read(rel) or ""):
+    if not cov.get("covered") and starts_process(box.read(rel) or ""):
         # Coverage follows this process only. pytest-7982 (base at c1d704b2) ran
         # `python -m pytest` on a symlinked directory -- which does run the changed line,
         # in the child -- and was told three times it "executes none of the lines".
