@@ -789,6 +789,30 @@ def _lost(tool_log: list, tool: str, rel: str, score, now: float | None, unit: s
             f"back. " if best is not None and now is not None and now < best else "")
 
 
+# From how many missed lines a coverage refusal names the functions holding them.
+NAME_FUNCTIONS_FROM = 10
+
+
+def _never_entered(cov: dict) -> str:
+    """For a long missed list, the functions the test never enters at all (2026-10-05).
+
+    astropy-13398 (base) was told "65 changed line(s) your test never runs" four times and
+    kept asserting on an attribute; the 65 were the bodies of the new transform functions,
+    none of which it ever called. Only functions with no changed line run, and only when
+    the list is long -- a short one is already specific."""
+    if len(cov.get("missed") or []) < NAME_FUNCTIONS_FROM:
+        return ""
+    cold = [g for g in cov.get("missed_by_function") or []
+            if g["function"] != "<module>" and not g["ran"] and g["missed"]]
+    if not cold:
+        return ""
+    shown = ", ".join(f"`{g['function']}` ({g['path'].rsplit('/', 1)[-1]}, {g['missed']} "
+                      f"line{'s' if g['missed'] > 1 else ''})" for g in cold[:6])
+    more = f" and {len(cold) - 6} more" if len(cold) > 6 else ""
+    return (f"Most of them are in functions your test never calls: {shown}{more}. Call those "
+            f"with inputs that matter to this change and assert on what they return or do. ")
+
+
 def coverage_score(e: dict) -> float | None:
     cov = e.get("result") or {}
     return cov.get("percent") if cov.get("measured") else None
@@ -886,6 +910,7 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                 lost = ((_rewind(tool_log, "coverage", rel, coverage_score, pct, "%")
                          if "coverage" not in rewound else "")
                         or _lost(tool_log, "coverage", rel, coverage_score, pct, "%"))
+                lost += _never_entered(cov)
                 gaps.append(("coverage",
                              f"{score}{unchanged_since_refusal('coverage')}{lost}`coverage` last listed {len(cov['missed'])} changed "
                              f"line(s) your test never runs. Keep going: work the missed "

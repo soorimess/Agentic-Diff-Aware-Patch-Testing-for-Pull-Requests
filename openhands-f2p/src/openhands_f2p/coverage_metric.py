@@ -384,7 +384,46 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
             # whether the test ran at all under `coverage` was this output.
             "test_run_returncode": traced.get("returncode"),
             "test_output_tail": traced.get("test_output_tail", "")[-600:],
-            "missed_source": _annotate(box, missed)}
+            "missed_source": _annotate(box, missed),
+            "missed_by_function": _by_function(box, hit, missed)}
+
+
+def _by_function(box: "Sandbox", hit: list[str], missed: list[str]) -> list[dict]:
+    """The changed lines grouped by the function holding them: how many ran, how many did
+    not. A list of 65 missed lines is not something to act on; "these three new functions
+    never run" is (astropy-13398, base: 31 of 96 lines, every one at import, through four
+    refusals that listed the lines). Read at head, like the measurement. Lines outside any
+    function are grouped under `<module>`."""
+    by_file: dict[str, list[tuple[int, bool]]] = {}
+    for refs, ran in ((hit, True), (missed, False)):
+        for ref in refs:
+            path, _, n = ref.rpartition(":")
+            if n.isdigit():
+                by_file.setdefault(path, []).append((int(n), ran))
+    out: dict[tuple[str, str], dict] = {}
+    for path, lines in by_file.items():
+        source = box.read(path)
+        try:
+            tree = ast.parse(source or "")
+        except SyntaxError:
+            continue
+        spans: list[tuple[int, int, str]] = []
+
+        def walk(node, prefix=""):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    name = f"{prefix}{child.name}"
+                    if not isinstance(child, ast.ClassDef):
+                        spans.append((child.lineno, child.end_lineno or child.lineno, name))
+                    walk(child, name + ".")
+        walk(tree)
+        for n, ran in lines:
+            inner = [sp for sp in spans if sp[0] <= n <= sp[1]]
+            name = min(inner, key=lambda sp: sp[1] - sp[0])[2] if inner else "<module>"
+            g = out.setdefault((path, name), {"path": path, "function": name,
+                                              "ran": 0, "missed": 0})
+            g["ran" if ran else "missed"] += 1
+    return sorted(out.values(), key=lambda g: (-g["missed"], g["path"], g["function"]))
 
 
 def _annotate(box: "Sandbox", refs: list[str], guards: int = 4) -> list[dict]:
