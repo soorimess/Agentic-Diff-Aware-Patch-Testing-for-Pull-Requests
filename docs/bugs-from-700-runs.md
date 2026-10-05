@@ -636,6 +636,14 @@ Found reading the base at c1d704b2 (2026-10-04):
   functions (`add_refraction`, `itrs_to_observed`, ...). Rerun: astropy-13398 in base and
   no-second-chance (the only runs that got a coverage refusal with 10+ missed lines).
 
+- **The prompt cut the fix at 8000 characters and the issue at 6000, silently**
+  (2026-10-05). astropy-13398's fix (13,883) reached the agent as `@@ -0,0 +1,145 @@ +i`:
+  the whole new module, `add_refraction` and the transforms, reduced to one letter -- and
+  the agent then held for four refusals that the module "does not exist". matplotlib-22719
+  lost 4,173 characters of its issue, scikit-learn-25747 its last 145. Limits now 20,000 /
+  30,000 (all 36 fit) and a longer text says it was cut. The judge's limits (4000 / 6000)
+  likewise. Rerun: those three PRs in base and no-second-chance.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

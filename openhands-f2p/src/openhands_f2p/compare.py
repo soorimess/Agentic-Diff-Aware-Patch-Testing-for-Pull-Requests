@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from openhands_f2p import llm_config
+from openhands_f2p.prompt import clip_marked
 
 # The prompt lives in judge_prompts/, one file per part, like the agent's in prompts/
 # (2026-09-29): numbered pieces joined in order into the system prompt, `user.md` the
@@ -237,10 +238,13 @@ def compare(instance: dict[str, Any], generated: str,
         # invalid test file" was written about a test that ran and passed. The readability
         # answer was measuring our own truncation. The rest are raised more modestly: only
         # one developer test in seventy exceeded 3000 characters.
-        problem=instance["problem_statement"].strip()[:4000],
-        patch=instance["patch"][:6000],
-        developer_test=added_lines(instance["test_patch"])[:8000],
-        generated=generated[:12000])
+        # Marked when cut (2026-10-05): the issue and fix limits were 4000 and 6000, cut
+        # silently -- astropy-13398's fix and matplotlib-22719's issue reached the judge
+        # truncated mid-line.
+        problem=clip_marked(instance["problem_statement"].strip(), 20000),
+        patch=clip_marked(instance["patch"], 30000),
+        developer_test=clip_marked(added_lines(instance["test_patch"]), 12000),
+        generated=clip_marked(generated, 12000))
     # Asked at most twice, with the identical prompt, and only when the answer cannot be
     # read. One judgement in about fifty came back unparseable in experiments-v2's first
     # pass (django-14792), with nothing on disk to say why. Same model, same settings:

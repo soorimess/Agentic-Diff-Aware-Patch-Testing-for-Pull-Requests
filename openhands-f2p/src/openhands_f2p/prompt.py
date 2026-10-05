@@ -180,6 +180,24 @@ def followup(name: str, **fields: object) -> str:
     return body.strip().format(**fields)
 
 
+# How much of the issue and the fix the prompt carries. 6000 and 8000 until 2026-10-05,
+# cut without a word: astropy-13398's fix (13,883 characters) reached the agent as
+# `@@ -0,0 +1,145 @@ +i` -- the whole new module it adds reduced to one letter -- and the
+# agent then argued for four refusals that the module "does not exist"; matplotlib-22719
+# lost 4,173 characters of its issue. Every one of the 36 fits now; a longer text is cut
+# with a line saying so.
+ISSUE_CHARS = 20000
+PATCH_CHARS = 30000
+
+
+def clip_marked(text: str, limit: int) -> str:
+    """`text` up to `limit` characters, and a line saying how much was left out if any."""
+    if len(text) <= limit:
+        return text
+    return (text[:limit] + f"\n[... {len(text) - limit} more characters not shown here -- "
+            f"read the files in the repository for the rest ...]")
+
+
 def build(*, repo: str, test_file: str, problem: str = "", repo_facts: str = "",
           patch: str = "", features: FeatureSet | None = None,
           skip: object = None) -> str:
@@ -199,7 +217,8 @@ def build(*, repo: str, test_file: str, problem: str = "", repo_facts: str = "",
 
     text = "\n\n".join(text_parts).format(
         repo=repo, test_file=test_file, repo_facts=repo_facts,
-        problem=problem.strip()[:6000], patch=patch.strip()[:8000])
+        problem=clip_marked(problem.strip(), ISSUE_CHARS),
+        patch=clip_marked(patch.strip(), PATCH_CHARS))
     _check_no_absent_tools(text, features)
     build.last_pieces = used
     return text

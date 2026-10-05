@@ -689,6 +689,10 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   "reached N% earlier" counts only fail-to-pass measurements. While a test reads source,
   duties are not asked, `verify` warns and `mutation` refuses. Unmeasurable coverage
   ("never imported") names the changed modules, in the tool and the reach diagnosis.
+- **The prompt carries the whole issue and fix (2026-10-05).** `prompt.ISSUE_CHARS` 20,000
+  and `PATCH_CHARS` 30,000 (were 6000 / 8000, cut silently); `prompt.clip_marked` adds a
+  line when anything is cut. The judge uses the same marker (issue 20,000, fix 30,000,
+  tests 12,000).
 - **A long missed list names the functions (2026-10-05).** `changed_line_coverage` adds
   `missed_by_function` (changed lines per enclosing function, ran/missed; a `def` or
   decorator line run at import does not count as entering it). From 10 missed lines a
