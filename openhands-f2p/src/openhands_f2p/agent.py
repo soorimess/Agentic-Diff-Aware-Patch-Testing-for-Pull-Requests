@@ -551,7 +551,10 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                          or V.verify_gap(tool_log, rel)
                          or V.duty_gap(tool_log, instruments(features), rel, scored=scored,
                                        refused=_first_refusals(injected),
-                                       last_refused=_last_refusals(injected)))
+                                       last_refused=_last_refusals(injected),
+                                       rewound={d for d in ("coverage", "mutation")
+                                                if any(V.rewind_said(d) in (m.get("text") or "")
+                                                       for m in injected)}))
                 if found:
                     gaps.append(found)
             # A test that flips while running none of the changed lines: asked once, and

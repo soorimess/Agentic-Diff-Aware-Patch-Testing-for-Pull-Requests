@@ -381,6 +381,13 @@ def build(root: Path = OUT) -> str:
 
     out = ["# Run status, per pull request", "",
            f"Last run in this table: {stamps[-1] if stamps else 'none'}.", ""]
+    # Where the runs come from, when they were not all made by one launch -- reused
+    # batches, best-of-two picks (user, 2026-10-05). Said at the top, not left to a file
+    # nobody opens.
+    if (root / "REUSED.md").is_file():
+        out += ["**Not one launch:** these runs come from several batches of the same "
+                "system, and some PRs are the better of two runs -- see "
+                "[REUSED.md](./REUSED.md) before comparing with other folders.", ""]
 
     out += [f"- **{len(rows)}** instances across "
             f"**{len({r['id'].split('__')[0] for r in rows})}** repositories",

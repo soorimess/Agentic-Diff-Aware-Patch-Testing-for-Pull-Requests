@@ -492,7 +492,10 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         finally:
             self.box.apply_patch(self.patch, revert=True)
 
-        self.log.append({"tool": "coverage", "target": action.target, "result": cov})
+        # The whole file as measured: a later regression is answered by handing this
+        # version back (`V._rewind`), and the write log keeps only 4000 characters.
+        self.log.append({"tool": "coverage", "target": action.target, "result": cov,
+                         "measured_text": self.box.read(action.target.split("::")[0])})
         if not cov.get("measured"):
             # Named, not just reported: seaborn-3069 (fix check) was told four times to see
             # the changed lines in `coverage` and got this bare sentence each time.
@@ -652,7 +655,8 @@ class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
         lived = [m for m in got if not m.agent_kills]
         self.log.append({"tool": "mutation", "target": action.target,
                          "total": len(got), "killed": len(killed),
-                         "survived": [m.operator for m in lived]})
+                         "survived": [m.operator for m in lived],
+                         "measured_text": self.box.read(action.target.split("::")[0])})
         lines = [f"{len(killed)} of {len(got)} wrong variants of the fix were caught by "
                  f"{action.target}."]
         if self.scored:

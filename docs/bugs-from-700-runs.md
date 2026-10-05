@@ -625,6 +625,11 @@ Found reading the base at c1d704b2 (2026-10-04):
   says so when the test spawns one.
 - A mutant deleting a line had an empty label (sklearn-25232); now "(line removed)".
 
+- **"Get that back" had no end** (base at d882f246). sklearn-25232 caught 4 of 5 mutants,
+  dropped to 3/5 adding assertions, and made nine honest attempts at 3/5 -- every one
+  refused as a regression until MAX_REFUSALS (about 48 actions). Now the refusal hands back
+  the 4/5 version once (user), and after that the loop closes like any plateau.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

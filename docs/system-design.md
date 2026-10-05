@@ -689,6 +689,13 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   "reached N% earlier" counts only fail-to-pass measurements. While a test reads source,
   duties are not asked, `verify` warns and `mutation` refuses. Unmeasurable coverage
   ("never imported") names the changed modules, in the tool and the reach diagnosis.
+- **Rewind on a regression (user, 2026-10-05).** When a coverage or mutation score falls
+  below the best the file had while fail-to-pass, the refusal hands back that version in
+  full (`V._rewind`: what it scored, what it caught or ran that is lost now, the text as
+  the tool measured it -- the tools now log `measured_text`) and asks the agent to write it
+  back. Offered once per duty and conversation (`V.rewind_said`); after it a lower score is
+  an attempt like any other, so the loop closes on the next one that does not improve.
+  Nothing is restored by the harness: the agent's last file is still what is scored.
 - **Rule B, tightened (2026-10-04).** The refusal an attempt must follow is the first
   *shortfall* refusal for that duty (`_first_refusals` filters on `SHORTFALL_SAID`); the
   attempt must measure content the tool never measured before; a loop that closed on some

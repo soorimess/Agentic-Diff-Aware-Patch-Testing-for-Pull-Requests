@@ -636,7 +636,7 @@ def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
 
 
 def _no_better(tool_log: list, tool: str, rel: str, score,
-               since: int | None = None) -> bool:
+               since: int | None = None, rewound: bool = False) -> bool:
     """Whether the agent's last attempt to improve this answer did not improve it: the test
     was changed after the last call of `tool` before that change, and the latest call
     scores no higher. That is what ends a coverage or mutation loop short of its
@@ -660,13 +660,14 @@ def _no_better(tool_log: list, tool: str, rel: str, score,
     # the very content the loop had closed on reopened it for another refusal.
     now = _content_at(tool_log, i_last, rel)
     if any(_content_at(tool_log, i, rel) == now
-           and _attempt_failed(tool_log[:i + 1], tool, rel, score, since)
+           and _attempt_failed(tool_log[:i + 1], tool, rel, score, since, rewound)
            for i, _ in calls[:-1]):
         return True
-    return _attempt_failed(tool_log, tool, rel, score, since)
+    return _attempt_failed(tool_log, tool, rel, score, since, rewound)
 
 
-def _attempt_failed(tool_log: list, tool: str, rel: str, score, since: int) -> bool:
+def _attempt_failed(tool_log: list, tool: str, rel: str, score, since: int,
+                    rewound: bool = False) -> bool:
     """`_no_better` for the last call alone, without carrying an earlier close forward."""
     calls = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
              and "error" not in e and names_test(tool_log, e.get("target", ""), rel)]
@@ -694,8 +695,12 @@ def _attempt_failed(tool_log: list, tool: str, rel: str, score, since: int) -> b
         return False
     a, b = score(prev), score(last)
     # A score below the best this file ever had is a regression, not a plateau: the loop
-    # stays open so the agent gets back what it lost.
-    if b is not None and b < (_best_before(tool_log, tool, rel, score) or b):
+    # stays open, and the refusal hands back the better version (`_rewind`). Once, per
+    # duty and conversation (user, 2026-10-05): after that a lower score is an attempt
+    # like any other. Open until the best came back, sklearn-25232 (base at d882f246)
+    # made nine honest attempts at 3/5 after a 4/5 and ran into MAX_REFUSALS.
+    if (not rewound and b is not None
+            and b < (_best_before(tool_log, tool, rel, score) or b)):
         return False
     return a is not None and b is not None and b <= a
 
@@ -721,6 +726,63 @@ def _best_before(tool_log: list, tool: str, rel: str, score) -> float | None:
     return max(earlier) if earlier else None
 
 
+def _best_call(tool_log: list, tool: str, rel: str, score) -> tuple[int, dict] | None:
+    """The earlier call of `tool` with the best score while the file was fail-to-pass
+    (the latest of equals), as `_best_before` counts them."""
+    calls = [(j, e) for j, e in enumerate(tool_log) if e.get("tool") == tool
+             and "error" not in e and names_test(tool_log, e.get("target", ""), rel)]
+    best = None
+    for j, e in calls[:-1]:
+        x = score(e)
+        if x is not None and verify_settled(tool_log[:j], rel) and (
+                best is None or x >= score(best[1])):
+            best = (j, e)
+    return best
+
+
+def rewind_said(duty: str) -> str:
+    """How a refusal that hands back the better version starts, per duty -- what the
+    agent loop looks for to offer it only once."""
+    return f"**Your test was better before (`{duty}`).**"
+
+
+def _rewind(tool_log: list, tool: str, rel: str, score, now: float | None,
+            unit: str) -> str:
+    """The better earlier version of the test, handed back (user, 2026-10-05).
+
+    Asking the agent to "get back" a score it had just lost meant asking it to regenerate
+    a file it had already written: sklearn-25232 (base at d882f246) was refused nine times
+    at 3/5 after a 4/5. The version is the agent's own and the agent writes it back -- the
+    harness restores nothing, its last file is still what is scored (user, 2026-09-30)."""
+    got = _best_call(tool_log, tool, rel, score)
+    if got is None or now is None:
+        return ""
+    j, best = got
+    text = best.get("measured_text")
+    if not text or score(best) is None or now >= score(best):
+        return ""
+    last = _last(tool_log, tool, rel)
+    if tool == "mutation":
+        gone = [m for m in (last[1].get("survived") or []) if m not in (best.get("survived") or [])]
+        what = (f"it caught {best.get('killed')} of {best.get('total')} wrong versions"
+                + (", including these, which survive now: "
+                   + "; ".join(f"`{g}`" for g in gone[:4]) if gone else ""))
+    else:
+        cov = best.get("result") or {}
+        gone = [m for m in ((last[1].get("result") or {}).get("missed") or [])
+                if m not in (cov.get("missed") or [])]
+        what = (f"it ran {cov.get('covered')} of {cov.get('executable_changed_lines')} "
+                f"changed lines" + (", including these, which no longer run: "
+                                    + ", ".join(f"`{g}`" for g in gone[:6]) if gone else ""))
+    return (f"{rewind_said(tool)} At tool call {j}, `{tool}` reported {score(best)}{unit} "
+            f"for it -- {what} -- and your edits since lowered it to {now}{unit}. This is "
+            f"that version, exactly as `{tool}` measured it:\n\n```python\n"
+            f"{text[:8000]}\n```\n\nWrite it back with `write_file` -- keep a newer "
+            f"assertion only if it loses nothing -- then call `verify` and `{tool}`. It is "
+            f"offered once: after it, a lower score counts like any attempt that did not "
+            f"improve.\n\n")
+
+
 def _lost(tool_log: list, tool: str, rel: str, score, now: float | None, unit: str) -> str:
     best = _best_before(tool_log, tool, rel, score)
     return (f"It reached {best}{unit} earlier and your last change lowered it -- get that "
@@ -739,7 +801,8 @@ def mutation_score(e: dict) -> float | None:
 def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
              scored: bool = False,
              refused: dict[str, int] | None = None,
-             last_refused: dict[str, int] | None = None) -> tuple[str, str] | None:
+             last_refused: dict[str, int] | None = None,
+             rewound: set[str] | None = None) -> tuple[str, str] | None:
     """The coverage and mutation loops, once the test flips. `require-tools`.
 
     Two loops (user, 2026-09-29), each on the tool's answer about the scored file:
@@ -769,6 +832,7 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
     """
     refused = refused or {}
     last_refused = last_refused or {}
+    rewound = rewound or set()
 
     def unchanged_since_refusal(duty: str) -> str:
         # Said when the round since the last refusal for this duty never changed the test:
@@ -818,8 +882,10 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
             elif not cov.get("measured") or not cov.get("missed"):
                 pass
             elif not _no_better(tool_log, "coverage", rel, coverage_score,
-                                refused.get("coverage")):
-                lost = _lost(tool_log, "coverage", rel, coverage_score, pct, "%")
+                                refused.get("coverage"), "coverage" in rewound):
+                lost = ((_rewind(tool_log, "coverage", rel, coverage_score, pct, "%")
+                         if "coverage" not in rewound else "")
+                        or _lost(tool_log, "coverage", rel, coverage_score, pct, "%"))
                 gaps.append(("coverage",
                              f"{score}{unchanged_since_refusal('coverage')}{lost}`coverage` last listed {len(cov['missed'])} changed "
                              f"line(s) your test never runs. Keep going: work the missed "
@@ -850,8 +916,10 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
             elif not e.get("survived"):
                 pass
             elif not _no_better(tool_log, "mutation", rel, mutation_score,
-                                refused.get("mutation")):
-                lost = _lost(tool_log, "mutation", rel, mutation_score, ms, "%")
+                                refused.get("mutation"), "mutation" in rewound):
+                lost = ((_rewind(tool_log, "mutation", rel, mutation_score, ms, "%")
+                         if "mutation" not in rewound else "")
+                        or _lost(tool_log, "mutation", rel, mutation_score, ms, "%"))
                 gaps.append(("mutation",
                              f"{score}{unchanged_since_refusal('mutation')}{lost}`mutation` last reported {len(e['survived'])} wrong "
                              f"version(s) of the fix your test does not notice. Keep going: "
