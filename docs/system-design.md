@@ -689,6 +689,9 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   "reached N% earlier" counts only fail-to-pass measurements. While a test reads source,
   duties are not asked, `verify` warns and `mutation` refuses. Unmeasurable coverage
   ("never imported") names the changed modules, in the tool and the reach diagnosis.
+- **Staleness by content (2026-10-05):** an answer is stale when the file on disk differs
+  from the one it measured (`wrote_test_after` compares `_content_at`), not whenever a
+  write happened since. The run tool flags a tool name typed as a shell command.
 - **The prompt carries the whole issue and fix (2026-10-05).** `prompt.ISSUE_CHARS` 20,000
   and `PATCH_CHARS` 30,000 (were 6000 / 8000, cut silently); `prompt.clip_marked` adds a
   line when anything is cut. The judge uses the same marker (issue 20,000, fix 30,000,

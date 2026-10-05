@@ -644,6 +644,17 @@ Found reading the base at c1d704b2 (2026-10-04):
   30,000 (all 36 fit) and a longer text says it was cut. The judge's limits (4000 / 6000)
   likewise. Rerun: those three PRs in base and no-second-chance.
 
+Found reading no-second-chance (2026-10-05):
+
+- **"Stale" meant "written since", not "different now".** astropy-13398 measured A, wrote
+  B, wrote A again, and was told A "describes a file that no longer exists". Staleness now
+  compares the file on disk with the one measured (`wrote_test_after`), which also gates
+  verify-settled and the mutation tool.
+- **A test that flipped beside a backwards one was told only "backwards"** (django-15098);
+  verify now says to keep the flipped one and names the backwards one.
+- **`verify` typed in bash got only "command not found"** (pylint-4970, never called the
+  tool); the run tool now says it is a tool.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

@@ -523,11 +523,19 @@ def test_writes(tool_log: list, rel: str | None) -> list[int]:
 
 
 def wrote_test_after(tool_log: list, i: int, rel: str | None) -> bool:
-    """Whether the test file was changed after entry `i`. Only `rel` counts: a scratch
-    file written after a passing verify produced "you edited the test since" in two runs
-    that had not touched it (no-mutation-tool django-14915, no-coverage+mutation
-    matplotlib-20859). Only a write that changed it counts (`test_writes`)."""
-    return any(j > i for j in test_writes(tool_log, rel))
+    """Whether the test file now differs from what entry `i` saw. Only `rel` counts: a
+    scratch file written after a passing verify produced "you edited the test since" in
+    two runs that had not touched it (no-mutation-tool django-14915, no-coverage+mutation
+    matplotlib-20859).
+
+    What is on disk against what was measured, not "was it written since": astropy-13398
+    (no-second-chance) wrote B after a `coverage` of A, then A again, and was told A
+    "describes a file that no longer exists" -- a byte-identical file."""
+    if rel is None:
+        return any(j > i for j in test_writes(tool_log, rel))
+    if not any(j > i for j in test_writes(tool_log, rel)):
+        return False
+    return _content_at(tool_log, len(tool_log), rel) != _content_at(tool_log, i, rel)
 
 
 def verify_settled(tool_log: list, rel: str | None = None) -> bool:

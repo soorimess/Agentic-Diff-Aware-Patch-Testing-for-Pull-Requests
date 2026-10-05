@@ -280,6 +280,15 @@ class RunExecutor(ToolExecutor[RunAction, RunObservation]):
         self.log.append({"tool": "run", "command": action.command,
                          "returncode": r.returncode, "output": r.output[:4000]})
         body = _clip(r.output) or "(no output)"
+        # One of the agent's own tools typed as a shell command. pylint-4970
+        # (no-second-chance) ran `verify tests/...` in bash, read "command not found",
+        # and never called the tool in the whole run.
+        typed = re.search(r"\b(verify|coverage|mutation|run_tests): command not found",
+                          r.output or "")
+        if typed:
+            body += (f"\n\n[harness] `{typed.group(1)}` is not a shell command: it is one of "
+                     f"your tools. Call the `{typed.group(1)}` tool itself, with `target` set "
+                     f"to your test file.")
         undone = _undo_edits(self.box, self.log, self.guard)
         dropped = _ignored(action, "run")
         return RunObservation.from_text(
@@ -833,7 +842,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                           & {n for n, v in head_out.items() if v in ("FAILED", "ERROR")})
         if not base_out and not head_out:
             head = "NOT fail-to-pass: nothing was collected -- the file does not import."
-        elif inverted:
+        elif inverted and not flipped:
             head = (f"NOT fail-to-pass, and backwards: {inverted[:3]} pass on the code as "
                     f"it is and fail once the change is applied. You have found the right "
                     f"behaviour and asserted the old side of it. Assert what the change "
@@ -843,10 +852,17 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             # sent seaborn-3069 into adding tests beside a flipping one for four verifies,
             # and then deleting the one that flipped. Twenty-one of the 700 runs ended
             # holding a correct test next to a broken one.
+            # Checked before "backwards" when something also flipped: django-15098
+            # (no-second-chance) had one test flip and one backwards and was told only
+            # "backwards", never to keep the one that worked.
+            back = [n for n in still_failing if n in inverted]
             head = (f"NOT fail-to-pass yet, but part of it is right: {flipped[:3]} fail "
                     f"before the change and pass after -- keep those. {still_failing[:3]} "
                     f"still fail after the change is applied: fix them or delete them. "
-                    f"Every test in the file has to pass once the change is in.")
+                    f"Every test in the file has to pass once the change is in."
+                    + (f" {back[:3]} pass before the change and fail after: those assert "
+                       f"the old side of the behaviour -- assert what the change makes "
+                       f"true instead." if back else ""))
         elif still_failing:
             head = (f"NOT fail-to-pass: {still_failing[:3]} still fail after the change "
                     f"is applied. The test is wrong, not the code.")
