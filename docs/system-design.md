@@ -689,6 +689,14 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   "reached N% earlier" counts only fail-to-pass measurements. While a test reads source,
   duties are not asked, `verify` warns and `mutation` refuses. Unmeasurable coverage
   ("never imported") names the changed modules, in the tool and the reach diagnosis.
+- **Coverage minus the environment (user, 2026-10-05: A').** Every coverage measurement
+  also runs an empty test in the target's directory (`coverage_metric.environment_lines`,
+  `test_f2p_environment_probe.py`, removed afterwards). Changed lines it executes -- run by
+  the runner, conftest, plugins or imports -- go to `environment` and count neither as hit
+  nor missed; all of them environment means "not measured". The tool, verify's reach line,
+  the reach diagnosis and the score all use it. Probe on the 36: 6 PRs have such lines
+  (django-15098, django-17029, pytest-10081 entirely; pytest-5262, pylint-6903,
+  django-13279 partly). A probe that fails is an error, never an empty set.
 - **Staleness by content (2026-10-05):** an answer is stale when the file on disk differs
   from the one it measured (`wrote_test_after` compares `_content_at`), not whenever a
   write happened since. The run tool flags a tool name typed as a shell command.

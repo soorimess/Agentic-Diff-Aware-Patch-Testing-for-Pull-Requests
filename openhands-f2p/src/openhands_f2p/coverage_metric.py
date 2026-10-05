@@ -305,9 +305,11 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
     traced = measure_coverage(box, targets, limit_files=0)
     if not traced.get("ok"):
         return {"measured": False, "reason": traced.get("detail", "coverage failed")}
+    env = environment_lines(box, targets)
 
     hit: list[str] = []
     missed: list[str] = []
+    environment: list[str] = []
     matched: dict[str, str] = {}
     for path, lines in wanted.items():
         info = traced["raw"].get(path)
@@ -335,13 +337,22 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
                                       if ln not in info["measurable"]}).items()
                      if at in info["measurable"]}
         scored: set[int] = set()
+        ran_anyway = env.get(matched.get(path, path), set()) | env.get(path, set())
         for ln in sorted(lines):
             at = ln if ln in info["measurable"] else elsewhere.get(ln)
             if at is None or at in scored:
                 continue               # a comment or blank, or a statement already counted
             scored.add(at)
+            if at in ran_anyway:
+                environment.append(f"{path}:{at}")    # runs with no test at all
+                continue
             (hit if at in info["executed"] else missed).append(f"{path}:{at}")
     total = len(hit) + len(missed)
+    if not total and environment:
+        return {"measured": False, "environment": environment,
+                "reason": "every changed line runs in the test environment before any test "
+                          "does (the runner, conftest, plugins or imports), so no test can be "
+                          "told apart by running it"}
     if not total:
         # Say which of the two it was. django-16333 reported this with the fix's two
         # lines plainly executable, and the message gave no way to tell whether the file
@@ -385,12 +396,45 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
             "test_run_returncode": traced.get("returncode"),
             "test_output_tail": traced.get("test_output_tail", "")[-600:],
             "missed_source": _annotate(box, missed),
+            # Changed lines an empty test runs too (user, 2026-10-05: A'): left out of
+            # `hit` and `missed` alike -- no test can be credited or faulted for them.
+            "environment": environment,
             "missed_by_function": _by_function(box, hit, missed),
             # Files the fix creates (`new file mode`): `V._never_entered` says so.
             "new_files": [ln.split(" b/", 1)[1] for ln, nxt in zip(patch.splitlines(),
                           patch.splitlines()[1:])
                           if ln.startswith("diff --git ") and " b/" in ln
                           and nxt.startswith("new file mode")]}
+
+
+ENVIRONMENT_PROBE = "test_f2p_environment_probe.py"
+_EMPTY_TEST = ("import unittest\n\n\ndef test_environment_probe():\n    pass\n\n\n"
+               "class TestEnvironmentProbe(unittest.TestCase):\n"
+               "    def test_environment_probe(self):\n        pass\n")
+
+
+def environment_lines(box: "Sandbox", targets: list[str]) -> dict[str, set[int]]:
+    """Lines an empty test executes, beside the real one -- what the environment runs.
+
+    Coverage records the whole process: the runner starting, the repository's conftest
+    files, plugins, imports. A changed line run there counts for any test, even one that
+    calls nothing: pylint-6903 (no-second-chance) asserted on `int(2/1024)` and was told
+    it "reaches part of the change" because pylint's own test setup runs `run.py:65`
+    (user, 2026-10-05: subtract a baseline, A'). The empty test sits in the same directory
+    as the target so it gets the same conftest, and is removed afterwards. A probe that
+    cannot run is an error, not an empty set: an unmeasured environment would quietly
+    credit every test with it."""
+    first = targets[0].split("::", 1)[0]
+    folder = first.rsplit("/", 1)[0] if "/" in first else ""
+    probe = f"{folder}/{ENVIRONMENT_PROBE}" if folder else ENVIRONMENT_PROBE
+    box.write(probe, _EMPTY_TEST)
+    try:
+        traced = measure_coverage(box, [probe], limit_files=0)
+    finally:
+        box.exec(f"rm -f {shlex.quote(probe)}", timeout=60)
+    if not traced.get("ok"):
+        raise RuntimeError(f"environment probe failed: {traced.get('detail')}")
+    return {k: set(v.get("executed") or ()) for k, v in traced["raw"].items()}
 
 
 def _by_function(box: "Sandbox", hit: list[str], missed: list[str]) -> list[dict]:

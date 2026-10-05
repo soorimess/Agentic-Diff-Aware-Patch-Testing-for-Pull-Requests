@@ -661,6 +661,11 @@ Found reading no-second-chance (2026-10-05):
   before the fix" for "cannot run". The note now says such a file is added by the change,
   that the tools apply it before measuring, and to reach it through the code that uses it.
 
+- **Coverage credited lines the test environment runs.** pylint-6903 (no-second-chance)
+  asserted on `int(2/1024)` and was told it "reaches part of the change": pylint's test
+  setup runs `run.py:65`. An empty test hits changed lines in 6 of 36 PRs (all of
+  django-17029, pytest-10081, django-15098). Those lines are now left out (user, A').
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each
