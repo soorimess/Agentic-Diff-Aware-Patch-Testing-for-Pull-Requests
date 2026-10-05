@@ -407,19 +407,26 @@ def _by_function(box: "Sandbox", hit: list[str], missed: list[str]) -> list[dict
             tree = ast.parse(source or "")
         except SyntaxError:
             continue
-        spans: list[tuple[int, int, str]] = []
+        spans: list[tuple[int, int, str, int]] = []
 
         def walk(node, prefix=""):
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     name = f"{prefix}{child.name}"
                     if not isinstance(child, ast.ClassDef):
-                        spans.append((child.lineno, child.end_lineno or child.lineno, name))
+                        first = min([child.lineno] + [d.lineno for d in child.decorator_list])
+                        spans.append((first, child.end_lineno or child.lineno, name,
+                                      child.body[0].lineno))
                     walk(child, name + ".")
         walk(tree)
         for n, ran in lines:
             inner = [sp for sp in spans if sp[0] <= n <= sp[1]]
-            name = min(inner, key=lambda sp: sp[1] - sp[0])[2] if inner else "<module>"
+            sp = min(inner, key=lambda sp: sp[1] - sp[0]) if inner else None
+            # The `def` and decorator lines run on import, whatever the test does: a hit
+            # there does not mean the function was entered.
+            if sp and ran and n < sp[3]:
+                continue
+            name = sp[2] if sp else "<module>"
             g = out.setdefault((path, name), {"path": path, "function": name,
                                               "ran": 0, "missed": 0})
             g["ran" if ran else "missed"] += 1

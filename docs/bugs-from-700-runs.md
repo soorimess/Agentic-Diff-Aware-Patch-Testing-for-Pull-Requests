@@ -630,6 +630,12 @@ Found reading the base at c1d704b2 (2026-10-04):
   refused as a regression until MAX_REFUSALS (about 48 actions). Now the refusal hands back
   the 4/5 version once (user), and after that the loop closes like any plateau.
 
+- **"65 changed lines your test never runs" was not actionable** (astropy-13398, base). Four
+  refusals listed the lines; the test kept asserting on an attribute and never called the
+  new transforms (31/96, every hit at import). The refusal now names the never-entered
+  functions (`add_refraction`, `itrs_to_observed`, ...). Rerun: astropy-13398 in base and
+  no-second-chance (the only runs that got a coverage refusal with 10+ missed lines).
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

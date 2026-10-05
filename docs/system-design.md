@@ -689,6 +689,11 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   "reached N% earlier" counts only fail-to-pass measurements. While a test reads source,
   duties are not asked, `verify` warns and `mutation` refuses. Unmeasurable coverage
   ("never imported") names the changed modules, in the tool and the reach diagnosis.
+- **A long missed list names the functions (2026-10-05).** `changed_line_coverage` adds
+  `missed_by_function` (changed lines per enclosing function, ran/missed; a `def` or
+  decorator line run at import does not count as entering it). From 10 missed lines a
+  coverage shortfall refusal names the functions the test never enters (`V._never_entered`).
+  The coverage tool's own output is unchanged.
 - **Rewind on a regression (user, 2026-10-05).** When a coverage or mutation score falls
   below the best the file had while fail-to-pass, the refusal hands back that version in
   full (`V._rewind`: what it scored, what it caught or ran that is lost now, the text as
