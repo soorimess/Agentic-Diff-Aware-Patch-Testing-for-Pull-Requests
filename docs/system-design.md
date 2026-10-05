@@ -695,8 +695,10 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   the runner, conftest, plugins or imports -- go to `environment` and count neither as hit
   nor missed; all of them environment means "not measured". The tool, verify's reach line,
   the reach diagnosis and the score all use it. Probe on the 36: 6 PRs have such lines
-  (django-15098, django-17029, pytest-10081 entirely; pytest-5262, pylint-6903,
-  django-13279 partly). A probe that fails is an error, never an empty set.
+  (django-15098, django-17029 entirely; pytest-5262, pylint-6903, django-13279 partly).
+  The probe is the runner's smallest test -- a `unittest.TestCase` for django's runner, a
+  plain function otherwise (2026-10-05: a `TestCase` under pytest ran pytest's unittest
+  plugin, which is pytest-10081's change). A probe that fails is an error, never an empty set.
 - **Staleness by content (2026-10-05):** an answer is stale when the file on disk differs
   from the one it measured (`wrote_test_after` compares `_content_at`), not whenever a
   write happened since. The run tool flags a tool name typed as a shell command.
@@ -720,7 +722,9 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   *shortfall* refusal for that duty (`_first_refusals` filters on `SHORTFALL_SAID`); the
   attempt must measure content the tool never measured before; a loop that closed on some
   content stays closed while the file holds it (`_no_better` / `_attempt_failed`). The
-  reach diagnosis hedges for tests that spawn a process (`V.SPAWNS`).
+  reach diagnosis hedges for tests that spawn a process (`V.starts_process`: names in
+  the parsed code -- `subprocess`, `Popen`, `multiprocessing`, `sys.executable`, ... --
+  never words in strings or comments, since 2026-10-05).
 - **Images stay loaded on a roomy disk; loads run six at once (2026-10-04).** After a run
   `image_cache.release` keeps Docker's copy while the volume has 100 GB free
   (`F2P_KEEP_IMAGES_FREE_GB`); `make_room` still evicts when short. Archive loads use

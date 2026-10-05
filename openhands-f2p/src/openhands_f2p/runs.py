@@ -384,7 +384,14 @@ def build(root: Path = OUT) -> str:
     # Where the runs come from, when they were not all made by one launch -- reused
     # batches, best-of-two picks (user, 2026-10-05). Said at the top, not left to a file
     # nobody opens.
-    if (root / "REUSED.md").is_file():
+    # A folder of picked runs (user, 2026-10-06): the largest effect a flag can show --
+    # base's best run per PR against an arm's worst, all from the same system and config.
+    if (root / "PICKED.md").is_file():
+        out += ["**Picked runs, not one launch:** each PR's run was chosen from several runs of "
+                "the same system and configuration -- the best for base, the worst for an arm -- "
+                "to show the largest effect a flag can make. This is not a fair one-sample "
+                "comparison; see [PICKED.md](./PICKED.md).", ""]
+    elif (root / "REUSED.md").is_file():
         best = "Best of two" in (root / "REUSED.md").read_text()
         out += ["**Not one launch:** these runs come from several batches of the same system"
                 + (", and some PRs are the better of two runs" if best else "")

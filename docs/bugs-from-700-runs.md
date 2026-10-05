@@ -666,6 +666,23 @@ Found reading no-second-chance (2026-10-05):
   setup runs `run.py:65`. An empty test hits changed lines in 6 of 36 PRs (all of
   django-17029, pytest-10081, django-15098). Those lines are now left out (user, A').
 
+Found reading no-require-tools (2026-10-05):
+
+- **The subprocess hedge matched words, not code.** pylint-6903 called `_query_cpu()`
+  in-process and said "multiprocessing" only in a docstring, comments and an assert
+  message; the reach diagnosis told it "your test starts a child process" -- 5 times in
+  base, twice in no-second-chance, once at the no-require-tools restart, every time false.
+  `V.starts_process` now reads names from the parsed code (`subprocess`, `Popen`,
+  `multiprocessing`, `sys.executable`, `os.system`, ...), never strings or comments.
+- **The environment probe ran pytest's unittest plugin.** The empty test held a plain
+  function *and* a `unittest.TestCase`; under pytest the class runs
+  `TestCaseFunction.runtest`, exactly what pytest-10081's fix changes, so all 3 changed
+  lines went to "environment" and the PR could never be measured (no coverage feedback,
+  no restart diagnosis, score "not measured" in all three arms). The probe is now the
+  runner's smallest test: a `TestCase` for django's runner, a plain function otherwise.
+  Re-probed on the 36: identical on 35, pytest-10081 3 -> 0 environment lines.
+  Rerun: pylint-6903 and pytest-10081 in base, no-second-chance and no-require-tools.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

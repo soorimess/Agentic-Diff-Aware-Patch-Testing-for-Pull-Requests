@@ -294,7 +294,7 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
     # went out with no diagnosis for exactly this reason.
     if not cov.get("measured") and cov.get("reason") != "the changed file was never imported by this test":
         return ""
-    flow.record(flow.VERIFY, "stop-check reach",
+    flow.record(flow.VERIFY, "reach diagnosis",
                 f"{rel}: runs {cov.get('covered', 0)} of the changed lines"
                 + ("" if cov.get("measured") else " (changed file never imported)"))
     if not cov.get("covered") and starts_process(box.read(rel) or ""):
