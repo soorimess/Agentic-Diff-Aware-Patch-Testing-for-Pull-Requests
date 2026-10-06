@@ -299,8 +299,10 @@ def parse_output(output: str) -> dict[str, str]:
         # pattern too, and was being read as a failing test named "(errors=1)". It never
         # changed a verdict -- it only appears beside a real failure -- but it reached the
         # agent as one of the tests that "still fail after the change". No test id starts
-        # with a parenthesis.
-        if m and not m.group(2).startswith("("):
+        # with a parenthesis. Nor with a bracket: pytest's skip summary,
+        # `SKIPPED [1] sklearn/tests/test_x.py:90: reason`, was read as a skipped test named
+        # "[1]" (scikit-learn-25232, no-verify) and shown to the agent beside its own.
+        if m and not m.group(2).startswith(("(", "[")):
             out[m.group(2)] = _NORMAL.get(m.group(1), m.group(1))
             continue
         m = PYTEST_VERBOSE.match(line)

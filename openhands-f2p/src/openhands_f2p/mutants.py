@@ -81,7 +81,13 @@ class Mutant:
                 "operator": self.operator,
                 "killed_by_agent_test": self.agent_kills,
                 "killed_by_developer_test": self.developer_kills,
-                "verdict": ("both" if self.agent_kills and self.developer_kills else
+                # A developer test that was never measured (None) is not a survival:
+                # requests-1766 (no-verify) read "survived both" beside a developer score
+                # of "none of the developer's tests pass on the fixed code".
+                "verdict": (("killed by agent" if self.agent_kills else "survived agent")
+                            + " (developer not measured)"
+                            if self.developer_kills is None else
+                            "both" if self.agent_kills and self.developer_kills else
                             "agent only" if self.agent_kills else
                             "developer only" if self.developer_kills else
                             "survived both")}
@@ -623,8 +629,12 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
             score.measured = True
             # A pool of one goes to the agent's half, and "offers no mutations" was false
             # of it: there was a mutant, and the agent's `mutation` tool had shown it.
-            score.why = ("the only mutant(s) on these lines went to the half reserved "
-                         "for the agent's `mutation` tool; none were left to score on"
+            # Without the tool (xarray-3677, no-verify) no agent was shown that half.
+            score.why = (("the only mutant(s) on these lines went to the half reserved "
+                          "for the agent's `mutation` tool; none were left to score on")
+                         if shown and held_out else
+                         ("the only mutant(s) on these lines went to the half that arms "
+                          "with the `mutation` tool are shown; none were left to score on")
                          if shown else
                          "mutmut offers no mutations on the lines this patch changed")
             return score

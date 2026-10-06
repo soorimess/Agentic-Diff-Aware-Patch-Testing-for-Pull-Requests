@@ -706,6 +706,22 @@ Found reading no-second-chance-no-require-tools (2026-10-06):
   Rerun: the three astropy PRs and pytest-10081 everywhere, pytest-7982 (base,
   no-require-tools), requests-1142 (#4).
 
+Found reading no-verify (2026-10-06):
+
+- **My own `run_tests` fix (252dd3aa) dropped every id on a directory target.** It filtered
+  the summary against the target as if it were a file; pylint-4970 ran `tests/checkers/`
+  and was shown only phantom ids. Filtering now applies to a `.py` target only.
+- **pytest's skip summary was read as a test named "[1]".** `SKIPPED [1] path:90: reason`
+  matched `PYTEST_LINE`; ids starting with "[" are skipped like django's "(errors=1)".
+  In data for 14 runs; shown to the agent in two (no-verify pylint-4970, sklearn-25232).
+  No verdict depended on it.
+- **Record only:** the mutation "why" named the agent's `mutation` tool in arms without it;
+  mutant labels said "survived both" when the developer test was never measured (now
+  "... (developer not measured)").
+- Deferred wording (no-verify only): "Before you finish" lists a single item "1." and then
+  says "the checks above".
+  Rerun: no-verify pylint-4970 and scikit-learn-25232.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

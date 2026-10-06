@@ -460,8 +460,12 @@ class TestExecutor(ToolExecutor[TestAction, TestObservation]):
                          "outcomes": outcomes, "output": r.output[:4000]})
         # The agent's own tests only: an inner pytester session prints ids of a temp file
         # (pytest-10081: `test_one: ERROR` beside the agent's PASSED), as in `verify`.
+        # Only for a test file: a directory or a django label holds no pytester temp file,
+        # and filtering against it dropped every real id (pylint-4970, no-verify, ran
+        # `tests/checkers/` and was shown only phantom ids).
         from openhands_f2p import verify as V
-        own = V.own_outcomes(outcomes, [action.target.split("::")[0]])
+        file = action.target.split("::")[0]
+        own = V.own_outcomes(outcomes, [file]) if file.endswith(".py") else outcomes
         summary = ", ".join(f"{k.split('::')[-1]}: {v}"
                             for k, v in list(own.items())[:12]) or "no tests ran"
         head = f"$ {command}" if self.reveal_runner else f"ran {action.target}"
