@@ -143,6 +143,38 @@ _RUNNER_NOISE = re.compile(
     r"|libraries: |base tempdir: |collecting \.\.\. |Testing against Django installed "
     r"|Skipping setup of unused database|System check identified )")
 _SECTION = re.compile(r"^=+ .+ =+$")
+# astropy's own report header, printed before every run: about 900 characters of versions
+# and options from "Running tests with Astropy version" to "IS_CRON:". In
+# no-second-chance-no-require-tools astropy-13398 it filled the clipped window, and the
+# line that said why the test failed after the fix (`PytestReturnNotNoneWarning`) sat in
+# "[2078 characters omitted]"; the agent finished on it. Every astropy verify carried it.
+# Versions differ: 3.1 ends the block at "Using Astropy options:", 5.2 and 6.0 add
+# "ARCH_ON_CI:" / "IS_CRON:" after it. The block also ends the moment real runner output
+# appears, so a header without its end marker can never swallow the test's report.
+_ASTROPY_HEADER_START = re.compile(r"^Running tests with Astropy version ")
+_ASTROPY_HEADER_END = re.compile(r"^Using Astropy options: ")
+_ASTROPY_LINE = re.compile(r"^(Internet access disabled$|hypothesis profile '|ARCH_ON_CI: "
+                           r"|IS_CRON: )")
+# A traceback frame inside pytest or pluggy themselves, and the source line under it: the
+# runner calling the test, never the test. Same run: fourteen such frames pushed the one
+# `E   ` line out of the window.
+_RUNNER_FRAME = re.compile(r"^\S*/site-packages/(_pytest|pluggy)/\S+:\d+: in ")
+
+
+def _spawn_note(box: Sandbox, target: str) -> str:
+    """A note when the test starts a child process: coverage follows this process only.
+
+    pytest-10081 (no-second-chance-no-require-tools) ran the changed code through
+    `subprocess.run` -- its mutation call killed 4 of 4 -- and was told by `verify` and
+    twice by `coverage` that the changed lines "never ran"; the caveat lived only in the
+    restart's reach diagnosis, which this arm never reaches."""
+    from openhands_f2p import verify as V
+    if not V.starts_process(box.read(target.split("::")[0]) or ""):
+        return ""
+    return (" Your test starts a child process, and coverage records only its own process:"
+            " a line that runs only in the child is listed here as never run. Where you can,"
+            " call the changed code in the test's own process so what it does is what you"
+            " assert.")
 
 
 def _import_only(box: Sandbox, cov: dict) -> str:
@@ -164,8 +196,27 @@ def _import_only(box: Sandbox, cov: dict) -> str:
 
 def _condense(text: str) -> str:
     """`text` without the lines that describe the runner instead of the test."""
-    kept, in_warnings = [], False
+    kept, in_warnings, in_astropy, frame_body = [], False, False, False
     for line in text.splitlines():
+        if frame_body:                       # the source line printed under a runner frame
+            frame_body = False
+            if line.startswith(" "):
+                continue
+        if _RUNNER_FRAME.match(line):
+            frame_body = True
+            continue
+        if in_astropy:
+            if (_SECTION.match(line) or "::" in line
+                    or line.startswith(("rootdir:", "collecting", "platform "))):
+                in_astropy = False             # the report has started: keep it
+            else:
+                in_astropy = not _ASTROPY_HEADER_END.match(line)
+                continue
+        if _ASTROPY_HEADER_START.match(line):
+            in_astropy = True
+            continue
+        if _ASTROPY_LINE.match(line):
+            continue
         if _SECTION.match(line):
             in_warnings = "warnings summary" in line
             if in_warnings:
@@ -407,8 +458,12 @@ class TestExecutor(ToolExecutor[TestAction, TestObservation]):
         self.log.append({"tool": "run_tests", "target": action.target,
                          "command": command, "returncode": r.returncode,
                          "outcomes": outcomes, "output": r.output[:4000]})
+        # The agent's own tests only: an inner pytester session prints ids of a temp file
+        # (pytest-10081: `test_one: ERROR` beside the agent's PASSED), as in `verify`.
+        from openhands_f2p import verify as V
+        own = V.own_outcomes(outcomes, [action.target.split("::")[0]])
         summary = ", ".join(f"{k.split('::')[-1]}: {v}"
-                            for k, v in list(outcomes.items())[:12]) or "no tests ran"
+                            for k, v in list(own.items())[:12]) or "no tests ran"
         head = f"$ {command}" if self.reveal_runner else f"ran {action.target}"
         dropped = _ignored(action, "run_tests")
         return TestObservation.from_text(
@@ -538,7 +593,7 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         # (base, cap 125), whose 31 "covered" lines were all imports, constants and `def`
         # lines, never saw it in four calls.
         lines = [score + "Some lines this pull request changed never ran under your test."
-                 + import_only]
+                 + _spawn_note(self.box, action.target) + import_only]
 
         # The source and the guards, not just the numbers. "line 1631 is uncovered" is
         # not something an agent can act on; "line 1631 is `Q *= q.p`, and it sits under
@@ -843,10 +898,16 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         if not base_out and not head_out:
             head = "NOT fail-to-pass: nothing was collected -- the file does not import."
         elif inverted and not flipped:
+            # The others that still fail are named too: requests-1142 (no-second-chance-
+            # no-require-tools) had one failing on both sides beside the backwards one,
+            # and the headline named only the backwards one.
+            both = [n for n in still_failing if n not in inverted]
             head = (f"NOT fail-to-pass, and backwards: {inverted[:3]} pass on the code as "
                     f"it is and fail once the change is applied. You have found the right "
                     f"behaviour and asserted the old side of it. Assert what the change "
-                    f"makes true, not what it replaces.")
+                    f"makes true, not what it replaces."
+                    + (f" {both[:3]} fail on both sides: fix them or delete them."
+                       if both else ""))
         elif still_failing and flipped:
             # Part of the file is right. Said as such, because "the test is wrong" alone
             # sent seaborn-3069 into adding tests beside a flipping one for four verifies,
@@ -973,6 +1034,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # The duty sentence was keyed on `require_tools` alone and went out in arms with
         # no `coverage`, where no check enforced it -- a rule nothing carried out.
         head = ("\n\nSome lines this pull request changed never run under this test." + pct
+                + _spawn_note(self.box, target)
                 + (" You cannot finish having read that and left it alone: either make "
                    "them run, or establish that a line cannot be reached from a test."
                    if self.require_tools else ""))

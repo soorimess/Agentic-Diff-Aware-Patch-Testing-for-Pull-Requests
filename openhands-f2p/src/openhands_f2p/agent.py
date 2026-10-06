@@ -290,7 +290,8 @@ def _joined(first: dict, second: dict, note: str) -> dict:
 MAX_REFUSALS = 10
 
 
-def _f2p_history(tool_log: list, final_code: str, final_f2p: str, d: Path) -> dict | None:
+def _f2p_history(tool_log: list, final_code: str, final_f2p: str, d: Path,
+                 rel: str = "") -> dict | None:
     """What became of the tests `verify` called fail-to-pass, for the record only.
 
     Each is written to `f2p_snapshots/` and compared with the file the agent handed in.
@@ -299,8 +300,11 @@ def _f2p_history(tool_log: list, final_code: str, final_f2p: str, d: Path) -> di
     here changes what is scored -- the agent's final file is its answer (user,
     2026-09-30). None when `verify` never said fail-to-pass.
     """
+    # Only verifies of the scored file: astropy-14995 verified a scratch `_final.py` and
+    # was recorded as handing in something other than its last fail-to-pass test.
     shots = [(i, e["f2p_test"]) for i, e in enumerate(tool_log)
-             if e.get("tool") == "verify" and "f2p_test" in e]
+             if e.get("tool") == "verify" and "f2p_test" in e
+             and (not rel or V.same_file(e.get("target") or "", rel))]
     if not shots:
         return None
     out = d / "f2p_snapshots"
@@ -1114,7 +1118,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               "second_chance": restart,
               # The tests the agent's own `verify` called fail-to-pass, and whether the
               # final one is still such a test -- record only; see `_f2p_history`.
-              "f2p_history": _f2p_history(run["tool_log"], code or "", verdict.f2p, d),
+              "f2p_history": _f2p_history(run["tool_log"], code or "", verdict.f2p, d, test_file),
               # Edits to files that existed at base -- the guard's subject. Scratch
               # files the agent created for itself are listed separately.
               "files_edited_outside_test": checks["preexisting_written"],

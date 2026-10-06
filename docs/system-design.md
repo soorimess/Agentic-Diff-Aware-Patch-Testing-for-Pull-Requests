@@ -699,6 +699,12 @@ Four more, from reading all 700 experiments-v2 runs (2026-09-27):
   The probe is the runner's smallest test -- a `unittest.TestCase` for django's runner, a
   plain function otherwise (2026-10-05: a `TestCase` under pytest ran pytest's unittest
   plugin, which is pytest-10081's change). A probe that fails is an error, never an empty set.
+- **What the runner says about itself is dropped (2026-10-06).** `_condense` (verify,
+  run_tests) also drops astropy's report header and traceback frames inside pytest/pluggy,
+  so the clipped window holds the test's own failure. `verify` and `coverage` add a
+  child-process note when a test that spawns one is told lines never ran (`_spawn_note`,
+  `V.starts_process`); "backwards" also names tests failing on both sides; the `run_tests`
+  summary lists the agent's own ids only (`V.own_outcomes`).
 - **Staleness by content (2026-10-05):** an answer is stale when the file on disk differs
   from the one it measured (`wrote_test_after` compares `_content_at`), not whenever a
   write happened since. The run tool flags a tool name typed as a shell command.

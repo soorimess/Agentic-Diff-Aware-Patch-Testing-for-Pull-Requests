@@ -683,6 +683,29 @@ Found reading no-require-tools (2026-10-05):
   Re-probed on the 36: identical on 35, pytest-10081 3 -> 0 environment lines.
   Rerun: pylint-6903 and pytest-10081 in base, no-second-chance and no-require-tools.
 
+Found reading no-second-chance-no-require-tools (2026-10-06):
+
+- **astropy's report header, and pytest's own frames, filled the clipped window.** Every
+  astropy run prints ~900 characters of versions and options; a warning raised inside
+  pytest adds a dozen `site-packages/_pytest` / `pluggy` frames. astropy-13398's one
+  `E   PytestReturnNotNoneWarning` line sat in "[2078 characters omitted]" and the agent
+  finished on it. `_condense` now drops the header (3.1's and 5.2/6.0's forms; the block
+  ends at its marker or the moment test output appears) and runner frames. Checked on 706
+  saved logs: no `E`/result line lost, no header left. Every astropy verify carried it.
+- **No child-process caveat outside the restart.** pytest-10081 ran the changed code via
+  `subprocess.run` (mutation 4/4) and `verify` and `coverage` said the lines "never ran";
+  the caveat lived only in the reach diagnosis. Both tools now add it (`_spawn_note`).
+- **"Backwards" named only the backwards test** when another failed on both sides
+  (requests-1142); it now names those too.
+- **`run_tests` summary listed pytester's inner ids** (`test_one: ERROR`); it now uses
+  `V.own_outcomes` on the target's file, as `verify` does.
+- **Record only:** `f2p_history` counted verifies of a scratch file (astropy-14995).
+- The lost first attempts against no-require-tools (22 vs 29, same first-attempt config):
+  byte-identical prompts and tool outputs; the runs part at the agent's first or second
+  action -- sampling.
+  Rerun: the three astropy PRs and pytest-10081 everywhere, pytest-7982 (base,
+  no-require-tools), requests-1142 (#4).
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each
