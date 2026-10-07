@@ -722,6 +722,26 @@ Found reading no-verify (2026-10-06):
   says "the checks above".
   Rerun: no-verify pylint-4970 and scikit-learn-25232.
 
+Found reading no-coverage (2026-10-07):
+
+- **Fixed (never fired):** `verify_gap` named `coverage` in arms without the tool; now only
+  where the arm has it.
+- **Deferred wording** (each would change many runs already made; kept as is until the
+  plan ends, like the other deferred items):
+  - `prompts/50-rules.md`: under require-tools a source-reading test "is refused when you
+    try to finish" -- false since the gate was removed (2026-10-04); in every require-tools
+    run's prompt.
+  - `verify` on fail-to-pass: "That it flips, and what it reaches, are two of the three
+    questions" -- arms without the coverage tool are never shown reach.
+  - `prompts/57b-check-notices.md`: the mutation step is numbered "4." when step 3
+    (coverage) is withheld; "flips and covers every line" in the same arm.
+  - Restart history (`agent._history`): a passes-at-base refusal keeps two paragraphs, so
+    "The file as it is on disk now:" stands without the file (the next write step shows
+    it), and a repeat is marked "the same as an earlier one" when its file differed.
+  - Second conversation: "{budget} actions left of the {cap} this run started with" fills
+    `cap` with the restart's own budget (e.g. "51 of the 74") after the restart said 125.
+  None changed a verdict in the 36 runs read.
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

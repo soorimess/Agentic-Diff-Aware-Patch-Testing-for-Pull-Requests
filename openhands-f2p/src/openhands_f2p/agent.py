@@ -552,7 +552,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 # kind (`isinstance`-only, `hasattr`-only ...); meaningfulness is the
                 # judge's `meaningful` label instead.
                 found = (V.shortfall(box, instance, rel)
-                         or V.verify_gap(tool_log, rel)
+                         or V.verify_gap(tool_log, rel, coverage="coverage-tool" in features)
                          or V.duty_gap(tool_log, instruments(features), rel, scored=scored,
                                        refused=_first_refusals(injected),
                                        last_refused=_last_refusals(injected),

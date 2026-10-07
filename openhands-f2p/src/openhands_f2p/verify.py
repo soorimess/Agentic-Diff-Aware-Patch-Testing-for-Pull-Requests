@@ -585,7 +585,7 @@ def _last(tool_log: list, tool: str, rel: str) -> tuple[int, dict] | None:
     return found[-1] if found else None
 
 
-def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
+def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, str] | None:
     """Whether the agent's own `verify` has established fail-to-pass for the file on disk.
 
     Part of `require-tools`' stop checks (for one day, 2026-09-28, the second chance's;
@@ -639,8 +639,12 @@ def verify_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
                    f"test since, so nothing has checked the file on disk now.{quoted}"
                    f"Call `verify` with `target` set to `{rel}`, and keep going until it "
                    f"says fail-to-pass. "
-                   f"`run_tests` and `coverage` do not answer this: each runs the test on "
-                   f"one side of the change only.")
+                   # `coverage` named only where the arm has it (no-coverage audit: the
+                   # sentence was ungated, though it never fired there).
+                   + ("`run_tests` and `coverage` do not answer this: each runs the test on "
+                      "one side of the change only." if coverage else
+                      "`run_tests` does not answer this: it runs the test on one side of the "
+                      "change only."))
         elif not flipped or still:
             if flipped and still:
                 said = (f"{len(flipped)} test(s) already fail before the change and pass "
