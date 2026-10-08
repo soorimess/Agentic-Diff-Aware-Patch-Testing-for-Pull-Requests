@@ -19,7 +19,7 @@ uv run python -m openhands_f2p.sources prepare chaco <ids|all>   # rows + Docker
 uv run python -m openhands_f2p.sources build chaco <ids>         # images
 uv run python -m openhands_f2p.sources validate chaco <ids>      # FAIL_TO_PASS, oracle -> runnable
 uv run python -m openhands_f2p.agent --dataset chaco <id> --model ...   # a run
-uv run python ../out-v2/run_exp.py --dataset chaco --only <ids> <name>  # base configuration
+uv run python ../swe-bench-outs/out-v2/run_exp.py --dataset chaco --only <ids> <name>  # -> chaco-outs/<name>/
 ```
 
 A run always names its dataset. It is set by `--dataset` or by `F2P_DATASET_NAME`, and the

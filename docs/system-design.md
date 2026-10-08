@@ -514,7 +514,7 @@ The experiment plan is `out-v2/tool-experiments-out-v2-36-prs.md`.
 ### On the laptop (2026-09-27 to 2026-10-03)
 
 Experiments go in **`out-v2/<name>/`**, one folder per experiment, named after the change
-it tests, run by `out-v2/run_exp.py` (the 36 local instances, both caches, `--mutants 20`,
+it tests, run by `swe-bench-outs/out-v2/run_exp.py` (the 36 local instances, both caches, `--mutants 20`,
 the model and temperature fixed; see its docstring). `out-v2/base/` is the reference.
 
 The free-space guard reads the smaller of the Docker VM's free space and the host's:
@@ -537,7 +537,7 @@ each and new ones go to the first. The combined list is `evaluation/local-36-prs
 
 ```bash
 cd openhands-f2p
-uv run python ../out-v2/run_exp.py --parallel 18 --dry-run base    # sets both variables
+uv run python ../swe-bench-outs/out-v2/run_exp.py --parallel 18 --dry-run base    # sets both variables
 ```
 
 Leave archiving on (no `F2P_NO_ARCHIVE`): the laptop link is what the cache exists for.
@@ -550,7 +550,7 @@ pair on 36 should be read as direction, not effect.
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1471 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1474 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 167 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 293 | How does the generated test compare with the developer's, on concept, issue coverage and readability? |
 | `coverage_metric.py` | 580 | Of the lines this pull request changed, how many did the test execute? |
@@ -560,8 +560,8 @@ pair on 36 should be read as direction, not effect.
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
 | `image_build.py` | 91 | Images no registry has: built here, from the Dockerfile a dataset's adapter wrote. |
 | `image_cache.py` | 313 | Instance images kept on the host disk, so each one is pulled from the registry once. |
-| `images.py` | 471 | Prepared SWE-bench images, and the disk they compete for. |
-| `layout.py` | 29 | Where the project is on disk, and the environment it runs with. |
+| `images.py` | 471 | Instance images -- pulled from a registry or built (image_build.py) -- and the disk they compete for. |
+| `layout.py` | 41 | Where the project is on disk, and the environment it runs with. |
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 187 | One place the model connection is configured, shared by every caller. |
 | `models.py` | 343 | Which model answers, and what it needs, read from `models.json`. |
@@ -576,7 +576,7 @@ pair on 36 should be read as direction, not effect.
 | `sandbox_tools.py` | 1167 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `sources/__init__.py` | 113 | Where instances come from: one adapter per dataset, one standard row for the harness. |
 | `sources/__main__.py` | 101 | The datasets, and getting one ready to run. |
-| `sources/chaco.py` | 487 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
+| `sources/chaco.py` | 490 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
 | `sources/swebench.py` | 94 | SWE-bench Verified: the dataset the harness was built on, read as it always was. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 93 | The SWE-bench environment, as one import. |
@@ -1092,7 +1092,7 @@ uv run openhands-f2p --out-root out/nocov --add-verify-tool --add-mutation-tool 
 | `--recheck` | re-judge the saved tests under the current harness, without calling the model again |
 | `--retry-broken` | run only instances with no result, or whose result is BROKEN. A BROKEN verdict records that the harness or the connection failed and says nothing about the instance, so it is worth retrying; YES and NO are findings and are left alone |
 | `--parallel` | how many PRs to run at once (F2P_MAX_PARALLEL, default 5) |
-| `--out-root` | write results here instead of out/default/. `out/` is a container of run folders -- one per run, e.g. out/out_full_run/ -- which is how a series stays separable |
+| `--out-root` | write results here instead of swe-bench-outs/out/default/ (<dataset>-outs/default/ for another dataset). `out/` is a container of run folders -- one per run, e.g. out/out_full_run/ -- which is how a series stays separable |
 | `--dataset` | which dataset the instances come from (F2P_DATASET_NAME, default swebench). `python -m openhands_f2p.sources list` shows each and what is prepared of it. Choices: `swebench`, `chaco`. |
 | `--label` | a name for this run, recorded in every result. Defaults to the configuration, e.g. no-coverage-tool |
 
@@ -1129,7 +1129,7 @@ uv run openhands-f2p --out-root out/nocov --add-verify-tool --add-mutation-tool 
 ## What a run leaves behind
 
 One directory per instance inside the run folder, indexed by that folder's `RUNS.md` --
-[`out/out_full_run/RUNS.md`](../out/out_full_run/RUNS.md) for the twenty-six -- which is
+[`out/out_full_run/RUNS.md`](../swe-bench-outs/out/out_full_run/RUNS.md) for the twenty-six -- which is
 regenerated from the results on disk at the end of every run.
 
 `out/` is a container, not a run: one subdirectory per run (`out/out_full_run/`,
@@ -1192,7 +1192,7 @@ on instances it was not tuned against.
 
 `gpt-5-mini` passes **10/10** of them. Four models have been run over the set; the table
 and what it says about where a tool can still help are in
-[`evaluation/RUNS.md`](../evaluation/RUNS.md) and [decisions.md](decisions.md).
+[`evaluation/RUNS.md`](../swe-bench-outs/evaluation/RUNS.md) and [decisions.md](decisions.md).
 
 ## A line is not always a statement
 

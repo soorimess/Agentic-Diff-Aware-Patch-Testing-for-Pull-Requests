@@ -1,9 +1,9 @@
 """Run experiments on the laptop's 36 local instances, one folder per experiment.
 
     cd openhands-f2p
-    uv run python ../out-v2/run_exp.py --parallel 36 base
-    uv run python ../out-v2/run_exp.py --parallel 36 base base-repeat      # noise floor
-    uv run python ../out-v2/run_exp.py --parallel 36 \
+    uv run python ../swe-bench-outs/out-v2/run_exp.py --parallel 36 base
+    uv run python ../swe-bench-outs/out-v2/run_exp.py --parallel 36 base base-repeat      # noise floor
+    uv run python ../swe-bench-outs/out-v2/run_exp.py --parallel 36 \
         no-mutation=--add-verify-tool,--add-coverage-tool,--add-guard,--add-require-tools,--add-second-chance
 
 Each spec is `name` or `name=--flag,--flag`. A bare name runs the base configuration --
@@ -41,19 +41,19 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
+ROOT = HERE.parent.parent                  # swe-bench-outs/out-v2 -> the project
 # Which dataset (`--dataset`, default swebench), read before the harness is imported
 # because it decides the instance list. SWE-bench runs are the 36 local instances and land
 # in `out-v2/<name>/`, as always; another dataset runs its prepared, runnable instances
-# (`python -m openhands_f2p.sources info <dataset>`) into `out/<dataset>/<name>/`.
+# (`python -m openhands_f2p.sources info <dataset>`) into `<dataset>-outs/<name>/`.
 _pre = argparse.ArgumentParser(add_help=False)
 _pre.add_argument("--dataset", default=None)
 DATASET = _pre.parse_known_args()[0].dataset or os.getenv("F2P_DATASET_NAME") or "swebench"
 os.environ["F2P_DATASET_NAME"] = DATASET
-RESULTS = HERE if DATASET == "swebench" else ROOT / "out" / DATASET
+RESULTS = HERE if DATASET == "swebench" else ROOT / f"{DATASET}-outs"
 # Set before the harness is imported: `prs.py` and `image_cache.py` read them at import.
 if DATASET == "swebench":
-    os.environ.setdefault("F2P_PRS_FILE", str(ROOT / "evaluation" / "local-36-prs.json"))
+    os.environ.setdefault("F2P_PRS_FILE", str(ROOT / "swe-bench-outs" / "evaluation" / "local-36-prs.json"))
 os.environ.setdefault("F2P_IMAGE_CACHE", "image-cache" + os.pathsep + "image-cache-evaluation")
 # The server pulls from Docker Hub (~85 MB/s for one stream; a 5.3 GB image in 64 s), and
 # one pull at a time would leave the last of 36 jobs waiting half an hour. Six at once.
@@ -162,7 +162,7 @@ def main() -> int:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--dataset", default=None,
                    help="swebench (default: the 36 local instances) or another prepared "
-                        "dataset, e.g. chaco; results then go to out/<dataset>/<name>/")
+                        "dataset, e.g. chaco; results then go to <dataset>-outs/<name>/")
     p.add_argument("--with-judge", action="store_true",
                    help="judge each YES inside the run (off by default)")
     p.add_argument("--judge", action="store_true",

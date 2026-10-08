@@ -722,7 +722,7 @@ boundary that forbids quoting the head run is not what is holding this back; the
 
 And the flag is free: the arm ran 32 *fewer* actions than its control and cost four cents
 less. The per-instance tables are in
-[the comparison](../evaluation/qwen3coder-comparison/second-chance.md).
+[the comparison](../swe-bench-outs/evaluation/qwen3coder-comparison/second-chance.md).
 
 One caution attached to all three pairs. A single repeat of ten instances cannot separate 5
 from 6 -- the same corpus has returned 4, 5 and 6 across recent configurations, and in this
@@ -947,6 +947,6 @@ false.
 
 `_relative()` strips the repository prefix as a prefix. The `passes_at_base` and
 `collects_nothing` reasons appearing in
-[the second-chance comparison](../evaluation/qwen3coder-comparison/second-chance.md) are the
+[the second-chance comparison](../swe-bench-outs/evaluation/qwen3coder-comparison/second-chance.md) are the
 first time those branches have been observed firing; before the fix every recorded reason
 was `loop_open`.

@@ -45,7 +45,7 @@ from openhands_f2p import image_cache, mutants
 from openhands_f2p import models
 from openhands_f2p import models as M
 from openhands_f2p.features import FeatureSet, add_arguments, instruments
-from openhands_f2p.layout import CACHE, OUT, PROJECT_ROOT
+from openhands_f2p.layout import CACHE, OUT, PROJECT_ROOT, default_out
 from openhands_f2p.parallel import (CHILD_ENV_FLAG, _child_argv, _needs_retry,
                                     _run_children)
 from openhands_f2p.prs import pick
@@ -1252,7 +1252,8 @@ def build_parser() -> argparse.ArgumentParser:
                    default=int(os.getenv("F2P_MAX_PARALLEL") or 5),
                    help="how many PRs to run at once (F2P_MAX_PARALLEL, default 5)")
     p.add_argument("--out-root", default=None,
-                   help="write results here instead of out/default/. `out/` is a "
+                   help="write results here instead of swe-bench-outs/out/default/ "
+                        "(<dataset>-outs/default/ for another dataset). `out/` is a "
                         "container of run folders -- one per run, e.g. "
                         "out/out_full_run/ -- which is how a series stays separable")
     p.add_argument("--dataset", default=None, choices=sources.names(),
@@ -1322,8 +1323,10 @@ def main() -> int:
 
     features = FeatureSet.from_args(args)
     # Resolved before the early-returning branches below, which all report on a series
-    # and so all need to know which one.
-    out_root = Path(args.out_root) if args.out_root else None
+    # and so all need to know which one. Another dataset's run never defaults into the
+    # SWE-bench results folder.
+    out_root = Path(args.out_root) if args.out_root else (
+        None if dataset.name == "swebench" else default_out(dataset.name))
     prs = pick(args.which)
 
     if args.retry_broken:

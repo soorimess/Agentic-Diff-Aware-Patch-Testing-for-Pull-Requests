@@ -62,7 +62,7 @@ unauthenticated GitHub API allows 60 calls an hour and a PR takes 2–3.
 
 | run | PR | verdict | changed-line coverage | mutants (agent / developer) | actions |
 |---|---|---|---|---|---|
-| [`out/chaco/base`](../../out/chaco/base/RUNS.md), 2026-10-08 | pandas-dev/pandas#60505 | YES | 100% (4/4) | 2/2 / 1/2 | 39 |
+| [`chaco-outs/base`](../../chaco-outs/base/RUNS.md), 2026-10-08 | pandas-dev/pandas#60505 | YES | 100% (4/4) | 2/2 / 1/2 | 39 |
 
 The configuration matches the out-v2 base run: qwen3-coder-30b, temperature 0.3, a cap
 of 125 actions, all add-ons, 20 mutants, and no judge.

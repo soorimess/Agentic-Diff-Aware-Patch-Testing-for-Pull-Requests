@@ -10,15 +10,15 @@ The agent runs **on the host**; only its effects reach the container, each as a
 [docs/system-design.md](docs/system-design.md) for the architecture, the diagrams and the
 decisions behind them.
 
-- **Results, per pull request:** [out/out_full_run/RUNS.md](out/out_full_run/RUNS.md)
-- **Held-out evaluation, four models:** [evaluation/RUNS.md](evaluation/RUNS.md)
+- **Results, per pull request:** [swe-bench-outs/out/out_full_run/RUNS.md](swe-bench-outs/out/out_full_run/RUNS.md)
+- **Held-out evaluation, four models:** [swe-bench-outs/evaluation/RUNS.md](swe-bench-outs/evaluation/RUNS.md)
 - **Design:** [docs/system-design.md](docs/system-design.md)
 - **Why it is built that way:** [docs/decisions.md](docs/decisions.md) — the measurements, the bugs and the dead ends
 - **What to measure next:** [docs/experiments.md](docs/experiments.md) — queued experiments, with costs and wall clock
 - **Prompt design:** [openhands-f2p/src/openhands_f2p/prompts/README.md](openhands-f2p/src/openhands_f2p/prompts/README.md)
 
 The twenty-six instances in `out/out_full_run/` are the ones every prompt here was written
-while looking at. The ten in `evaluation/` are not: one per repository, drawn by seed, run
+while looking at. The ten in `swe-bench-outs/evaluation/` are not: one per repository, drawn by seed, run
 through the same code with nothing special-cased. `gpt-5-mini` passes **10/10** of them,
 which is the only evidence in this repository that the system works on instances nobody
 tuned it against.
@@ -55,21 +55,24 @@ you have; `openhands_f2p/dataset.py` prints the fetch command if it cannot find 
 | `F2P_MODELS_FILE` | a model registry somewhere other than `models.json` at the project root |
 | `F2P_MAX_PARALLEL` | PRs at once, default 5. Higher is not better: 30 exceeded the Docker VM's disk and rate-limited the gateway into failing four instances |
 | `F2P_DATASET` | path to the SWE-bench Verified dump |
-| `F2P_PRS_FILE` | a JSON list of instances to run instead of the twenty-six built in, e.g. `evaluation/prs.json`. Same shape; nothing is special-cased for it |
+| `F2P_PRS_FILE` | a JSON list of instances to run instead of the twenty-six built in, e.g. `swe-bench-outs/evaluation/prs.json`. Same shape; nothing is special-cased for it |
 | `F2P_IMAGE_CACHE` | where image archives are kept, default `image-cache/`. The evaluation set uses `image-cache-evaluation/` |
 | `F2P_PROMPT_SKIP` | comma-separated prompt pieces to omit, e.g. `check-flips` |
 
 To run the held-out set rather than the twenty-six:
 
 ```bash
-F2P_PRS_FILE=evaluation/prs.json F2P_IMAGE_CACHE=image-cache-evaluation \
+F2P_PRS_FILE=swe-bench-outs/evaluation/prs.json F2P_IMAGE_CACHE=image-cache-evaluation \
   uv run python -m openhands_f2p.agent all --model gpt-5-mini \
-  --out-root evaluation/out_gpt5mini --mutants 10 --parallel 10
+  --out-root swe-bench-outs/evaluation/out_gpt5mini --mutants 10 --parallel 10
 ```
 
-`out/` holds one folder per run — `out/out_full_run/`, `out/out_compare_repo_search/`, and
+Results are kept per dataset. Everything run on SWE-bench is under `swe-bench-outs/`
+(`out/`, `out-v2/`, `experiments*/`, `evaluation/`), and ChaCo's runs are under
+`chaco-outs/` (see [datasets/README.md](datasets/README.md)). `swe-bench-outs/out/` holds
+one folder per run, e.g. `out/out_full_run/` and `out/out_compare_repo_search/`, plus
 `out/default/` for a run given no `--out-root`. Evaluation runs live apart, under
-`evaluation/`.
+`swe-bench-outs/evaluation/`.
 
 ### Which model answers
 
@@ -152,7 +155,7 @@ root, `openhands-f2p/.venv/bin/python main.py 3` also works.
 | `--retry-broken` | rerun only the instances with no usable result |
 | `--mutants N` | after the verdict, generate N mutants of the patch with `mutmut` and report how many the agent's test kills and how many the maintainer's does, on the same set |
 | `--no-compare` | skip the final judgement against the maintainer's test |
-| `--out-root DIR` | write results here instead of `out/default/`. `out/` holds one folder per run |
+| `--out-root DIR` | write results here instead of `swe-bench-outs/out/default/` (`chaco-outs/default/` for ChaCo). Each run gets its own folder |
 | `--label NAME` | a name for this run, recorded in every result |
 | `--max-iterations N` | cap on agent steps, default 100. One instance has reached it: `sphinx-7454` spent 91 of its 100 steps in `run`, searching rather than looping |
 
@@ -315,7 +318,7 @@ uv run python -m openhands_f2p.trace 3 --llm 2    # the raw 2nd LLM exchange
 timeline, upload `out/<run>/<id>/trajectory.json` at
 [trajectory-visualizer.vercel.app](https://trajectory-visualizer.vercel.app/).
 
-[out/out_full_run/RUNS.md](out/out_full_run/RUNS.md) is the index: one row per pull request with its verdict,
+[swe-bench-outs/out/out_full_run/RUNS.md](swe-bench-outs/out/out_full_run/RUNS.md) is the index: one row per pull request with its verdict,
 coverage, and when it last ran. It is regenerated from the results on disk at the end of
 every run, so it cannot drift.
 
