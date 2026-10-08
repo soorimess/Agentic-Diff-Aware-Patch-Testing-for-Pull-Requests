@@ -396,15 +396,19 @@ def prepare_one(repo: str, number: int) -> dict:
     elif not any(p.endswith(".py") for p in _paths(patch)):
         row.update(status="unsupported", why="the change touches no Python source")
     elif not test_patch.strip():
-        row.update(status="prepared", why="no developer test: FAIL_TO_PASS cannot be "
-                                          "derived, so there is nothing to judge against")
+        # Common in ChaCo, whose PRs were chosen for lines their own tests leave
+        # uncovered: 9 of the 30 ablation PRs add no test at all. Not built or run for
+        # now -- FAIL_TO_PASS cannot be derived, and the developer column of mutation
+        # and the judge both need a developer test.
+        row.update(status="no-developer-test",
+                   why="the PR adds or changes no test: FAIL_TO_PASS cannot be derived")
     elif any(p.endswith(".rs") for p in compiled):
         row.update(status="unsupported",
                    why=f"the change touches Rust ({compiled[:3]}), which the editable "
                        f"install does not rebuild on import")
     else:
         row.update(status="prepared", why="awaiting build and validate")
-    if row["status"] != "unsupported":
+    if row["status"] not in ("unsupported", "no-developer-test"):
         DOCKERFILES.mkdir(parents=True, exist_ok=True)
         (DOCKERFILES / f"{iid}.Dockerfile").write_text(dockerfile(row))
     return row
@@ -461,7 +465,7 @@ def validate(iid: str, quiet: bool = False) -> dict:
     if iid not in rows:
         raise SystemExit(f"{iid} is not prepared; run prepare first")
     row = rows[iid]
-    if row["status"] == "unsupported" or not row["test_patch"].strip():
+    if row["status"] in ("unsupported", "no-developer-test") or not row["test_patch"].strip():
         print(f"  {iid}: {row['status']} -- {row.get('why')}")
         return row
     sources.select(NAME)

@@ -37,7 +37,8 @@ def _ids(mod, which: str, buildable: bool = False) -> list[str]:
             out.append(w)
     out = list(dict.fromkeys(out))
     if buildable:
-        out = [i for i in out if rows.get(i, {}).get("status", "unsupported") != "unsupported"]
+        out = [i for i in out if rows.get(i, {}).get("status", "unsupported")
+               not in ("unsupported", "no-developer-test")]
     return out
 
 
