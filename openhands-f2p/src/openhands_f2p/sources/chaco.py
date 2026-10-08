@@ -29,6 +29,8 @@ unauthenticated limit of 60 an hour, which 145 PRs (2-3 calls each) exceed.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -46,12 +48,15 @@ INSTANCES = HOME / "instances.json"
 PRS_FILE = HOME / "prs.json"
 DOCKERFILES = HOME / "dockerfiles"
 BENCHMARK = HOME / "benchmark" / "rq_full.json"
+# ChaCo's lists. `full` is the benchmark (RQ1, 145 PRs); `ablation` is the 30 (10 per
+# project) its ablation study (RQ3) ran on, all of them inside `full`.
+LISTS = {"full": "rq_full.json", "ablation": "rq_ablation.json"}
 
 # The paper's artifact, pinned: the list must not move under a run that cites it.
 CHACO_REPO = "UCLA-SEAL/Change-Cover"
 CHACO_COMMIT = "d3be9a251d917a657a7675141728977c17aec117"
 BENCHMARK_URL = (f"https://raw.githubusercontent.com/{CHACO_REPO}/{CHACO_COMMIT}"
-                 f"/config/benchmark/rq_full.json")
+                 f"/config/benchmark/{{name}}")
 
 IMAGE_REPO = "f2p-chaco"
 GH_CACHE = CACHE / "github"
@@ -78,18 +83,29 @@ def image_for(iid: str) -> str:
 
 
 # ------------------------------------------------------------------ the benchmark list
-def benchmark() -> list[tuple[str, int]]:
-    """(repo, PR number), in the paper's order. Fetched once, then read from disk."""
-    if not BENCHMARK.exists():
-        BENCHMARK.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(BENCHMARK_URL, timeout=60) as r:
-            BENCHMARK.write_bytes(r.read())
-    projects = json.loads(BENCHMARK.read_text())["projects"]
+def benchmark(which: str = "full") -> list[tuple[str, int]]:
+    """(repo, PR number) of one of ChaCo's lists, in its order. Fetched once, then read
+    from `benchmark/` (pinned at CHACO_COMMIT)."""
+    if which not in LISTS:
+        raise SystemExit(f"unknown ChaCo list {which!r}; known: {', '.join(LISTS)}")
+    path = BENCHMARK.parent / LISTS[which]
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(BENCHMARK_URL.format(name=LISTS[which]),
+                                    timeout=60) as r:
+            path.write_bytes(r.read())
+    projects = json.loads(path.read_text())["projects"]
     return [(repo, int(n)) for repo, v in projects.items() for n in v["pr_numbers"]]
 
 
+def lists_of(iid: str) -> list[str]:
+    """The ChaCo lists this PR is on."""
+    repo, n = parse_id(iid)
+    return [name for name in LISTS if (repo, n) in benchmark(name)]
+
+
 # ------------------------------------------------------------------ GitHub, cached
-def _gh(path: str) -> dict | list:
+def _gh(path: str):
     """One GitHub API GET, kept on disk so a re-prepare costs no quota."""
     cached = GH_CACHE / (path.strip("/").replace("/", "__") + ".json")
     if cached.exists():
@@ -184,6 +200,22 @@ def _clean(body: str | None) -> str:
     return body.strip()
 
 
+def hints(repo: str, issues: list[int], before: str) -> str:
+    """SWE-bench's `hints_text`: comments on the issue posted before the fix existed.
+
+    SWE-bench cuts at the fix's first commit; this cuts at the PR's creation, which is
+    the same moment for a PR opened with its first commit and a little later otherwise.
+    """
+    out = []
+    for n in issues:
+        try:
+            comments = _gh(f"repos/{repo}/issues/{n}/comments?per_page=100")
+        except urllib.error.HTTPError:
+            continue
+        out += [c.get("body") or "" for c in comments if c.get("created_at", "") < before]
+    return "\n".join(c.strip() for c in out if c.strip())
+
+
 def problem_statement(repo: str, pr: dict) -> tuple[str, list[int]]:
     """The issues the PR says it closes, then the PR's own title and description.
 
@@ -214,6 +246,7 @@ def problem_statement(repo: str, pr: dict) -> tuple[str, list[int]]:
 RECIPES = {
     "pandas-dev/pandas": {
         "python": "3.11",
+        "dist": "pandas",
         # The X and GL libraries are for pytest-qt, which requirements-dev.txt installs
         # and pytest loads as a plugin: without libgthread every pandas test run is an
         # INTERNALERROR before collection (found by `validate`, 2026-10-08). ChaCo's own
@@ -226,6 +259,7 @@ RECIPES = {
     },
     "scipy/scipy": {
         "python": "3.12",
+        "dist": "scipy",
         "apt": "git build-essential gfortran pkg-config curl libopenblas-dev liblapack-dev",
         "submodules": True,
         "deps": ("uv pip install --system --exclude-newer {date} "
@@ -236,6 +270,7 @@ RECIPES = {
     },
     "Qiskit/qiskit": {
         "python": "3.11",
+        "dist": "qiskit",
         "apt": "git build-essential pkg-config curl",
         "rust": True,
         "deps": ("uv pip install --system --exclude-newer {date} "
@@ -294,6 +329,24 @@ def _read_rows() -> dict[str, dict]:
     return {r["instance_id"]: r for r in json.loads(INSTANCES.read_text())}
 
 
+@contextlib.contextmanager
+def _locked():
+    """One writer at a time: `build`/`validate --parallel` run a process per PR, and each
+    saves its own row into the shared file."""
+    INSTANCES.parent.mkdir(parents=True, exist_ok=True)
+    with open(INSTANCES.with_suffix(".lock"), "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+
+
+def save_row(row: dict) -> None:
+    """Replace one row, re-reading the file under the lock so a sibling's row survives."""
+    with _locked():
+        rows = _read_rows()
+        rows[row["instance_id"]] = row
+        _write_rows(rows)
+
+
 def _write_rows(rows: dict[str, dict]) -> None:
     INSTANCES.parent.mkdir(parents=True, exist_ok=True)
     order = {instance_id(r, n): i for i, (r, n) in enumerate(benchmark())}
@@ -301,6 +354,7 @@ def _write_rows(rows: dict[str, dict]) -> None:
     INSTANCES.write_text(json.dumps(ordered, indent=1) + "\n")
     runnable = [{"id": r["instance_id"], "tier": 0, "runner": "pytest",
                  "version": r.get("version", ""), "build": "built", "localise": "unknown",
+                 "lists": r.get("chaco_lists", []),
                  "note": r["title"][:100], "why": r["source_url"]}
                 for r in ordered if r.get("status") == "runnable"]
     PRS_FILE.write_text(json.dumps(runnable, indent=1) + "\n")
@@ -331,7 +385,8 @@ def prepare_one(repo: str, number: int) -> dict:
     row.update(base_commit=base, environment_setup_commit=base, merge_commit=merge,
                base_date=base_date, patch=patch, test_patch=test_patch,
                problem_statement=problem, closes_issues=issues,
-               binary_files_left_out=binary)
+               hints_text=hints(repo, issues, pr["created_at"]),
+               chaco_lists=lists_of(iid), binary_files_left_out=binary)
     compiled = [p for p in _paths(patch) if p.endswith(COMPILED)]
     row["compiled_files"] = compiled
     if repo not in RECIPES:
@@ -360,21 +415,34 @@ def _paths(diff: str) -> list[str]:
             if ln.startswith("diff --git ")]
 
 
+VALIDATION_FIELDS = ("FAIL_TO_PASS", "PASS_TO_PASS", "status", "why", "validated_at",
+                     "validation", "version")
+
+
 def prepare(ids: list[str] | None = None) -> list[dict]:
-    """Rows for `ids` (all 145 when None). Rows already validated are kept as they are."""
-    rows = _read_rows()
-    todo = benchmark() if not ids else [parse_id(i) for i in ids]
+    """Rows for `ids`: instance ids, or a list name (`full`, `ablation`); all 145 when None.
+
+    A row is always re-derived. When its base, change and tests come out identical, what
+    `validate` found is kept; when any of them differ, the row goes back to `prepared`.
+    """
+    if not ids:
+        todo = benchmark("full")
+    else:
+        todo = []
+        for i in ids:
+            todo += benchmark(i) if i in LISTS else [parse_id(i)]
     out = []
     for repo, number in todo:
         iid = instance_id(repo, number)
-        if rows.get(iid, {}).get("status") in ("runnable", "not-fail-to-pass"):
-            out.append(rows[iid])
-            continue
         row = prepare_one(repo, number)
-        rows[iid] = row
-        _write_rows(rows)
+        old = _read_rows().get(iid)
+        if (old and old.get("validated_at") and row["status"] == "prepared"
+                and all(old.get(k) == row.get(k)
+                        for k in ("base_commit", "patch", "test_patch"))):
+            row.update({k: old[k] for k in VALIDATION_FIELDS if k in old})
+        save_row(row)
         out.append(row)
-        print(f"  {row['status']:<12} {iid:32s} {row.get('why', '')[:70]}")
+        print(f"  {row['status']:<16} {iid:32s} {row.get('why', '')[:70]}")
     return out
 
 
@@ -411,6 +479,12 @@ def validate(iid: str, quiet: bool = False) -> dict:
         p2p = sorted(n for n, s in b.items() if s == "PASSED" and a.get(n) == "PASSED")
         box.apply_patch(row["patch"], revert=True)
         box.apply_patch(row["test_patch"], revert=True)
+        # SWE-bench's `version`: the package's major.minor, read off the installed copy.
+        dist = RECIPES[row["repo"]]["dist"]
+        v = box.exec("python -c \"import importlib.metadata as m; print(m.version('"
+                     + dist + "'))\"", workdir="/").stdout.strip().splitlines()
+        m = re.match(r"(\d+)\.(\d+)", v[-1] if v else "")
+        row["version"] = f"{m.group(1)}.{m.group(2)}" if m else ""
         row.update(FAIL_TO_PASS=json.dumps(f2p), PASS_TO_PASS=json.dumps(p2p),
                    validated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                    validation={"test_files": files, "collected_before": len(b),
@@ -433,8 +507,7 @@ def validate(iid: str, quiet: bool = False) -> dict:
                 row.update(status="oracle-mismatch",
                            why=f"derived {len(f2p)} flipping test(s) but verify() says "
                                f"{oracle.f2p}: {oracle.why[:200]}")
-    rows[iid] = row
-    _write_rows(rows)
+    save_row(row)
     print(f"  {row['status']:<16} {iid:32s} {row['why'][:90]}")
     return row
 

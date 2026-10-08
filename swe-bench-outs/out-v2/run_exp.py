@@ -157,7 +157,9 @@ def main() -> int:
     p.add_argument("specs", nargs="+", help="name or name=--flag,--flag")
     # 36 on the server (since 2026-10-04: 16 CPUs, 31 GB, 287 GB disk); the laptop ran 18.
     p.add_argument("--parallel", type=int, default=36)
-    p.add_argument("--only", default="", help="comma-separated instance ids, for a smoke run")
+    p.add_argument("--only", default="",
+                   help="comma-separated instance ids (a smoke run), or a sub-list of the "
+                        "dataset such as ChaCo's `ablation`")
     p.add_argument("--retry-broken", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--dataset", default=None,
@@ -177,7 +179,8 @@ def main() -> int:
 
     if DATASET == "swebench" and len(PRS) != 36 and not a.only:
         raise SystemExit(f"  expected the 36 local instances, got {len(PRS)}")
-    prs = [pr for pr in PRS if not a.only or pr["id"] in a.only.split(",")]
+    # `--only` takes what `agent` takes: ids, or a dataset's sub-list such as `ablation`.
+    prs = A.pick(a.only) if a.only else PRS
     parser = A.build_parser()
     per_exp = {}
     for spec in a.specs:

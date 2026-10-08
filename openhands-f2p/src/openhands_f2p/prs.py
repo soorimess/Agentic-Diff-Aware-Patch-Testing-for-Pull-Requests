@@ -342,6 +342,10 @@ def pick(which: str) -> list[dict]:
             group = sorted((BY_ID[i] for i in ids), key=key)
             out.append(group[0] if which == "old" else group[-1])
         return sorted(out, key=lambda p: PRS.index(p))
+    # A dataset's own sub-list, e.g. ChaCo's `ablation` (the `lists` its rows carry).
+    hits = [p for p in PRS if which in (p.get("lists") or ())]
+    if hits:
+        return hits
     hits = [p for p in PRS if p["id"].startswith(which)]
     if hits:
         return hits

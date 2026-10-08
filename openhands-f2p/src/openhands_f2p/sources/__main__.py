@@ -16,16 +16,56 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 
 from openhands_f2p import sources
 
 
-def _ids(src, which: str) -> list[str]:
-    if which in ("", "all"):
-        return [r["instance_id"] for r in json.loads(src.INSTANCES.read_text())] \
-            if hasattr(src, "INSTANCES") else []
-    return [w.strip() for w in which.split(",") if w.strip()]
+def _ids(mod, which: str, buildable: bool = False) -> list[str]:
+    """Instance ids from `which`: ids, a list name of the dataset (`ablation`), or `all`
+    (every prepared row). `buildable` keeps only rows that have an image to build."""
+    rows = {r["instance_id"]: r for r in json.loads(mod.INSTANCES.read_text())} \
+        if mod.INSTANCES.exists() else {}
+    out: list[str] = []
+    for w in (x.strip() for x in (which or "all").split(",") if x.strip()):
+        if w == "all":
+            out += list(rows)
+        elif w in getattr(mod, "LISTS", {}):
+            out += [mod.instance_id(r, n) for r, n in mod.benchmark(w)]
+        else:
+            out.append(w)
+    out = list(dict.fromkeys(out))
+    if buildable:
+        out = [i for i in out if rows.get(i, {}).get("status", "unsupported") != "unsupported"]
+    return out
+
+
+def _fan_out(action: str, dataset: str, ids: list[str], parallel: int,
+             extra: list[str]) -> int:
+    """One process per instance, `parallel` at a time; each one's output in its own log
+    under `.cache/builds/<action>-<id>.log`. Processes, not threads: `Sandbox` and the
+    image claims are per process."""
+    from concurrent.futures import ThreadPoolExecutor
+    from openhands_f2p.image_build import BUILDS
+    BUILDS.mkdir(parents=True, exist_ok=True)
+
+    def one(iid: str) -> tuple[str, int]:
+        log = BUILDS / f"{action}-{iid}.log"
+        with log.open("w") as fh:
+            rc = subprocess.run([sys.executable, "-m", "openhands_f2p.sources", action,
+                                 dataset, iid, *extra], stdout=fh,
+                                stderr=subprocess.STDOUT).returncode
+        tail = log.read_text(errors="replace").strip().splitlines()[-1:] or [""]
+        print(f"  {action:8s} {iid:32s} exit {rc}  {tail[0][:110]}", flush=True)
+        return iid, rc
+
+    with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
+        results = list(pool.map(one, ids))
+    bad = [i for i, rc in results if rc]
+    print(f"\n  {action}: {len(ids) - len(bad)}/{len(ids)} ok"
+          + (f"; failed: {', '.join(bad)}" if bad else ""))
+    return 1 if bad else 0
 
 
 def main() -> int:
@@ -37,6 +77,8 @@ def main() -> int:
                    help="comma-separated instance ids, or 'all'")
     p.add_argument("--rebuild", action="store_true",
                    help="build: replace the image and its archive even if they exist")
+    p.add_argument("--parallel", type=int, default=1,
+                   help="build/validate: this many instances at once, a process each")
     a = p.parse_args()
 
     if a.action == "list":
@@ -71,7 +113,8 @@ def main() -> int:
         raise SystemExit(f"  {a.dataset} has nothing to {a.action}: its rows and images "
                          f"come ready-made")
     if a.action == "prepare":
-        ids = None if a.which in ("", "all") else _ids(mod, a.which)
+        ids = None if a.which in ("", "all") else \
+            [w.strip() for w in a.which.split(",") if w.strip()]
         rows = mod.prepare(ids)
         counts: dict[str, int] = {}
         for r in rows:
@@ -79,9 +122,12 @@ def main() -> int:
         print(f"\n  {len(rows)} row(s): " + ", ".join(f"{k} {v}" for k, v in counts.items())
               + f"\n  rows: {mod.INSTANCES}")
         return 0
-    ids = _ids(mod, a.which)
+    ids = _ids(mod, a.which, buildable=True)
     if not ids:
-        raise SystemExit(f"  {a.action} needs instance ids (or 'all')")
+        raise SystemExit(f"  {a.action}: nothing to do for {a.which!r}")
+    if len(ids) > 1 and a.parallel > 1:
+        return _fan_out(a.action, a.dataset, ids, a.parallel,
+                        ["--rebuild"] if a.rebuild else [])
     if a.action == "build":
         from openhands_f2p import image_build
         from openhands_f2p import image_cache

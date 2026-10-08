@@ -569,14 +569,14 @@ pair on 36 should be read as direction, not effect.
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
 | `parallel.py` | 262 | Running several pull requests at once, as separate processes. |
 | `prompt.py` | 272 | Assemble the agent's prompt from the pieces in prompts/. |
-| `prs.py` | 350 | The instances we develop against: twenty-six, spanning every repository and a decade. |
+| `prs.py` | 354 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 514 | Three test-runner conventions, and how to read what they print. |
 | `runs.py` | 626 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 365 | One container per instance, and the only door into it. |
 | `sandbox_tools.py` | 1167 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `sources/__init__.py` | 113 | Where instances come from: one adapter per dataset, one standard row for the harness. |
-| `sources/__main__.py` | 101 | The datasets, and getting one ready to run. |
-| `sources/chaco.py` | 490 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
+| `sources/__main__.py` | 147 | The datasets, and getting one ready to run. |
+| `sources/chaco.py` | 563 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
 | `sources/swebench.py` | 94 | SWE-bench Verified: the dataset the harness was built on, read as it always was. |
 | `statements.py` | 89 | Which statement a line belongs to. |
 | `swebench_env.py` | 93 | The SWE-bench environment, as one import. |
