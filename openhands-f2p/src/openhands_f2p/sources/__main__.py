@@ -5,6 +5,7 @@
     uv run python -m openhands_f2p.sources prepare chaco [id,id,... | all]
     uv run python -m openhands_f2p.sources build chaco id[,id...]
     uv run python -m openhands_f2p.sources validate chaco id[,id...]
+    uv run python -m openhands_f2p.sources review chaco ablation   # a page per PR, to check by hand
 
 `prepare` makes the standard rows (no Docker), `build` makes the images, `validate` runs
 the developer's tests in them to derive FAIL_TO_PASS and marks a row runnable when the
@@ -72,7 +73,8 @@ def _fan_out(action: str, dataset: str, ids: list[str], parallel: int,
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("action", choices=("list", "info", "prepare", "build", "validate"))
+    p.add_argument("action", choices=("list", "info", "prepare", "build", "validate",
+                                      "review"))
     p.add_argument("dataset", nargs="?", default="")
     p.add_argument("which", nargs="?", default="",
                    help="comma-separated instance ids, or 'all'")
@@ -113,6 +115,9 @@ def main() -> int:
     if not hasattr(src, "recipe"):
         raise SystemExit(f"  {a.dataset} has nothing to {a.action}: its rows and images "
                          f"come ready-made")
+    if a.action == "review":
+        print(f"  wrote {mod.review(a.which or 'ablation')}")
+        return 0
     if a.action == "prepare":
         ids = None if a.which in ("", "all") else \
             [w.strip() for w in a.which.split(",") if w.strip()]

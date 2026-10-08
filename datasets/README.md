@@ -9,7 +9,7 @@ agent, `verify`, the coverage metric, mutation and the oracle all read the same 
 | dataset | instances | rows | images |
 |---|---|---|---|
 | `swebench` | SWE-bench Verified, 500 (we run 36) | `data/swebench_verified.json` (a download, git-ignored) | pulled from Docker Hub (`swebench/sweb.eval.*`) |
-| `chaco` | ChaCo benchmark (ICSE 2026), 145 PRs of SciPy, Qiskit, pandas | [`chaco/instances.json`](chaco/instances.json), made here | built here (`f2p-chaco/*`), from [`chaco/dockerfiles/`](chaco/dockerfiles/) |
+| `chaco` | ChaCo benchmark (ICSE 2026), 145 PRs of SciPy, Qiskit, pandas; we run its 30-PR `ablation` list | [`chaco/instances.json`](chaco/instances.json), made here | built here (`f2p-chaco/*`), from [`chaco/dockerfiles/`](chaco/dockerfiles/) |
 
 ```bash
 cd openhands-f2p
@@ -18,9 +18,16 @@ uv run python -m openhands_f2p.sources info chaco           # per-instance statu
 uv run python -m openhands_f2p.sources prepare chaco <ids|all>   # rows + Dockerfiles, no Docker
 uv run python -m openhands_f2p.sources build chaco <ids>         # images
 uv run python -m openhands_f2p.sources validate chaco <ids>      # FAIL_TO_PASS, oracle -> runnable
+uv run python -m openhands_f2p.sources review chaco ablation     # a page per PR, to check by hand
 uv run python -m openhands_f2p.agent --dataset chaco <id> --model ...   # a run
 uv run python ../swe-bench-outs/out-v2/run_exp.py --dataset chaco --only <ids> <name>  # -> chaco-outs/<name>/
 ```
+
+`<ids>` can be instance ids, `all`, or a list name of the dataset (ChaCo: `full`,
+`ablation`). `build` and `validate` take `--parallel N`, which runs one process per PR.
+
+Results go to one folder per dataset: `swe-bench-outs/` for SWE-bench, which also holds
+every earlier run, and `chaco-outs/` for ChaCo.
 
 A run always names its dataset. It is set by `--dataset` or by `F2P_DATASET_NAME`, and the
 default is `swebench`. The run prints the dataset in its header, and every `result.json`
