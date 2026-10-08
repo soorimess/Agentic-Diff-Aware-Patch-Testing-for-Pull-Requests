@@ -19,7 +19,7 @@ can quietly stop the test failing on the old code, and then it is no longer the 
 set out to write.
 {/verify-tool}
 
-**1. `run_tests` — does the file run at all?** A test that errors on an import, a typo or
+{?verify-tool}**1. `run_tests` — does the file run at all?**{/verify-tool}{?!verify-tool}**`run_tests` — does the file run at all?**{/!verify-tool} A test that errors on an import, a typo or
 a missing fixture tells you nothing about the library; it never reached the code. What you
 want to see here is the library behaving the old way: an assertion that does not hold, or
 the wrong exception coming back.

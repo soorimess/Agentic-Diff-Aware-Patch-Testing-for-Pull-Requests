@@ -811,7 +811,7 @@ def _rewind(tool_log: list, tool: str, rel: str, score, now: float | None,
         what = (f"it ran {cov.get('covered')} of {cov.get('executable_changed_lines')} "
                 f"changed lines" + (", including these, which no longer run: "
                                     + ", ".join(f"`{g}`" for g in gone[:6]) if gone else ""))
-    return (f"{rewind_said(tool)} At tool call {j}, `{tool}` reported {score(best)}{unit} "
+    return (f"{rewind_said(tool)} Earlier, `{tool}` reported {score(best)}{unit} "
             f"for it -- {what} -- and your edits since lowered it to {now}{unit}. This is "
             f"that version, exactly as `{tool}` measured it:\n\n```python\n"
             f"{text[:8000]}\n```\n\nWrite it back with `write_file` -- keep a newer "

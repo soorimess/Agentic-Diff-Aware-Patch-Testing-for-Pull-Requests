@@ -43,8 +43,7 @@ cannot make a test appear to flip. A file you edited can, which is the whole dif
 
 **Test what the code does, not what it says.** Do not read the project's source as text —
 no `inspect.getsource`, no opening a `.py` file — and assert on its contents. Such a test
-passes on this fix's exact wording and fails on an equivalent fix written differently{?require-tools}; it
-is refused when you try to finish{/require-tools}. Call the changed code and assert on what it returns,
+passes on this fix's exact wording and fails on an equivalent fix written differently. Call the changed code and assert on what it returns,
 raises or does.
 
 Read the source before you write -- enough to know what to assert, not enough to be

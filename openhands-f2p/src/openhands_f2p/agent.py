@@ -166,8 +166,13 @@ def _history(run: dict) -> str:
             # every round and made no two refusals look alike. Nine full copies took the
             # room of fifty steps (pylint-6903, base at cap 125).
             body = (text or "").split("\n\nWhat you have done so far", 1)[0]
+            # The file and its run are left out: the write steps around this one show the
+            # file, and with them gone a repeat is only "the same" when what it said was.
+            # Kept, the label "The file as it is on disk now:" stood with nothing after it.
             paras = [x for x in body.strip().split("\n\n")
-                     if x.strip() and not x.startswith("Stop refused")]
+                     if x.strip() and not x.startswith(("Stop refused", "```",
+                                                        "The file as it is on disk now",
+                                                        "Running it on this code"))]
             gist = "\n\n".join(paras[:2])
             key = f"{reason}\n{gist}"
             again = " (the same as an earlier one)" if key in said_before else ""
@@ -377,7 +382,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
               out_dir: Path, features: FeatureSet, n_mutants: int = 0,
               model: str | None = None, provider: str | None = None,
               temperature: float | None = M.DEFAULT_TEMPERATURE,
-              restart_note: str = "") -> dict:
+              restart_note: str = "", cap_total: int | None = None) -> dict:
     """One conversation with the agent, and the stop checks that answer its stops.
 
     `restart_note` makes this the second chance's conversation: a fresh one, sent the
@@ -394,6 +399,10 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     # Read back from the LLM that will make the calls, not from the flag: what is
     # recorded is what was configured.
     temperature = llm.temperature
+    # Read by `verify`: once this conversation has had its passes-at-base refusals, a stop on
+    # such an answer is no longer refused, and "you cannot finish" would be false. Each
+    # conversation (a restart included) starts with none.
+    box._unscoreable_capped = False
     tool_log: list = []
     # Two different questions, kept apart. `verify` and `coverage` need the harness to
     # *hold* the patch, which it always does -- it applies it and reverts it itself. The
@@ -641,9 +650,11 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                     marker = "whatever it checks was true before the fix as well."
                     say = (say.replace(marker, marker + diag, 1) if marker in say
                            else say + diag)
+            if stuck(reason) and streak + 1 >= MAX_PASSES_AT_BASE_ROUNDS:
+                box._unscoreable_capped = True
             nudge = prompt.followup("second-chance", shortfall=say,
                                     recap=_recap(counts, tool_log), test_file=rel,
-                                    budget=left, cap=max_iterations)
+                                    budget=left, cap=cap_total or max_iterations)
             flow.record(flow.AGENT, "stop check",
                         f"round {len(rounds) + 1}: {reason}; {left} actions left")
             if not rounds:
@@ -1049,7 +1060,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                                  f"again with {remaining} left")
                 again = run_agent(inst, box, default_path, remaining, d, features, n_mutants,
                                   model=model, provider=provider, temperature=temperature,
-                                  restart_note=note)
+                                  restart_note=note, cap_total=max_iterations)
                 run = _joined(run, again, note)
                 test_file, code, checks, verdict = score(run)
                 restart["final_verdict"] = verdict.f2p

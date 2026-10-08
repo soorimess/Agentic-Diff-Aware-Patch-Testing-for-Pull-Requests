@@ -742,6 +742,24 @@ Found reading no-coverage (2026-10-07):
     `cap` with the restart's own budget (e.g. "51 of the 74") after the restart said 125.
   None changed a verdict in the 36 runs read.
 
+Deferred wording, fixed after the out-v2 plan (2026-10-08; the state that ran it is the branch
+`out-v2-36prs`):
+
+- verify on a test passing at base: "does not test what this pull request changes" (was "does
+  not exercise this pull request" -- a test can run the change and still pass before it).
+- "You cannot finish while this is the answer" is left out once the conversation's
+  passes-at-base refusals are used up (`box._unscoreable_capped`, set by the stop check).
+- The coverage tool says "you will be sent back" only once the test is fail-to-pass.
+- The rewind says "Earlier, `tool` reported ..." instead of a tool-call index.
+- `50-rules.md`: no more "it is refused when you try to finish" for source-reading tests.
+- verify on fail-to-pass without the coverage tool: "That it flips is one question ...".
+- `57b-check-notices.md`: mutation is step 3 when coverage is withheld; "covers every line"
+  only with it. `55-check-runs.md`/`58-finish.md`: one check, "the check above", without
+  verify.
+- Restart history: a refusal's file and its run are left out (the write steps show them),
+  so no dangling label and "the same as an earlier one" only when the text was.
+- Second conversation: "{budget} actions left of the {cap}" uses the run's cap (125).
+
 ## Changed after the fact
 
 - **2026-09-29:** the judge answers five labelled questions per subject before each

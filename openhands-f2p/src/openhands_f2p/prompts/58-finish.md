@@ -66,8 +66,8 @@ behind it, or an assertion on an exact expression written only to move the numbe
 a better test.
 {/require-tools-with-score-report}
 
-**Then: did you change the test after any check?** If you did, the checks above describe
-a file that no longer exists. Run them again on what is actually on disk — that is the
+**Then: did you change the test after any check?** If you did, {?verify-tool}the checks above describe{/verify-tool}{?!verify-tool}the check above describes{/!verify-tool}
+a file that no longer exists. Run {?verify-tool}them{/verify-tool}{?!verify-tool}it{/!verify-tool} again on what is actually on disk — that is the
 loop, not a formality.
 {?verify-tool}
 The last thing you run before finishing should be `verify`: an assertion added to close
@@ -116,5 +116,5 @@ While any of these loops is open you will be sent back with the reason, so worki
 is the shorter path.
 {/require-tools}
 
-You are finished when the checks above have been run against the test as it now stands
-and nothing any of them raised is still unanswered. Say in one sentence what behaviour your test pins down, and stop.
+You are finished when {?verify-tool}the checks above have{/verify-tool}{?!verify-tool}the check above has{/!verify-tool} been run against the test as it now stands
+and nothing {?verify-tool}any of them{/verify-tool}{?!verify-tool}it{/!verify-tool} raised is still unanswered. Say in one sentence what behaviour your test pins down, and stop.

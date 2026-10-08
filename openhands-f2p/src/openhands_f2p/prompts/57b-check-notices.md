@@ -8,12 +8,12 @@ job: The mutation step of the finishing sequence. Numbered between `coverage` an
   Deliberately does not say "until none survive". Some survivors are not gaps, and an
   instruction to clear the board would turn the reasonable ones into padding.
 ---
-**4. `mutation` — would it notice a wrong fix?** Break the fix in small ways and see
+**{?coverage-tool}4{/coverage-tool}{?!coverage-tool}3{/!coverage-tool}. `mutation` — would it notice a wrong fix?** Break the fix in small ways and see
 whether your test objects. Whatever survives is a version of this change that is wrong in
 a way your test cannot tell apart from the right one.
 
 **Call it, and read what comes back.** It is the only check that asks whether your
-assertions have any force, and a test that flips and covers every line can still pass
+assertions have any force, and a test that flips{?coverage-tool} and covers every line{/coverage-tool} can still pass
 against a fix that is subtly wrong.
 
 **Work every survivor.** For each, decide whether the behaviour it breaks is part of what

@@ -623,11 +623,13 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         # hatch: some changed lines cannot be reached from a test at all, and an
         # assertion written only to execute one buys a number and costs a reviewer's
         # trust. Saying why a line is unreachable satisfies this as fully as reaching it.
-        if self.scored:
+        from openhands_f2p import verify as V
+        loop_open = V.verify_settled(self.log, action.target.split("::")[0])
+        if self.scored and loop_open:
             lines += ["",
                       "The target is 100%: you will be sent back while it is below, until "
                       "it gets there or an honest attempt raises it no further."]
-        elif self.require_tools:
+        elif self.require_tools and loop_open:
             lines += ["",
                       "You will be sent back while lines are missed: change the test and "
                       "call `coverage` again, until every changed line runs or an honest "
@@ -937,7 +939,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     "below and make the test run here.")
         elif not flipped:
             head = ("NOT fail-to-pass: the test already passes before the change, so it "
-                    "does not exercise this pull request.")
+                    "does not test what this pull request changes.")
         else:
             head = f"Fail-to-pass: {len(flipped)} test(s) fail before and pass after."
         # The harness's rule, in one place, for everything below the headline. The
@@ -963,7 +965,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # an earlier run stopped on exactly this observation.
         duty = ("\n\nYou cannot finish while this is the answer. Rewrite the test and "
                 "call `verify` again, as many times as it takes."
-                if self.gated and not ok else "")
+                if self.gated and not ok
+                and not (not flipped and not still_failing
+                         and getattr(self.box, "_unscoreable_capped", False)) else "")
 
         # Reported here rather than left for the agent to ask about. The `coverage` tool
         # already offered this, and across twenty-six runs it was called twelve times --
@@ -990,9 +994,12 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # Only when the test actually flips: asking what a test would notice about a
         # wrong fix presumes it notices the right one, and saying this after a NOT
         # fail-to-pass would send the agent at the wrong problem.
-        nxt = ("\n\nThat it flips, and what it reaches, are two of the three questions. "
-               "Whether it would notice a fix that is subtly *wrong* is the third, and "
-               "nothing above answers it -- `mutation` does."
+        # "What it reaches" only where this answer reported it (the coverage tool's arms).
+        nxt = (("\n\nThat it flips, and what it reaches, are two of the three questions. "
+                "Whether it would notice a fix that is subtly *wrong* is the third, and "
+                "nothing above answers it -- `mutation` does." if self.reveal_missed else
+                "\n\nThat it flips is one question. Whether it would notice a fix that is "
+                "subtly *wrong* is another, and nothing above answers it -- `mutation` does.")
                if ok and self.point_at_mutation else "")
         # Never an error. The tool ran and answered; "no" is an answer. It was flagged
         # `is_error=not flipped`, so every negative verdict reached the model prefixed
