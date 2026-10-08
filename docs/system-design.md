@@ -1,6 +1,7 @@
 # System design
 
-An OpenHands agent writes a regression test for a merged SWE-bench pull request. The test
+An OpenHands agent writes a regression test for a merged pull request -- from SWE-bench
+Verified or, since 2026-10-08, the ChaCo benchmark (see [Datasets](#datasets)). The test
 has to **fail at the base commit and pass once the fix is applied** — fail-to-pass, F2P.
 The maintainer's own test for the same bug is the held-out answer: it is read once, at the
 end, to judge the result, and never during generation.
@@ -334,6 +335,49 @@ How the prompt is built to come close to a human reviewer:
 None of the three feeds the F2P verdict. Scale-6 levels are not comparable with scale-5
 levels from v1 and v2.
 
+## Datasets
+
+Since 2026-10-08 an instance comes from a named dataset. `--dataset` (or
+`F2P_DATASET_NAME`) sets it, the default is `swebench`, and every `result.json` records it.
+Each dataset has an adapter in `sources/`. The adapter turns the dataset into the one row
+shape the harness reads, which is SWE-bench Verified's, and says how the instance's image
+is obtained. Nothing past the adapter knows which dataset it is running. The full contract
+and the CLI are in [datasets/README.md](../datasets/README.md).
+
+```mermaid
+graph LR
+  SW["SWE-bench Verified dump"] --> A1["sources/swebench.py"]
+  CH["ChaCo PR list + GitHub + git mirror"] --> A2["sources/chaco.py<br/>prepare / validate"]
+  A1 --> R["standard row<br/>(instance_id, base_commit, patch,<br/>test_patch, FAIL_TO_PASS, ...)"]
+  A2 --> R
+  R --> H["dataset.load -> agent, verify, oracle, mutants"]
+  A1 -. "image: pull" .-> I["images.pull_image"]
+  A2 -. "image: build" .-> B["image_build.py<br/>(Dockerfile per instance)"]
+  B --> I
+```
+
+**SWE-bench** reads as it always did: the same dump and the same pulled images, with three
+fields added to each row (`dataset`, `image`, `image_source`).
+
+**ChaCo** (Zhou et al., ICSE 2026; 145 merged PRs of SciPy, Qiskit and pandas) ships only
+PR numbers, so every field is derived:
+- **The change.** Base is the merge commit's first parent, and the change is
+  `diff(base, merge commit)` taken from a blobless git mirror. Files under test
+  directories go to `test_patch`; the rest go to `patch`.
+- **The problem statement.** The issues the PR closes, then the PR's own title and
+  description, fetched from the GitHub API and cached.
+- **The image.** A Dockerfile per PR, adapted from ChaCo's own Dockerfiles. `/testbed`
+  sits at base and the project is installed editable. Dependencies are resolved as of
+  the base commit's date (`uv --exclude-newer`), so a 2024 PR does not meet a 2026 numpy.
+- **FAIL_TO_PASS and PASS_TO_PASS.** `validate` runs the developer's test files in the
+  built image at base and at head, the way SWE-bench derived them. A row is runnable
+  only if some developer test flips and `verify()` with the developer's test
+  reproduces it.
+
+ChaCo's own task is covering a PR's uncovered lines at head, with no flip required, so
+not every ChaCo PR has a fail-to-pass test at all. `validate` records why for each row
+that is not runnable.
+
 ## Three test-runner conventions
 
 Twelve repositories, three ways of naming and running a test. `run_tests` hides all of it
@@ -506,34 +550,39 @@ pair on 36 should be read as direction, not effect.
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1300 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1471 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 167 | What the agent actually did, checked rather than assumed. |
-| `compare.py` | 279 | How does the generated test compare with the developer's, on concept, issue coverage and readability? |
-| `coverage_metric.py` | 424 | Of the lines this pull request changed, how many did the test execute? |
-| `dataset.py` | 70 | Where the SWE-bench Verified rows come from, and how they are found. |
-| `docs.py` | 167 | Refresh the generated blocks in `docs/system-design.md`. |
+| `compare.py` | 293 | How does the generated test compare with the developer's, on concept, issue coverage and readability? |
+| `coverage_metric.py` | 580 | Of the lines this pull request changed, how many did the test execute? |
+| `dataset.py` | 13 | One instance, from whichever dataset this run is over. |
+| `docs.py` | 168 | Refresh the generated blocks in `docs/system-design.md`. |
 | `features.py` | 343 | What the agent is given, as one registry that everything else reads. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
-| `image_cache.py` | 292 | Instance images kept on the host disk, so each one is pulled from the registry once. |
-| `images.py` | 424 | Prepared SWE-bench images, and the disk they compete for. |
+| `image_build.py` | 91 | Images no registry has: built here, from the Dockerfile a dataset's adapter wrote. |
+| `image_cache.py` | 313 | Instance images kept on the host disk, so each one is pulled from the registry once. |
+| `images.py` | 471 | Prepared SWE-bench images, and the disk they compete for. |
 | `layout.py` | 29 | Where the project is on disk, and the environment it runs with. |
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 187 | One place the model connection is configured, shared by every caller. |
-| `models.py` | 338 | Which model answers, and what it needs, read from `models.json`. |
-| `mutants.py` | 523 | Does the test notice when the fix is subtly wrong? |
+| `models.py` | 343 | Which model answers, and what it needs, read from `models.json`. |
+| `mutants.py` | 677 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
-| `parallel.py` | 253 | Running several pull requests at once, as separate processes. |
-| `prompt.py` | 253 | Assemble the agent's prompt from the pieces in prompts/. |
-| `prs.py` | 322 | The instances we develop against: twenty-six, spanning every repository and a decade. |
-| `runners.py` | 512 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 543 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
-| `sandbox.py` | 355 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 932 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `parallel.py` | 262 | Running several pull requests at once, as separate processes. |
+| `prompt.py` | 272 | Assemble the agent's prompt from the pieces in prompts/. |
+| `prs.py` | 350 | The instances we develop against: twenty-six, spanning every repository and a decade. |
+| `runners.py` | 514 | Three test-runner conventions, and how to read what they print. |
+| `runs.py` | 626 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
+| `sandbox.py` | 365 | One container per instance, and the only door into it. |
+| `sandbox_tools.py` | 1167 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sources/__init__.py` | 113 | Where instances come from: one adapter per dataset, one standard row for the harness. |
+| `sources/__main__.py` | 101 | The datasets, and getting one ready to run. |
+| `sources/chaco.py` | 487 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
+| `sources/swebench.py` | 94 | SWE-bench Verified: the dataset the harness was built on, read as it always was. |
 | `statements.py` | 89 | Which statement a line belongs to. |
-| `swebench_env.py` | 91 | The SWE-bench environment, as one import. |
+| `swebench_env.py` | 93 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
-| `trajectory.py` | 364 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 821 | The F2P decision. One implementation, used by every arm. |
+| `trajectory.py` | 425 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
+| `verify.py` | 1237 | The F2P decision. One implementation, used by every arm. |
 | `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
 <!-- /generated:modules -->
 
@@ -1044,6 +1093,7 @@ uv run openhands-f2p --out-root out/nocov --add-verify-tool --add-mutation-tool 
 | `--retry-broken` | run only instances with no result, or whose result is BROKEN. A BROKEN verdict records that the harness or the connection failed and says nothing about the instance, so it is worth retrying; YES and NO are findings and are left alone |
 | `--parallel` | how many PRs to run at once (F2P_MAX_PARALLEL, default 5) |
 | `--out-root` | write results here instead of out/default/. `out/` is a container of run folders -- one per run, e.g. out/out_full_run/ -- which is how a series stays separable |
+| `--dataset` | which dataset the instances come from (F2P_DATASET_NAME, default swebench). `python -m openhands_f2p.sources list` shows each and what is prepared of it. Choices: `swebench`, `chaco`. |
 | `--label` | a name for this run, recorded in every result. Defaults to the configuration, e.g. no-coverage-tool |
 
 **what the agent is shown (on unless withheld)**
@@ -1103,9 +1153,10 @@ headers — and that is checked rather than assumed.
 
 ## Layout
 
-Twenty-four modules, flat, one package. No subpackages, and that is deliberate at this
-size: directories earn their keep when there are several independent consumers, and there
-is one here — the CLI. The import graph has **no cycles** and layers cleanly:
+Thirty modules in one flat package, plus one subpackage, `sources/`, with one adapter per
+dataset. That is the only place directories have earned their keep: the adapters are
+independent of each other and more will follow. The image builder (`image_build.py`)
+sits beside `images.py`, which calls it for any image a registry does not have. The import graph has **no cycles** and layers cleanly:
 
 ```
 features  flow  images  layout  llm_config  prs  runners      leaves
@@ -1181,6 +1232,10 @@ Both failures have happened, and both cost a run to discover before the checks e
   written carelessly would undo it.
 - **Memorisation is not addressed.** `psf/requests` is among the most-copied Python
   repositories on the internet. That can be disclosed, not closed.
+- **ChaCo rows whose change touches Qiskit's Rust are not run.** pandas and SciPy are
+  installed editable with meson-python, which rebuilds a changed extension on the next
+  import, offline. Qiskit's Rust is built once, so the head run would use the base
+  binary.
 - **`BROKEN` conflates the harness failing with the model failing.** It means "the harness
   or connection broke, this says nothing about the instance", and `--retry-broken` treats
   it as retryable. But a model that writes a file which does not import is recorded

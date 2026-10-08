@@ -29,7 +29,7 @@ Two axes of difficulty, recorded separately because they are not the same axis:
 import os
 from pathlib import Path
 
-PRS = [
+_BUILTIN = [
     {
         "id": "django__django-11119",
         "tier": 3, "build": "medium", "localise": "medium", "runner": "django",
@@ -232,20 +232,45 @@ PRS = [
 #     F2P_PRS_FILE=evaluation/prs.json F2P_IMAGE_CACHE=image-cache-evaluation \
 #         uv run python -m openhands_f2p.agent all --model gpt-5-mini \
 #         --out-root evaluation/out_gpt5mini --mutants 10 --parallel 10
-_PRS_FILE = os.getenv("F2P_PRS_FILE")
-if _PRS_FILE:
-    import json as _json
-    _loaded = _json.loads(Path(_PRS_FILE).read_text())
-    missing = [k for k in ("id", "tier") for p in _loaded if k not in p]
-    if missing:
-        raise SystemExit(f"  {_PRS_FILE}: every entry needs at least 'id' and 'tier'")
-    PRS = [{"build": "unknown", "localise": "unknown", "runner": "pytest",
-            "version": "", "note": "", "why": "", **p} for p in _loaded]
+def current() -> list[dict]:
+    """The instances of this run: `F2P_PRS_FILE` if set, else the active dataset's
+    runnable list (`openhands_f2p.sources`), else -- for SWE-bench -- the twenty-six above.
 
-BY_ID = {p["id"]: p for p in PRS}
-BY_REPO: dict[str, list[str]] = {}
-for _p in PRS:
-    BY_REPO.setdefault(_p["id"].split("__")[0], []).append(_p["id"])
+    Read on every call rather than once at import. Which dataset a run is over is a
+    command-line flag (`--dataset`), parsed after this module is imported, so a list
+    frozen at import would always be SWE-bench's.
+    """
+    file = os.getenv("F2P_PRS_FILE")
+    if file:
+        import json as _json
+        loaded = _json.loads(Path(file).read_text())
+        if any(k not in p for k in ("id", "tier") for p in loaded):
+            raise SystemExit(f"  {file}: every entry needs at least 'id' and 'tier'")
+    else:
+        from openhands_f2p import sources
+        loaded = sources.active().prs()
+        if loaded is None:
+            return _BUILTIN
+    return [{"build": "unknown", "localise": "unknown", "runner": "pytest",
+             "version": "", "note": "", "why": "", **p} for p in loaded]
+
+
+def _by_repo(prs: list[dict]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for p in prs:
+        out.setdefault(p["id"].split("__")[0], []).append(p["id"])
+    return out
+
+
+def __getattr__(name: str):
+    # `PRS`, `BY_ID` and `BY_REPO` stay importable names, computed when asked for.
+    if name == "PRS":
+        return current()
+    if name == "BY_ID":
+        return {p["id"]: p for p in current()}
+    if name == "BY_REPO":
+        return _by_repo(current())
+    raise AttributeError(name)
 
 
 def f2p_is_consistent(instance: dict) -> list[str]:
@@ -282,6 +307,9 @@ def f2p_is_consistent(instance: dict) -> list[str]:
 
 def pick(which: str) -> list[dict]:
     """Select by number, id, repository prefix, tier, version, 'old', 'new', or 'all'."""
+    PRS = current()
+    BY_ID = {p["id"]: p for p in PRS}
+    BY_REPO = _by_repo(PRS)
     if which == "all":
         return PRS
     # A comma-separated list, so an arbitrary subset -- the instances a fixed bug

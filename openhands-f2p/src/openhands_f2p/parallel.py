@@ -74,6 +74,10 @@ def _child_argv(pr_id: str, args, features: FeatureSet, out_root: Path,
         argv += ["--temperature", repr(args.temperature)]
     if getattr(args, "mutate_saved", False):
         argv.append("--mutate-saved")
+    # The environment carries it too (sources.select); on the command line as well so
+    # the child's argv, which is logged, says what it ran over.
+    if getattr(args, "dataset", None):
+        argv += ["--dataset", args.dataset]
     argv += child_flags(features)
     if label:
         argv += ["--label", label]

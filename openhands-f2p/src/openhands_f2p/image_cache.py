@@ -64,6 +64,16 @@ MIN_PLAUSIBLE_BYTES = 50_000_000
 ARCHIVING = (os.getenv("F2P_NO_ARCHIVE") or "").strip().lower() not in ("1", "true", "yes", "on")
 
 
+def archiving(image: str) -> bool:
+    """Whether `image` is kept as an archive. `F2P_NO_ARCHIVE` rests on the registry being
+    thirty seconds away, which is true of a pulled image and false of one we build
+    (image_build.py, tens of minutes each): those are archived whatever it says."""
+    if ARCHIVING:
+        return True
+    from openhands_f2p import image_build
+    return image_build.is_built(image)
+
+
 def archive_for(image: str) -> Path:
     """One file per image, named after it. `/` and `:` are not filename characters.
 
@@ -78,7 +88,7 @@ def archive_for(image: str) -> Path:
 
 
 def have_archive(image: str) -> bool:
-    if not ARCHIVING:
+    if not archiving(image):
         return False
     p = archive_for(image)
     return p.exists() and p.stat().st_size >= MIN_PLAUSIBLE_BYTES
@@ -120,7 +130,7 @@ def save(image: str, quiet: bool = False) -> Path | None:
     Writes to a `.part` file and renames on success, so an interrupted save cannot leave
     something that `have_archive` would later accept and `docker load` would choke on.
     """
-    if not ARCHIVING:
+    if not archiving(image):
         return None
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     final = archive_for(image)
@@ -214,7 +224,7 @@ def release(image: str, quiet: bool = True) -> bool:
     free = I.vm_free_gb()
     if free is not None and free >= KEEP_IF_FREE_GB:
         return True
-    if not ARCHIVING:
+    if not archiving(image):
         if not I.have_image(image):
             return True
         if image in I.claimed_images():

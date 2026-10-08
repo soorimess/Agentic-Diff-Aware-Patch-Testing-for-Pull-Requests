@@ -1,4 +1,4 @@
-"""Prepared SWE-bench images, and the disk they compete for.
+"""Instance images -- pulled from a registry or built (image_build.py) -- and the disk they compete for.
 
 Twenty-six instances is roughly eighty gigabytes of images and the Docker VM holds
 fifty-eight, so a run over the whole set cannot keep them all. Everything here exists to
@@ -23,10 +23,18 @@ from pathlib import Path
 PLATFORM = "linux/amd64"          # SWE-bench publishes amd64 only; emulated on arm64
 IMAGE = "swebench/sweb.eval.x86_64.{tag}:latest"
 
+# Image repositories this harness may evict to make room: the ones it can get back --
+# SWE-bench's by pulling, ours (`f2p-<dataset>/`, image_build.py) by building or from
+# the archive written before eviction.
+EVICTABLE = ("swebench/*", "f2p-*/*")
+
 
 def image_for(instance_id: str) -> str:
-    """swebench uses `_1776_` where the instance id has `__`."""
-    return IMAGE.format(tag=instance_id.replace("__", "_1776_"))
+    """The image of an instance in the active dataset (`openhands_f2p.sources`).
+
+    For SWE-bench that is still `IMAGE` with `_1776_` where the id has `__`."""
+    from openhands_f2p import sources
+    return sources.image_for(instance_id)
 
 
 def _run(cmd: list[str], stdin: str | None = None, timeout: int = 1800):
@@ -207,7 +215,7 @@ def evict_one_image(keep: str) -> bool:
     while other instances are running in parallel.
     """
     listed = _run(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}",
-                   "swebench/*"], timeout=180)
+                   *(f"--filter=reference={r}" for r in EVICTABLE)], timeout=180)
     in_use = set()
     ps = _run(["docker", "ps", "-a", "--format", "{{.Image}}"], timeout=180)
     in_use.update(x for x in ps.stdout.split() if x)
@@ -397,6 +405,12 @@ def pull_image(image: str, quiet: bool = False,
             elif not quiet:
                 print(f"  {free:.0f} GB free and this image needs about "
                       f"{need_gb:.0f}; falling through to the pull path")
+    # No registry has it: an image of ours is built from its dataset's recipe instead
+    # (image_build.py), and archived like a pulled one so it is built once.
+    from openhands_f2p import image_build
+    if image_build.is_built(image):
+        image_build.build(image, quiet=quiet, need_gb=need_gb)
+        return
     with _pull_slot():
         _pull_locked(image, quiet, need_gb)
 

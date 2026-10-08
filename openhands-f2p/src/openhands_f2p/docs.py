@@ -41,11 +41,12 @@ def _summary(path: Path) -> str:
 
 def modules() -> str:
     rows = ["| module | lines | what it is |", "|---|---|---|"]
-    for f in sorted(PKG.glob("*.py")):
-        if f.name == "__init__.py":
+    # The one subpackage, `sources/` (one adapter per dataset), is listed by its files.
+    for f in sorted([*PKG.glob("*.py"), *PKG.glob("sources/*.py")]):
+        if f.name == "__init__.py" and f.parent == PKG:
             continue
         n = len(f.read_text().splitlines())
-        rows.append(f"| `{f.name}` | {n} | {_summary(f)} |")
+        rows.append(f"| `{f.relative_to(PKG).as_posix()}` | {n} | {_summary(f)} |")
     return "\n".join(rows)
 
 

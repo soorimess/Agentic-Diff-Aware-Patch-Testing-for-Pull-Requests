@@ -20,7 +20,7 @@ from pathlib import Path
 
 from openhands_f2p.compare import SCALE_VERSION, SCALES, SCALES_V5, shown
 from openhands_f2p.layout import OUT
-from openhands_f2p.prs import PRS
+from openhands_f2p import prs as _prs
 
 
 
@@ -343,6 +343,7 @@ def build(root: Path = OUT) -> str:
     # nothing changes there; a series run on a subset used to get all 26 rows, 21 of
     # them dashes linking to directories that were never created. A table of mostly
     # absent rows reads as a run that mostly failed, which is the opposite of true.
+    PRS = _prs.current()         # the active dataset's, read now -- not at import
     present = [pr for pr in PRS if (root / pr["id"] / "result.json").is_file()]
     rows = [_row(pr, root) for pr in (present or PRS)]
     decided = [r for r in rows if r["f2p"] in ("YES", "NO")]

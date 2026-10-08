@@ -49,6 +49,7 @@ from openhands_f2p.layout import CACHE, OUT, PROJECT_ROOT
 from openhands_f2p.parallel import (CHILD_ENV_FLAG, _child_argv, _needs_retry,
                                     _run_children)
 from openhands_f2p.prs import pick
+from openhands_f2p import sources
 
 
 def instance_dir(out_root: Path | None, pr: dict, child: bool) -> Path:
@@ -848,6 +849,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
     print(f"\n{'─' * 74}")
     print(f"  [{pr['tier']}] {pr['id']}".ljust(52) + repo.rjust(20))
     print(f"  {pr['note'][:70]}")
+    if inst.get("dataset", "swebench") != "swebench":
+        print(f"  dataset   {inst['dataset']}  {inst.get('source_url', '')}")
     if not features.default:
         print(f"  config    {features.describe()}")
     print(f"{'─' * 74}")
@@ -1097,6 +1100,9 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               # re-judge moved two instances a day forward in the run table.
               "ran_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "arm": label or features.slug(),
+              # Which dataset the instance came from (`--dataset`); absent from every
+              # result before 2026-10-08, all of which are SWE-bench.
+              "dataset": inst.get("dataset", "swebench"),
               "features": features.as_dict(),
               # Both paths, always. A test in a directory the runner never collects from
               # fails for a reason that has nothing to do with how good the test is, and
@@ -1249,6 +1255,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="write results here instead of out/default/. `out/` is a "
                         "container of run folders -- one per run, e.g. "
                         "out/out_full_run/ -- which is how a series stays separable")
+    p.add_argument("--dataset", default=None, choices=sources.names(),
+                   help="which dataset the instances come from (F2P_DATASET_NAME, "
+                        "default swebench). `python -m openhands_f2p.sources list` "
+                        "shows each and what is prepared of it")
     p.add_argument("--label", default="",
                    help="a name for this run, recorded in every result. Defaults to "
                         "the configuration, e.g. no-coverage-tool")
@@ -1303,6 +1313,12 @@ def main() -> int:
             "  --model is required. There is no fallback for which model runs.\n"
             f"  The registry's default_model is {M.DEFAULT_MODEL!r}, but a default is "
             "not a decision -- name the model this run is measuring.")
+
+    # Before `pick`: the dataset decides which instances there are. Set in the
+    # environment, so every child process this run starts is over the same one.
+    dataset = sources.select(args.dataset)
+    if not os.getenv(CHILD_ENV_FLAG):
+        print(f"  dataset   {dataset.name} -- {dataset.description}")
 
     features = FeatureSet.from_args(args)
     # Resolved before the early-returning branches below, which all report on a series
