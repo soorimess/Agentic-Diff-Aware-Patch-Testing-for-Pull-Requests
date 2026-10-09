@@ -47,7 +47,14 @@ not runnable.
 - `prepared`: awaiting build and validate.
 - `runnable`: ready to run.
 - `not-fail-to-pass`: no developer test flips.
-- `broken-env`: the developer's tests collect nothing in the image.
+- `broken-env`: the developer's tests collect nothing in the image, or pytest did not
+  finish (a crash or timeout). A run without pytest's closing summary line is never read
+  as a result.
+- `import-error-at-base`: the developer's tests pass after the change, but at base their
+  module does not import, so they are missing rather than failing. SWE-bench counts
+  these as FAIL_TO_PASS. Our `verify()` reports an expected test missing from the output
+  as BROKEN, so these rows are kept apart and not run. The tests are listed in
+  `FAIL_TO_PASS_import_error`.
 - `oracle-mismatch`: the derived flip is not reproduced by `verify()`.
 - `no-developer-test`: the PR adds or changes no test. FAIL_TO_PASS cannot be derived, and
   both the developer column of mutation and the judge need a developer test, so these
@@ -78,6 +85,10 @@ These are adapted from ChaCo's own Dockerfiles; `chaco.RECIPES` holds the recipe
 |---|---|---|
 | pandas | 3.11 | meson-python editable (C extensions rebuilt on import, offline); X/GL libraries for `pytest-qt` |
 | SciPy | 3.12 | meson-python editable, gfortran + OpenBLAS, submodules |
+
+Every image sets `OPENBLAS_CORETYPE=Haswell`. On the server's QEMU virtual CPU, OpenBLAS
+autodetects a kernel that uses an instruction the CPU lacks. SciPy's `test_lapack.py` died
+with "Illegal instruction" after 8 of its 1927 tests until the core type was pinned.
 | Qiskit | 3.11 | Rust (rustup stable) via setuptools-rust; `pytest` added (Qiskit itself uses stestr) |
 
 Build times on the server (16 cores) are 5–7 min per image. Archived images are 0.5–1.5 GB.

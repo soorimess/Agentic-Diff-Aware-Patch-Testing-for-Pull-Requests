@@ -318,6 +318,12 @@ def dockerfile(row: dict) -> str:
         # The harness's `coverage` wheel is installed offline per run (Sandbox); the
         # project's own test dependencies are all here, because the run has no network.
         "RUN " + r["check"],
+        # OpenBLAS picks its kernels from cpuid, and on the server's QEMU virtual CPU it
+        # picks one that executes an instruction the CPU lacks: SciPy's test_lapack.py
+        # died with "Illegal instruction" after 8 of 1927 tests (2026-10-09). Haswell
+        # (AVX2, FMA) is what that CPU and any recent x86 has; with it all 1926 pass.
+        # Last, so changing it rebuilds one layer.
+        "ENV OPENBLAS_CORETYPE=Haswell",
     ]
     return "\n".join(lines) + "\n"
 
@@ -489,15 +495,52 @@ def validate(iid: str, quiet: bool = False) -> dict:
                      + dist + "'))\"", workdir="/").stdout.strip().splitlines()
         m = re.match(r"(\d+)\.(\d+)", v[-1] if v else "")
         row["version"] = f"{m.group(1)}.{m.group(2)}" if m else ""
+        # Tests absent at base because their module does not import there (a collection
+        # ERROR on the file) and passing after. SWE-bench counts these as FAIL_TO_PASS;
+        # our verify() reports an expected test missing from the output as BROKEN, so
+        # they are recorded apart rather than silently in or out.
+        broken_files = {n for n, s in b.items() if s == "ERROR" and "::" not in n}
+        unimportable = sorted(n for n, s in a.items() if s == "PASSED" and n not in b
+                              and n.split("::")[0] in broken_files)
+
+        def tally(o: dict) -> dict:
+            out: dict[str, int] = {}
+            for st in o.values():
+                out[st] = out.get(st, 0) + 1
+            return out
         row.update(FAIL_TO_PASS=json.dumps(f2p), PASS_TO_PASS=json.dumps(p2p),
+                   FAIL_TO_PASS_import_error=json.dumps(unimportable),
                    validated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                    validation={"test_files": files, "collected_before": len(b),
                                "collected_after": len(a),
+                               "outcomes_before": tally(b), "outcomes_after": tally(a),
+                               "exit_before": before.returncode,
+                               "exit_after": after.returncode,
+                               "tail_before": before.output.strip()[-1500:],
+                               "tail_after": after.output.strip()[-1500:],
                                "runner": E.runner_for(box)["cmd"]})
-        if not b and not a:
+        # pytest ends every complete run with its summary line ("== 8 passed in 6.6s ==").
+        # Without it the run died part-way -- a crash in a C extension, a timeout -- and
+        # its outcomes are a prefix of the real ones (scipy, 2026-10-09: an illegal
+        # instruction in OpenBLAS ended test_lapack.py after 8 of 1927 tests).
+        done = re.compile(r"(?m)^=+ .*\bin [\d.]+s( \([^)]*\))? =+\s*$")
+        unfinished = [side for side, r in (("before", before), ("after", after))
+                      if not done.search(r.output)]
+        if unfinished:
+            row.update(status="broken-env",
+                       why=f"pytest did not finish {' and '.join(unfinished)} the change "
+                           f"(exit {before.returncode}/{after.returncode}): "
+                           + (before if "before" in unfinished else after)
+                           .output.strip()[-200:])
+        elif not b and not a:
             row.update(status="broken-env",
                        why="the developer's test files collected nothing on either side: "
                            + before.output.strip()[-300:])
+        elif not f2p and unimportable:
+            row.update(status="import-error-at-base",
+                       why=f"{len(unimportable)} developer test(s) pass after the change, but "
+                           f"their module does not import at base (collection error): "
+                           f"FAIL_TO_PASS for SWE-bench, BROKEN for our verify()")
         elif not f2p:
             row.update(status="not-fail-to-pass",
                        why=f"no developer test fails before the change and passes after "
@@ -577,6 +620,9 @@ def review(which: str = "ablation") -> Path:
             f"| binary files left out | {', '.join(r.get('binary_files_left_out', [])) or 'none'} |",
             "", f"## FAIL_TO_PASS ({len(f2p)})", "",
             *(f"- `{n}`" for n in f2p), *([] if f2p else ["(none)"]),
+            *([ "", f"## Pass after, absent at base: module does not import ({len(imp)})", "",
+                *(f"- `{n}`" for n in imp)] if (imp := json.loads(
+                    r.get("FAIL_TO_PASS_import_error") or "[]")) else []),
             "", f"## PASS_TO_PASS ({len(p2p)})", "",
             "<details><summary>show</summary>", "",
             *(f"- `{n}`" for n in p2p), *([] if p2p else ["(none)"]),

@@ -1,0 +1,412 @@
+# pandas-dev__pandas-59854
+
+[back to the list](README.md) -- **String dtype: allow string dtype for non-raw apply with numba engine**
+
+| field | value |
+|---|---|
+| pull request | [pandas-dev/pandas#59854](https://github.com/pandas-dev/pandas/pull/59854) (created 2024-09-20, merged 2024-09-25) |
+| ChaCo lists | full, ablation |
+| status | **not-fail-to-pass** -- no developer test fails before the change and passes after (254 pass on both sides) |
+| base commit | [`7e5282f5f125`](https://github.com/pandas-dev/pandas/commit/7e5282f5f125406cff7fdf80b452e114adfa4c26) (2024-09-25), first parent of the merge commit |
+| merge commit | [`c8a67401932c`](https://github.com/pandas-dev/pandas/commit/c8a67401932c773ace0f62660f09b5684f39a148) |
+| issues closed | none |
+| version | 3.0 |
+| image | `f2p-chaco/pandas-dev__pandas-59854:latest` -- [Dockerfile](../dockerfiles/pandas-dev__pandas-59854.Dockerfile) |
+| source files (`patch`) | `pandas/core/_numba/extensions.py`, `pandas/core/apply.py` |
+| test files (`test_patch`) | `pandas/tests/apply/test_frame_apply.py`, `pandas/tests/apply/test_numba.py` |
+| compiled files changed | none |
+| binary files left out | none |
+
+## FAIL_TO_PASS (0)
+
+(none)
+
+## PASS_TO_PASS (254)
+
+<details><summary>show</summary>
+
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args0-kwargs0-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args0-kwargs0-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args1-kwargs1-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args1-kwargs1-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args2-kwargs2-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args2-kwargs2-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args3-kwargs3-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args3-kwargs3-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args4-kwargs4-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args4-kwargs4-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args5-kwargs5-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args5-kwargs5-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args6-kwargs6-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_args_kwargs[args6-kwargs6-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_axis1_duplicate_index[1-None]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_axis1_duplicate_index[1-dtype1]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_axis1_duplicate_index[data2-None]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_dist_like_and_nonunique_columns`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_listlike_result`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_mapping_func_deprecated`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_multiple_mixed`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_multiple_mixed_raises`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_reduce[axis='columns']`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_reduce[axis='index']`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_reduce[axis=0]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_reduce[axis=1]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_std`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_transform[axis='columns']`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_transform[axis='index']`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_transform[axis=0]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_transform[axis=1]`
+- `pandas/tests/apply/test_frame_apply.py::test_agg_with_name_as_column_name`
+- `pandas/tests/apply/test_frame_apply.py::test_aggregation_func_column_order`
+- `pandas/tests/apply/test_frame_apply.py::test_any_apply_keyword_non_zero_axis_regression`
+- `pandas/tests/apply/test_frame_apply.py::test_apply[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-False-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-False-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-True-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-True-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-False-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-False-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-True-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-True-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[python-False-False-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[python-False-False-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[python-False-True-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[python-False-True-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[python-True-False-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[python-True-False-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[python-True-True-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[python-True-True-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_attach_name`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_attach_name_axis1`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_attach_name_non_reduction`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_attach_name_non_reduction_axis1`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_axis1`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_axis1_with_ea`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_broadcast_list_lambda_func`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_broadcast_lists_columns`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_broadcast_lists_index`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_broadcast_scalars`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_broadcast_scalars_axis1`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_broadcast_series_lambda_func`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_bug`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_categorical_func`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_category_equalness[12]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_category_equalness[None]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_category_equalness[asd]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_category_equalness[nan]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_convert_objects`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_datetime_tz_issue[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_dict[df0-dicts0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_dict[df1-dicts1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_differently_indexed`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_dtype[1.0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_dtype[1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_dtype[True]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_dtype[a]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_dtype[nan]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_dup_names_multi_agg`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty[numba-mean]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty[numba-sqrt]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty[python-mean]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty[python-sqrt]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_except_index[numba]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_except_index[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-0-False-identity-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-0-False-identity-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-0-False-mean-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-0-False-mean-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-0-True-identity-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-0-True-identity-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-0-True-mean-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-0-True-mean-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-1-False-identity-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-1-False-identity-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-1-False-mean-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-1-False-mean-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-1-True-identity-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-1-True-identity-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-1-True-mean-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[numba-1-True-mean-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-0-False-identity-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-0-False-identity-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-0-False-mean-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-0-False-mean-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-0-True-identity-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-0-True-identity-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-0-True-mean-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-0-True-mean-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-1-False-identity-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-1-False-identity-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-1-False-mean-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-1-False-mean-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-1-True-identity-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-1-True-identity-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-1-True-mean-columns]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type[python-1-True-mean-index]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_infer_type_broadcast`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_empty_list_reduce`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_float_frame[numba]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_float_frame[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_funcs_over_empty[all]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_funcs_over_empty[any]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_funcs_over_empty[prod]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_funcs_over_empty[sum]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_function_runs_once`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_getitem_axis_1[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_mixed_datetimelike`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_mixed_dtype_corner`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_mixed_dtype_corner_indexing`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_multi_index`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_mutating`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_nested_result_axis_1[agg]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_nested_result_axis_1[apply]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_no_suffix_index[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_non_numpy_dtype`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_non_numpy_dtype_category`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_noreduction_tzaware_object`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_on_empty_dataframe[numba]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_on_empty_dataframe[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_float_frame[python-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_float_frame[python-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_float_frame_lambda[numba-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_float_frame_lambda[numba-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_float_frame_lambda[python-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_float_frame_lambda[python-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_float_frame_no_reduction[numba]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_float_frame_no_reduction[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_function_runs_once[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_mixed_type_frame[python-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_mixed_type_frame[python-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_raw_returns_string[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_reduce_Series`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_reduce_to_dict`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_return_list`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_standard_nonunique`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_type`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_with_args_kwds_add_some`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_with_args_kwds_agg_and_add`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_with_args_kwds_subtract_and_divide`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_with_byte_string`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_with_reduce_empty`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_yield_list`
+- `pandas/tests/apply/test_frame_apply.py::test_consistency_for_boxed[array]`
+- `pandas/tests/apply/test_frame_apply.py::test_consistency_for_boxed[list]`
+- `pandas/tests/apply/test_frame_apply.py::test_consistency_for_boxed[tuple]`
+- `pandas/tests/apply/test_frame_apply.py::test_consistent_coerce_for_shapes[lst0]`
+- `pandas/tests/apply/test_frame_apply.py::test_consistent_coerce_for_shapes[lst1]`
+- `pandas/tests/apply/test_frame_apply.py::test_consistent_names`
+- `pandas/tests/apply/test_frame_apply.py::test_demo`
+- `pandas/tests/apply/test_frame_apply.py::test_demo_dict_agg`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda[ops0-compat-expected0]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda[ops1-False-expected1]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda[ops2-compat-expected2]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda[ops3-False-expected3]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda[ops4-compat-expected4]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda[ops5-False-expected5]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda[ops6-compat-expected6]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda[ops7-False-expected7]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda_raises[ops0]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda_raises[ops1]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda_raises[ops2]`
+- `pandas/tests/apply/test_frame_apply.py::test_dictlike_lambda_raises[ops3]`
+- `pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[python-2]`
+- `pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[python-3]`
+- `pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[python-5]`
+- `pandas/tests/apply/test_frame_apply.py::test_infer_output_shape_columns`
+- `pandas/tests/apply/test_frame_apply.py::test_infer_output_shape_listlike_columns`
+- `pandas/tests/apply/test_frame_apply.py::test_infer_output_shape_listlike_columns_np_func[1]`
+- `pandas/tests/apply/test_frame_apply.py::test_infer_output_shape_listlike_columns_np_func[2]`
+- `pandas/tests/apply/test_frame_apply.py::test_infer_output_shape_listlike_columns_with_timestamp`
+- `pandas/tests/apply/test_frame_apply.py::test_infer_row_shape`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda[ops0-compat-expected0]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda[ops1-False-expected1]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda[ops2-compat-expected2]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda[ops3-False-expected3]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda[ops4-compat-expected4]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda[ops5-False-expected5]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda[ops6-compat-expected6]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda[ops7-False-expected7]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda_raises[ops0]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda_raises[ops1]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda_raises[ops2]`
+- `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda_raises[ops3]`
+- `pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[max-df0]`
+- `pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[min-df0]`
+- `pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[sum-df0]`
+- `pandas/tests/apply/test_frame_apply.py::test_named_agg_reduce_axis1_raises`
+- `pandas/tests/apply/test_frame_apply.py::test_non_callable_aggregates[agg]`
+- `pandas/tests/apply/test_frame_apply.py::test_non_callable_aggregates[apply]`
+- `pandas/tests/apply/test_frame_apply.py::test_nuisance_depr_passes_through_warnings`
+- `pandas/tests/apply/test_frame_apply.py::test_nuiscance_columns`
+- `pandas/tests/apply/test_frame_apply.py::test_nunique_empty`
+- `pandas/tests/apply/test_frame_apply.py::test_result_type`
+- `pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast_series_func[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_result_type_series_result[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_result_type_series_result_other_index[python]`
+- `pandas/tests/apply/test_frame_apply.py::test_result_type_shorter_list`
+- `pandas/tests/apply/test_frame_apply.py::test_size_as_str[axis='columns'-agg]`
+- `pandas/tests/apply/test_frame_apply.py::test_size_as_str[axis='columns'-apply]`
+- `pandas/tests/apply/test_frame_apply.py::test_size_as_str[axis='index'-agg]`
+- `pandas/tests/apply/test_frame_apply.py::test_size_as_str[axis='index'-apply]`
+- `pandas/tests/apply/test_frame_apply.py::test_size_as_str[axis=0-agg]`
+- `pandas/tests/apply/test_frame_apply.py::test_size_as_str[axis=0-apply]`
+- `pandas/tests/apply/test_frame_apply.py::test_size_as_str[axis=1-agg]`
+- `pandas/tests/apply/test_frame_apply.py::test_size_as_str[axis=1-apply]`
+- `pandas/tests/apply/test_frame_apply.py::test_unique_agg_type_is_series[test0-constant0]`
+- `pandas/tests/apply/test_frame_apply.py::test_unique_agg_type_is_series[test1-constant1]`
+- `pandas/tests/apply/test_frame_apply.py::test_with_dictlike_columns`
+- `pandas/tests/apply/test_frame_apply.py::test_with_dictlike_columns_with_datetime`
+- `pandas/tests/apply/test_frame_apply.py::test_with_dictlike_columns_with_infer`
+- `pandas/tests/apply/test_frame_apply.py::test_with_listlike_columns`
+- `pandas/tests/apply/test_frame_apply.py::test_with_listlike_columns_returning_list`
+- `pandas/tests/apply/test_numba.py::test_numba_nonunique_unsupported[0]`
+- `pandas/tests/apply/test_numba.py::test_numba_nonunique_unsupported[1]`
+- `pandas/tests/apply/test_numba.py::test_numba_numeric_colnames[colnames0]`
+- `pandas/tests/apply/test_numba.py::test_numba_numeric_colnames[colnames1]`
+- `pandas/tests/apply/test_numba.py::test_numba_parallel_unsupported`
+- `pandas/tests/apply/test_numba.py::test_numba_unsupported_dtypes[0]`
+- `pandas/tests/apply/test_numba.py::test_numba_unsupported_dtypes[1]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_indexing`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_noop[0]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_noop[1]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[0-<lambda>0]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[0-<lambda>1]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[0-<lambda>2]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[0-<lambda>3]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[1-<lambda>0]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[1-<lambda>1]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[1-<lambda>2]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[1-<lambda>3]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_string_index`
+
+</details>
+
+## Problem statement (what the agent may be shown)
+
+```text
+Pull request #59854: String dtype: allow string dtype for non-raw apply with numba engine
+
+https://github.com/pandas-dev/pandas/pull/55104 enabled using numba with `raw=False` in `apply()` (BTW, this seems rather undocumented?), but that PR had some specific hack for object dtype index. Extending that hack to also convert str dtype index to numpy strings under the hood (this might hurt performance, but for now just want to get this working)
+
+
+
+
+xref https://github.com/pandas-dev/pandas/issues/54792
+```
+
+## Hints (issue comments before the PR; not shown to the agent)
+
+```text
+(none)
+```
+
+## `patch` -- the change under test
+
+```diff
+diff --git a/pandas/core/_numba/extensions.py b/pandas/core/_numba/extensions.py
+index e6f0427de2a3a820685922bb3b67521593909de4..413fdafc7fd0451c90a9b717c9d13255acf5cba0 100644
+--- a/pandas/core/_numba/extensions.py
++++ b/pandas/core/_numba/extensions.py
+@@ -53,7 +53,8 @@ if TYPE_CHECKING:
+ @contextmanager
+ def set_numba_data(index: Index):
+     numba_data = index._data
+-    if numba_data.dtype == object:
++    if numba_data.dtype in (object, "string"):
++        numba_data = np.asarray(numba_data)
+         if not lib.is_string_array(numba_data):
+             raise ValueError(
+                 "The numba engine only supports using string or numeric column names"
+diff --git a/pandas/core/apply.py b/pandas/core/apply.py
+index 5959156d1112335311c7f849123f3974ec88c6ae..7d50b466f5126cc9c48c04351ddae491d853f9f1 100644
+--- a/pandas/core/apply.py
++++ b/pandas/core/apply.py
+@@ -1172,12 +1172,7 @@ class FrameRowApply(FrameApply):
+         from pandas.core._numba.extensions import set_numba_data
+ 
+         index = self.obj.index
+-        if index.dtype == "string":
+-            index = index.astype(object)
+-
+         columns = self.obj.columns
+-        if columns.dtype == "string":
+-            columns = columns.astype(object)
+ 
+         # Convert from numba dict to regular dict
+         # Our isinstance checks in the df constructor don't pass for numbas typed dict
+```
+
+## `test_patch` -- the developer's tests (held out)
+
+```diff
+diff --git a/pandas/tests/apply/test_frame_apply.py b/pandas/tests/apply/test_frame_apply.py
+index 3be3562d23cd622fcbdc6ff96132c2161382d85c..dee0efcd8fd15665fd370a3dcaf08c80daba115f 100644
+--- a/pandas/tests/apply/test_frame_apply.py
++++ b/pandas/tests/apply/test_frame_apply.py
+@@ -65,7 +65,6 @@ def test_apply(float_frame, engine, request):
+         assert result.index is float_frame.index
+ 
+ 
+-@pytest.mark.xfail(using_string_dtype(), reason="TODO(infer_string)", strict=False)
+ @pytest.mark.parametrize("axis", [0, 1])
+ @pytest.mark.parametrize("raw", [True, False])
+ @pytest.mark.parametrize("nopython", [True, False])
+diff --git a/pandas/tests/apply/test_numba.py b/pandas/tests/apply/test_numba.py
+index 825d295043e69151cadb4904db362a31fde7a293..d6cd9c321ace612323c85296a53480fd2d848ec3 100644
+--- a/pandas/tests/apply/test_numba.py
++++ b/pandas/tests/apply/test_numba.py
+@@ -1,8 +1,6 @@
+ import numpy as np
+ import pytest
+ 
+-from pandas._config import using_string_dtype
+-
+ import pandas.util._test_decorators as td
+ 
+ import pandas as pd
+@@ -20,7 +18,6 @@ def apply_axis(request):
+     return request.param
+ 
+ 
+-@pytest.mark.xfail(using_string_dtype(), reason="TODO(infer_string)")
+ def test_numba_vs_python_noop(float_frame, apply_axis):
+     func = lambda x: x
+     result = float_frame.apply(func, engine="numba", axis=apply_axis)
+@@ -43,7 +40,6 @@ def test_numba_vs_python_string_index():
+     )
+ 
+ 
+-@pytest.mark.xfail(using_string_dtype(), reason="TODO(infer_string)")
+ def test_numba_vs_python_indexing():
+     frame = DataFrame(
+         {"a": [1, 2, 3], "b": [4, 5, 6], "c": [7.0, 8.0, 9.0]},
+```
+
+## Validation
+
+```json
+{
+ "test_files": [
+  "pandas/tests/apply/test_frame_apply.py",
+  "pandas/tests/apply/test_numba.py"
+ ],
+ "collected_before": 271,
+ "collected_after": 271,
+ "outcomes_before": {
+  "PASSED": 254,
+  "XFAIL": 11,
+  "SKIPPED": 6
+ },
+ "outcomes_after": {
+  "PASSED": 254,
+  "XFAIL": 11,
+  "SKIPPED": 6
+ },
+ "exit_before": 0,
+ "exit_after": 0,
+ "tail_before": "ba] - numba engine not supporting numpy ufunc yet\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast[numba] - numba engine doesn't support list return\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast_series_func[numba] - numba Series constructor only support ndarrays not list data\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_series_result[numba] - numba Series constructor only support ndarrays not list data\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_series_result_other_index[numba] - no support in numba Series constructor for list of columns\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-2] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-3] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-5] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_datetime_tz_issue[numba] - numba engine doesn't support non-numeric indexes\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_no_suffix_index[numba] - numba engine doesn't support list-likes/dict-like callables\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_getitem_axis_1[numba] - numba engine not supporting duplicate index values\n=========== 254 passed, 6 skipped, 11 xfailed, 8 warnings in 42.66s ============",
+ "tail_after": "ba] - numba engine not supporting numpy ufunc yet\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast[numba] - numba engine doesn't support list return\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast_series_func[numba] - numba Series constructor only support ndarrays not list data\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_series_result[numba] - numba Series constructor only support ndarrays not list data\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_series_result_other_index[numba] - no support in numba Series constructor for list of columns\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-2] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-3] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-5] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_datetime_tz_issue[numba] - numba engine doesn't support non-numeric indexes\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_no_suffix_index[numba] - numba engine doesn't support list-likes/dict-like callables\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_getitem_axis_1[numba] - numba engine not supporting duplicate index values\n=========== 254 passed, 6 skipped, 11 xfailed, 8 warnings in 46.64s ============",
+ "runner": "python -m pytest -v -rA -p no:cacheprovider --tb=short --color=no"
+}
+```

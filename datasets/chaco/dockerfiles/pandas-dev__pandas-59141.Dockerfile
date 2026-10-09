@@ -10,3 +10,4 @@ WORKDIR /testbed
 RUN uv pip install --system --exclude-newer 2024-07-05T10:08:08-07:00 -r requirements-dev.txt
 RUN python -m pip install --no-build-isolation -e . 
 RUN python -c 'import pandas; print(pandas.__version__)'
+ENV OPENBLAS_CORETYPE=Haswell

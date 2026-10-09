@@ -12,3 +12,4 @@ WORKDIR /testbed
 RUN uv pip install --system --exclude-newer 2025-04-25T14:45:38+00:00 $( [ -f constraints.txt ] && echo -c constraints.txt ) -r requirements.txt -r requirements-dev.txt setuptools-rust pytest
 RUN python -m pip install --no-build-isolation -e . 
 RUN python -c 'import qiskit; print(qiskit.__version__)'
+ENV OPENBLAS_CORETYPE=Haswell

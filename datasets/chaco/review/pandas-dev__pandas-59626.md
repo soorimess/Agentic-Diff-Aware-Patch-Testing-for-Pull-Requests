@@ -1,0 +1,229 @@
+# pandas-dev__pandas-59626
+
+[back to the list](README.md) -- **REF (string): rename result converter methods**
+
+| field | value |
+|---|---|
+| pull request | [pandas-dev/pandas#59626](https://github.com/pandas-dev/pandas/pull/59626) (created 2024-08-27, merged 2024-08-28) |
+| ChaCo lists | full, ablation |
+| status | **no-developer-test** -- the PR adds or changes no test: FAIL_TO_PASS cannot be derived |
+| base commit | [`5ad25d0eba90`](https://github.com/pandas-dev/pandas/commit/5ad25d0eba90726e87bda0d5b7f33a5acb7b0f6b) (2024-08-28), first parent of the merge commit |
+| merge commit | [`675293573cf3`](https://github.com/pandas-dev/pandas/commit/675293573cf3be8c59b45e34fce20f473186634e) |
+| issues closed | none |
+| version | (set by validate) |
+| image | `f2p-chaco/pandas-dev__pandas-59626:latest` -- [Dockerfile](../dockerfiles/pandas-dev__pandas-59626.Dockerfile) |
+| source files (`patch`) | `pandas/core/arrays/_arrow_string_mixins.py`, `pandas/core/arrays/arrow/array.py`, `pandas/core/arrays/string_arrow.py` |
+| test files (`test_patch`) | none |
+| compiled files changed | none |
+| binary files left out | none |
+
+## FAIL_TO_PASS (0)
+
+(none)
+
+## PASS_TO_PASS (0)
+
+<details><summary>show</summary>
+
+(none)
+
+</details>
+
+## Problem statement (what the agent may be shown)
+
+```text
+Pull request #59626: REF (string): rename result converter methods
+```
+
+## Hints (issue comments before the PR; not shown to the agent)
+
+```text
+(none)
+```
+
+## `patch` -- the change under test
+
+```diff
+diff --git a/pandas/core/arrays/_arrow_string_mixins.py b/pandas/core/arrays/_arrow_string_mixins.py
+index 06c74290bd82edfa23097449c95d66bb2a4e48eb..341ac2c0b48ecb9f64ee8fc1257f899712ddefd5 100644
+--- a/pandas/core/arrays/_arrow_string_mixins.py
++++ b/pandas/core/arrays/_arrow_string_mixins.py
+@@ -23,6 +23,14 @@ class ArrowStringArrayMixin:
+     def __init__(self, *args, **kwargs) -> None:
+         raise NotImplementedError
+ 
++    def _convert_bool_result(self, result):
++        # Convert a bool-dtype result to the appropriate result type
++        raise NotImplementedError
++
++    def _convert_int_result(self, result):
++        # Convert an integer-dtype result to the appropriate result type
++        raise NotImplementedError
++
+     def _str_pad(
+         self,
+         width: int,
+diff --git a/pandas/core/arrays/arrow/array.py b/pandas/core/arrays/arrow/array.py
+index a374afcacc45ab849d3f32d77b16ab9cddca3bc3..fbffb4a0a999096edb3f6ae7939e983f9b47dc3b 100644
+--- a/pandas/core/arrays/arrow/array.py
++++ b/pandas/core/arrays/arrow/array.py
+@@ -2311,6 +2311,12 @@ class ArrowExtensionArray(
+             for chunk in self._pa_array.iterchunks()
+         ]
+ 
++    def _convert_bool_result(self, result):
++        return type(self)(result)
++
++    def _convert_int_result(self, result):
++        return type(self)(result)
++
+     def _str_count(self, pat: str, flags: int = 0) -> Self:
+         if flags:
+             raise NotImplementedError(f"count not implemented with {flags=}")
+diff --git a/pandas/core/arrays/string_arrow.py b/pandas/core/arrays/string_arrow.py
+index 7c359d1a3132bc96081e32bf66ea70e33adc0f08..15807c365ecfd8a6bb512b786490a44e21cc390d 100644
+--- a/pandas/core/arrays/string_arrow.py
++++ b/pandas/core/arrays/string_arrow.py
+@@ -221,7 +221,7 @@ class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringAr
+             raise TypeError("Scalar must be NA or str")
+         return super().insert(loc, item)
+ 
+-    def _result_converter(self, values, na=None):
++    def _convert_bool_result(self, values, na=None):
+         if self.dtype.na_value is np.nan:
+             if not isna(na):
+                 values = values.fill_null(bool(na))
+@@ -293,7 +293,7 @@ class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringAr
+             result = pc.match_substring_regex(self._pa_array, pat, ignore_case=not case)
+         else:
+             result = pc.match_substring(self._pa_array, pat, ignore_case=not case)
+-        result = self._result_converter(result, na=na)
++        result = self._convert_bool_result(result, na=na)
+         if not isna(na):
+             result[isna(result)] = bool(na)
+         return result
+@@ -315,7 +315,7 @@ class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringAr
+                     result = pc.or_(result, pc.starts_with(self._pa_array, pattern=p))
+         if not isna(na):
+             result = result.fill_null(na)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_endswith(self, pat: str | tuple[str, ...], na: Scalar | None = None):
+         if isinstance(pat, str):
+@@ -334,7 +334,7 @@ class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringAr
+                     result = pc.or_(result, pc.ends_with(self._pa_array, pattern=p))
+         if not isna(na):
+             result = result.fill_null(na)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_replace(
+         self,
+@@ -387,43 +387,43 @@ class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringAr
+ 
+     def _str_isalnum(self):
+         result = pc.utf8_is_alnum(self._pa_array)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_isalpha(self):
+         result = pc.utf8_is_alpha(self._pa_array)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_isdecimal(self):
+         result = pc.utf8_is_decimal(self._pa_array)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_isdigit(self):
+         result = pc.utf8_is_digit(self._pa_array)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_islower(self):
+         result = pc.utf8_is_lower(self._pa_array)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_isnumeric(self):
+         result = pc.utf8_is_numeric(self._pa_array)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_isspace(self):
+         result = pc.utf8_is_space(self._pa_array)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_istitle(self):
+         result = pc.utf8_is_title(self._pa_array)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_isupper(self):
+         result = pc.utf8_is_upper(self._pa_array)
+-        return self._result_converter(result)
++        return self._convert_bool_result(result)
+ 
+     def _str_len(self):
+         result = pc.utf8_length(self._pa_array)
+-        return self._convert_int_dtype(result)
++        return self._convert_int_result(result)
+ 
+     def _str_lower(self) -> Self:
+         return type(self)(pc.utf8_lower(self._pa_array))
+@@ -470,7 +470,7 @@ class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringAr
+         if flags:
+             return super()._str_count(pat, flags)
+         result = pc.count_substring_regex(self._pa_array, pat)
+-        return self._convert_int_dtype(result)
++        return self._convert_int_result(result)
+ 
+     def _str_find(self, sub: str, start: int = 0, end: int | None = None):
+         if start != 0 and end is not None:
+@@ -484,7 +484,7 @@ class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringAr
+             result = pc.find_substring(slices, sub)
+         else:
+             return super()._str_find(sub, start, end)
+-        return self._convert_int_dtype(result)
++        return self._convert_int_result(result)
+ 
+     def _str_get_dummies(self, sep: str = "|"):
+         dummies_pa, labels = ArrowExtensionArray(self._pa_array)._str_get_dummies(sep)
+@@ -493,7 +493,7 @@ class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringAr
+         dummies = np.vstack(dummies_pa.to_numpy())
+         return dummies.astype(np.int64, copy=False), labels
+ 
+-    def _convert_int_dtype(self, result):
++    def _convert_int_result(self, result):
+         if self.dtype.na_value is np.nan:
+             if isinstance(result, pa.Array):
+                 result = result.to_numpy(zero_copy_only=False)
+@@ -520,7 +520,7 @@ class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringAr
+ 
+         result = self._reduce_calc(name, skipna=skipna, keepdims=keepdims, **kwargs)
+         if name in ("argmin", "argmax") and isinstance(result, pa.Array):
+-            return self._convert_int_dtype(result)
++            return self._convert_int_result(result)
+         elif isinstance(result, pa.Array):
+             return type(self)(result)
+         else:
+@@ -538,7 +538,7 @@ class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringAr
+         """
+         See Series.rank.__doc__.
+         """
+-        return self._convert_int_dtype(
++        return self._convert_int_result(
+             self._rank_calc(
+                 axis=axis,
+                 method=method,
+```
+
+## `test_patch` -- the developer's tests (held out)
+
+```diff
+
+```
+

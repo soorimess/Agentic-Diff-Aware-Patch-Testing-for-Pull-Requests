@@ -11,3 +11,4 @@ RUN git submodule update --init --recursive --depth 1 -q
 RUN uv pip install --system --exclude-newer 2025-05-13T10:19:56-07:00 -r requirements/build.txt -r requirements/test.txt -r requirements/default.txt
 RUN python -m pip install --no-build-isolation -e . 
 RUN python -c 'import scipy; print(scipy.__version__)'
+ENV OPENBLAS_CORETYPE=Haswell
