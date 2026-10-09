@@ -111,6 +111,22 @@ as a model failure ([decisions.md](decisions.md)).
 `SKIPPED` is not a failure: only `FAILED` and `ERROR` count as behavioural, so a skipped
 test contributes to neither side.
 
+### A test file that imports only after the fix (since 2026-10-09)
+
+Sometimes a test module cannot import at base because it uses a name the pull request
+adds: a class, a function or a module. pytest then reports one collection ERROR under the
+file's name, and no test ids at all. If the same file imports after the fix, its tests are
+**fail-to-pass**. They failed at base because the fixed code did not exist yet. SWE-bench
+counts them that way, and `verify.unimportable_at_base` now does too. The verdict, the
+agent's `verify` tool and ChaCo's `validate` all apply it.
+
+Before this change, such a test read as "produced no usable failure" (an agent's test) or
+as BROKEN (a developer test). The user asked how much that rule had cost, and across all
+2,580 saved SWE-bench results it changed exactly one final verdict:
+`sphinx-doc__sphinx-7590` in an old experiment, which was not one of the 36 PRs. A file
+that fails to import on both sides, through a typo or a missing package, has no tests
+after the fix either and still counts for nothing.
+
 ## Coverage
 
 One definition: **of the executable lines this pull request changed, how many did the test

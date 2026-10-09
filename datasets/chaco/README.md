@@ -50,11 +50,6 @@ not runnable.
 - `broken-env`: the developer's tests collect nothing in the image, or pytest did not
   finish (a crash or timeout). A run without pytest's closing summary line is never read
   as a result.
-- `import-error-at-base`: the developer's tests pass after the change, but at base their
-  module does not import, so they are missing rather than failing. SWE-bench counts
-  these as FAIL_TO_PASS. Our `verify()` reports an expected test missing from the output
-  as BROKEN, so these rows are kept apart and not run. The tests are listed in
-  `FAIL_TO_PASS_import_error`.
 - `oracle-mismatch`: the derived flip is not reproduced by `verify()`.
 - `no-developer-test`: the PR adds or changes no test. FAIL_TO_PASS cannot be derived, and
   both the developer column of mutation and the judge need a developer test, so these

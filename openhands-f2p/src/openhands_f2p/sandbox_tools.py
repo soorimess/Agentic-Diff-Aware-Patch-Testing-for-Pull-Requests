@@ -864,6 +864,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         try:
             after = self.box.exec(cmd, timeout=3600)
             head_out = V.own_outcomes(E.parse_output(after.output), [action.target])
+            # A file that did not import at base and does now: its tests failed at base
+            # (`V.unimportable_at_base`, the verdict's own rule).
+            base_out = V.unimportable_at_base(base_out, head_out)
             # Inside the patched window, which is the only moment the lines the change
             # adds exist at all. Computed here rather than after the revert -- doing it
             # afterwards measures coverage of a tree where those line numbers hold

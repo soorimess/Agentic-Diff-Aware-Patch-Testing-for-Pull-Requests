@@ -15,8 +15,11 @@ The decision itself:
 and three things that sentence leaves out, each of which produces a wrong number rather
 than an error:
 
-  1. Why it failed at base. A test that dies on an import also "fails at base" and
-     proves nothing about the bug.
+  1. Why it failed at base. A test that dies on an import also "fails at base", and
+     that proves nothing about the bug -- unless the import works once the fix is
+     applied. Then what failed was the fix's own new name (a class, a function, a
+     module the pull request adds), and the test is fail-to-pass: SWE-bench counts it
+     so, and since 2026-10-09 so does this (`unimportable_at_base`).
   2. Whether the environment was sane to begin with. PASS_TO_PASS answers that, and it
      is the caller's job to have checked.
   3. Whether the test is even reachable -- a generated file that does not import
@@ -448,6 +451,30 @@ def files_the_patch_creates(patch: str) -> list[str]:
             current = line.split(" b/", 1)[1] if " b/" in line else None
         elif line.startswith("new file mode") and current:
             out.append(current)
+    return out
+
+
+def unimportable_at_base(base: dict, head: dict) -> dict:
+    """`base`, with each test of a file that did not import at base marked ERROR there.
+
+    A test module that cannot be imported reports one collection ERROR under the *file's*
+    name (`tests/test_x.py`) and no test ids. When the same file imports after the fix,
+    its tests appear under their own ids -- and they did not run before because the
+    module needs a name the fix adds. SWE-bench counts those tests as FAIL_TO_PASS; this
+    harness reported "produced no usable failure" (an agent test, sphinx-7590) or BROKEN
+    (a developer test, ChaCo scipy-21700). User, 2026-10-09: they are fail-to-pass.
+
+    Only for a file whose import error goes away: one that fails to import on both sides
+    (a typo, a missing package) has no ids after the fix and gains nothing here.
+    """
+    broken = {n for n, st in base.items()
+              if st == "ERROR" and "::" not in n and n.endswith(".py")}
+    if not broken:
+        return base
+    out = dict(base)
+    for n in head:
+        if "::" in n and n.split("::", 1)[0] in broken and n not in out:
+            out[n] = "ERROR"
     return out
 
 
@@ -1037,12 +1064,14 @@ def _decide(iid: str, repo: str, base: dict, head: dict, targets: list[str],
     """
     if expected is not None:
         # Gold test: we know exactly which ids must flip, so check those and nothing else.
+        base = unimportable_at_base(base, head)
         pairs = [(n, E.outcome_of(base, n), E.outcome_of(head, n))
                  for n in expected]
         flipped = [n for n, b, h in pairs if b in BEHAVIOURAL and h == "PASSED"]
         missing = [n for n, b, _ in pairs if b is None]
     else:
         base, head = own_outcomes(base, targets), own_outcomes(head, targets)
+        base = unimportable_at_base(base, head)
         failed_before = {n for n, s in base.items() if s in BEHAVIOURAL}
         passed_after = {n for n, s in head.items() if s == "PASSED"}
         flipped = sorted(failed_before & passed_after)

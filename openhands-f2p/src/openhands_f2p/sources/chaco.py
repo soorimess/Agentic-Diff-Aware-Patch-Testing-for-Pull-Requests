@@ -489,6 +489,9 @@ def validate(iid: str, quiet: bool = False) -> dict:
         box.apply_patch(row["patch"])
         after = box.exec(cmd, timeout=3600)
         b, a = E.parse_output(before.output), E.parse_output(after.output)
+        # The verdict's rule: a test module that imports only once the change is applied
+        # failed at base (`V.unimportable_at_base`).
+        b = V.unimportable_at_base(b, a)
         f2p = sorted(n for n, s in b.items() if s in V.BEHAVIOURAL and a.get(n) == "PASSED")
         p2p = sorted(n for n, s in b.items() if s == "PASSED" and a.get(n) == "PASSED")
         box.apply_patch(row["patch"], revert=True)
@@ -499,13 +502,6 @@ def validate(iid: str, quiet: bool = False) -> dict:
                      + dist + "'))\"", workdir="/").stdout.strip().splitlines()
         m = re.match(r"(\d+)\.(\d+)", v[-1] if v else "")
         row["version"] = f"{m.group(1)}.{m.group(2)}" if m else ""
-        # Tests absent at base because their module does not import there (a collection
-        # ERROR on the file) and passing after. SWE-bench counts these as FAIL_TO_PASS;
-        # our verify() reports an expected test missing from the output as BROKEN, so
-        # they are recorded apart rather than silently in or out.
-        broken_files = {n for n, s in b.items() if s == "ERROR" and "::" not in n}
-        unimportable = sorted(n for n, s in a.items() if s == "PASSED" and n not in b
-                              and n.split("::")[0] in broken_files)
 
         def tally(o: dict) -> dict:
             out: dict[str, int] = {}
@@ -513,7 +509,6 @@ def validate(iid: str, quiet: bool = False) -> dict:
                 out[st] = out.get(st, 0) + 1
             return out
         row.update(FAIL_TO_PASS=json.dumps(f2p), PASS_TO_PASS=json.dumps(p2p),
-                   FAIL_TO_PASS_import_error=json.dumps(unimportable),
                    validated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                    validation={"test_files": files, "collected_before": len(b),
                                "collected_after": len(a),
@@ -538,15 +533,12 @@ def validate(iid: str, quiet: bool = False) -> dict:
                            .output.strip()[-200:])
         elif (not b and not a) or (b and a and all(st == "ERROR" for st in b.values())
                                     and all(st == "ERROR" for st in a.values())):
+            # Errors only, on both sides: the files never ran a test (a module that does not
+            # import even with the change, a collection incompatibility).
             row.update(status="broken-env",
                        why="the developer's test files run no test on either side "
                            "(nothing collected, or only collection errors): "
                            + before.output.strip()[-300:])
-        elif not f2p and unimportable:
-            row.update(status="import-error-at-base",
-                       why=f"{len(unimportable)} developer test(s) pass after the change, but "
-                           f"their module does not import at base (collection error): "
-                           f"FAIL_TO_PASS for SWE-bench, BROKEN for our verify()")
         elif not f2p:
             row.update(status="not-fail-to-pass",
                        why=f"no developer test fails before the change and passes after "
@@ -626,9 +618,6 @@ def review(which: str = "ablation") -> Path:
             f"| binary files left out | {', '.join(r.get('binary_files_left_out', [])) or 'none'} |",
             "", f"## FAIL_TO_PASS ({len(f2p)})", "",
             *(f"- `{n}`" for n in f2p), *([] if f2p else ["(none)"]),
-            *([ "", f"## Pass after, absent at base: module does not import ({len(imp)})", "",
-                *(f"- `{n}`" for n in imp)] if (imp := json.loads(
-                    r.get("FAIL_TO_PASS_import_error") or "[]")) else []),
             "", f"## PASS_TO_PASS ({len(p2p)})", "",
             "<details><summary>show</summary>", "",
             *(f"- `{n}`" for n in p2p), *([] if p2p else ["(none)"]),
