@@ -106,7 +106,12 @@ def benchmark(which: str = "full") -> list[tuple[str, int]]:
 def lists_of(iid: str) -> list[str]:
     """The ChaCo lists this PR is on."""
     repo, n = parse_id(iid)
-    return [name for name in LISTS if (repo, n) in benchmark(name)]
+    # Only lists that exist: `f2p30` is written by `fill`, after the rows it is made from.
+    # Asking for it before then raised, which ended `prepare` before it rewrote a single
+    # Dockerfile -- and the SciPy images were rebuilt without their import fix (2026-10-10).
+    return [name for name in LISTS
+            if (name != "f2p30" or (BENCHMARK.parent / LISTS[name]).exists())
+            and (repo, n) in benchmark(name)]
 
 
 # ------------------------------------------------------------------ GitHub, cached
