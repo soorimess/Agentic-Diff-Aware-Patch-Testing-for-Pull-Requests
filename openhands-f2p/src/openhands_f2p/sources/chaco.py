@@ -275,10 +275,14 @@ RECIPES = {
         "rust": True,
         "deps": ("uv pip install --system --exclude-newer {date} "
                  "$( [ -f constraints.txt ] && echo -c constraints.txt ) "
-                 "-r requirements.txt -r requirements-dev.txt setuptools-rust pytest"),
+                 "-r requirements.txt -r requirements-dev.txt setuptools-rust 'pytest<8.2'"),
         # pytest: Qiskit runs its suite with stestr, and the harness runs tests with pytest
         # (it reads pytest's output), which collects Qiskit's unittest classes as they
         # are. Not in requirements-dev.txt; ChaCo's Qiskit Dockerfile adds it too.
+        # Below 8.2: pytest 8.2 instantiates unittest classes while collecting, and
+        # Qiskit's testtools-based QiskitTestCase then fails with "object has no
+        # attribute 'runTest'" -- test_random_circuit.py collected two errors and no
+        # test on either side (Qiskit-12483, 2026-10-09).
         "install": "python -m pip install --no-build-isolation -e . ",
         "check": "python -c 'import qiskit; print(qiskit.__version__)'",
     },
@@ -532,9 +536,11 @@ def validate(iid: str, quiet: bool = False) -> dict:
                            f"(exit {before.returncode}/{after.returncode}): "
                            + (before if "before" in unfinished else after)
                            .output.strip()[-200:])
-        elif not b and not a:
+        elif (not b and not a) or (b and a and all(st == "ERROR" for st in b.values())
+                                    and all(st == "ERROR" for st in a.values())):
             row.update(status="broken-env",
-                       why="the developer's test files collected nothing on either side: "
+                       why="the developer's test files run no test on either side "
+                           "(nothing collected, or only collection errors): "
                            + before.output.strip()[-300:])
         elif not f2p and unimportable:
             row.update(status="import-error-at-base",

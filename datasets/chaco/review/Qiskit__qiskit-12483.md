@@ -6,7 +6,7 @@
 |---|---|
 | pull request | [Qiskit/qiskit#12483](https://github.com/Qiskit/qiskit/pull/12483) (created 2024-05-31, merged 2024-06-07) |
 | ChaCo lists | full, ablation |
-| status | **not-fail-to-pass** -- no developer test fails before the change and passes after (0 pass on both sides) |
+| status | **runnable** -- 5 developer test(s) flip; oracle reproduces it |
 | base commit | [`d18a74cd4592`](https://github.com/Qiskit/qiskit/commit/d18a74cd45922f4960a9eb90ceef89f9c6c184e5) (2024-06-07), first parent of the merge commit |
 | merge commit | [`0b1c8bfd18d4`](https://github.com/Qiskit/qiskit/commit/0b1c8bfd18d422a3bdb5ef3c2c4fff977cdbe390) |
 | issues closed | none |
@@ -17,15 +17,23 @@
 | compiled files changed | none |
 | binary files left out | none |
 
-## FAIL_TO_PASS (0)
+## FAIL_TO_PASS (5)
 
-(none)
+- `test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_2and3_qubit_gates_only`
+- `test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_3and4_qubit_gates_only`
+- `test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_num_operand_distribution`
+- `test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_with_zero_distribution`
+- `test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_mid_circuit_measure_conditional`
 
-## PASS_TO_PASS (0)
+## PASS_TO_PASS (5)
 
 <details><summary>show</summary>
 
-(none)
+- `test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_large_conditional`
+- `test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_conditional_reset`
+- `test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_depth_0`
+- `test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_measure`
+- `test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_simple_random`
 
 </details>
 
@@ -389,18 +397,19 @@ index deadcd09d692c0ac111e83d3d4d5373e7cb708a4..ebbdfd28d6482132d63719a801ab6a39
  "test_files": [
   "test/python/circuit/test_random_circuit.py"
  ],
- "collected_before": 2,
- "collected_after": 2,
+ "collected_before": 10,
+ "collected_after": 10,
  "outcomes_before": {
-  "ERROR": 2
+  "PASSED": 5,
+  "FAILED": 5
  },
  "outcomes_after": {
-  "ERROR": 2
+  "PASSED": 10
  },
- "exit_before": 2,
- "exit_after": 2,
- "tail_before": "____ ERROR collecting test/python/circuit/test_random_circuit.py __________\nqiskit/utils/classtools.py:112: in out\n    retval = method(*args, **kwargs)\ntest/utils/base.py:75: in __init__\n    super().__init__(*args, **kwargs)\n/usr/local/lib/python3.11/site-packages/testtools/testcase.py:241: in __init__\n    test_method = self._get_test_method()\n/usr/local/lib/python3.11/site-packages/testtools/testcase.py:696: in _get_test_method\n    return getattr(self, method_name)\nE   AttributeError: 'FullQiskitTestCase' object has no attribute 'runTest'\n_________ ERROR collecting test/python/circuit/test_random_circuit.py __________\nqiskit/utils/classtools.py:112: in out\n    retval = method(*args, **kwargs)\ntest/utils/base.py:75: in __init__\n    super().__init__(*args, **kwargs)\n/usr/local/lib/python3.11/site-packages/testtools/testcase.py:241: in __init__\n    test_method = self._get_test_method()\n/usr/local/lib/python3.11/site-packages/testtools/testcase.py:696: in _get_test_method\n    return getattr(self, method_name)\nE   AttributeError: 'TestCircuitRandom' object has no attribute 'runTest'\n=========================== short test summary info ============================\nERROR test/python/circuit/test_random_circuit.py::QiskitTestCase - AttributeE...\nERROR test/python/circuit/test_random_circuit.py::TestCircuitRandom - Attribu...\n!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!\n============================== 2 errors in 3.29s ===============================",
- "tail_after": "____ ERROR collecting test/python/circuit/test_random_circuit.py __________\nqiskit/utils/classtools.py:112: in out\n    retval = method(*args, **kwargs)\ntest/utils/base.py:75: in __init__\n    super().__init__(*args, **kwargs)\n/usr/local/lib/python3.11/site-packages/testtools/testcase.py:241: in __init__\n    test_method = self._get_test_method()\n/usr/local/lib/python3.11/site-packages/testtools/testcase.py:696: in _get_test_method\n    return getattr(self, method_name)\nE   AttributeError: 'FullQiskitTestCase' object has no attribute 'runTest'\n_________ ERROR collecting test/python/circuit/test_random_circuit.py __________\nqiskit/utils/classtools.py:112: in out\n    retval = method(*args, **kwargs)\ntest/utils/base.py:75: in __init__\n    super().__init__(*args, **kwargs)\n/usr/local/lib/python3.11/site-packages/testtools/testcase.py:241: in __init__\n    test_method = self._get_test_method()\n/usr/local/lib/python3.11/site-packages/testtools/testcase.py:696: in _get_test_method\n    return getattr(self, method_name)\nE   AttributeError: 'TestCircuitRandom' object has no attribute 'runTest'\n=========================== short test summary info ============================\nERROR test/python/circuit/test_random_circuit.py::QiskitTestCase - AttributeE...\nERROR test/python/circuit/test_random_circuit.py::TestCircuitRandom - Attribu...\n!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!\n============================== 2 errors in 1.48s ===============================",
+ "exit_before": 1,
+ "exit_after": 0,
+ "tail_before": "se.py\", line 873, in assertEqual\n    assertion_func(first, second, msg=msg)\n  File \"/usr/local/lib/python3.11/unittest/case.py\", line 866, in _baseAssertEqual\n    raise self.failureException(msg)\nAssertionError: 4 != 5\n\n==================================== PASSES ====================================\n=========================== short test summary info ============================\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_large_conditional\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_conditional_reset\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_depth_0\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_measure\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_simple_random\nFAILED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_2and3_qubit_gates_only\nFAILED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_3and4_qubit_gates_only\nFAILED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_num_operand_distribution\nFAILED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_with_zero_distribution\nFAILED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_mid_circuit_measure_conditional\n========================= 5 failed, 5 passed in 2.30s ==========================",
+ "tail_after": "]\ntest/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_mid_circuit_measure_conditional PASSED [ 90%]\ntest/python/circuit/test_random_circuit.py::TestCircuitRandom::test_simple_random PASSED [100%]\n\n==================================== PASSES ====================================\n=========================== short test summary info ============================\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_large_conditional\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_2and3_qubit_gates_only\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_3and4_qubit_gates_only\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_conditional_reset\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_num_operand_distribution\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_circuit_with_zero_distribution\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_depth_0\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_measure\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_random_mid_circuit_measure_conditional\nPASSED test/python/circuit/test_random_circuit.py::TestCircuitRandom::test_simple_random\n============================== 10 passed in 1.63s ==============================",
  "runner": "python -m pytest -v -rA -p no:cacheprovider --tb=short --color=no"
 }
 ```

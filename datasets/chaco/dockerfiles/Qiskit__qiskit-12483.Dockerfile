@@ -9,7 +9,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --pr
 RUN pip install uv
 RUN git clone --filter=blob:none -q https://github.com/Qiskit/qiskit.git /testbed && cd /testbed && git checkout -q d18a74cd45922f4960a9eb90ceef89f9c6c184e5
 WORKDIR /testbed
-RUN uv pip install --system --exclude-newer 2024-06-07T11:49:18+00:00 $( [ -f constraints.txt ] && echo -c constraints.txt ) -r requirements.txt -r requirements-dev.txt setuptools-rust pytest
+RUN uv pip install --system --exclude-newer 2024-06-07T11:49:18+00:00 $( [ -f constraints.txt ] && echo -c constraints.txt ) -r requirements.txt -r requirements-dev.txt setuptools-rust 'pytest<8.2'
 RUN python -m pip install --no-build-isolation -e . 
 RUN python -c 'import qiskit; print(qiskit.__version__)'
 ENV OPENBLAS_CORETYPE=Haswell
