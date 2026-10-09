@@ -5,7 +5,7 @@
 | field | value |
 |---|---|
 | pull request | [Qiskit/qiskit#12483](https://github.com/Qiskit/qiskit/pull/12483) (created 2024-05-31, merged 2024-06-07) |
-| ChaCo lists | full, ablation |
+| ChaCo lists | full, ablation, f2p30 |
 | status | **runnable** -- 5 developer test(s) flip; oracle reproduces it |
 | base commit | [`d18a74cd4592`](https://github.com/Qiskit/qiskit/commit/d18a74cd45922f4960a9eb90ceef89f9c6c184e5) (2024-06-07), first parent of the merge commit |
 | merge commit | [`0b1c8bfd18d4`](https://github.com/Qiskit/qiskit/commit/0b1c8bfd18d422a3bdb5ef3c2c4fff977cdbe390) |

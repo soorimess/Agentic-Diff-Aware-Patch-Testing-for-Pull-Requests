@@ -35,6 +35,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -50,7 +51,9 @@ DOCKERFILES = HOME / "dockerfiles"
 BENCHMARK = HOME / "benchmark" / "rq_full.json"
 # ChaCo's lists. `full` is the benchmark (RQ1, 145 PRs); `ablation` is the 30 (10 per
 # project) its ablation study (RQ3) ran on, all of them inside `full`.
-LISTS = {"full": "rq_full.json", "ablation": "rq_ablation.json"}
+LISTS = {"full": "rq_full.json", "ablation": "rq_ablation.json", "f2p30": "f2p30.json"}
+# `f2p30` is ours, not ChaCo's: 10 runnable PRs per project from `full`, chosen by `fill`
+# (2026-10-10) -- every one with developer tests that flip and an oracle that agrees.
 
 # The paper's artifact, pinned: the list must not move under a run that cites it.
 CHACO_REPO = "UCLA-SEAL/Change-Cover"
@@ -89,6 +92,8 @@ def benchmark(which: str = "full") -> list[tuple[str, int]]:
     if which not in LISTS:
         raise SystemExit(f"unknown ChaCo list {which!r}; known: {', '.join(LISTS)}")
     path = BENCHMARK.parent / LISTS[which]
+    if not path.exists() and which == "f2p30":
+        raise SystemExit("the f2p30 list does not exist yet; `sources fill chaco` makes it")
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         with urllib.request.urlopen(BENCHMARK_URL.format(name=LISTS[which]),
@@ -267,6 +272,14 @@ RECIPES = {
                  "-r requirements/default.txt"),
         "install": "python -m pip install --no-build-isolation -e . ",
         "check": "python -c 'import scipy; print(scipy.__version__)'",
+        # meson-python's editable import hook knows only the files that existed at build
+        # time, and SciPy's meson.build lists its test files one by one -- so a *new* test
+        # file under scipy/ cannot be imported as `scipy.x.tests.test_new` at all
+        # ("ModuleNotFoundError", every SciPy agent run of 2026-10-09). pytest's importlib
+        # mode imports a test file by path instead. Existing SciPy test files give the same
+        # results either way (25 of 28 relative-import files compared; the 3 that differ
+        # are the vendored array_api_compat tests, which fail in both modes).
+        "env": "PYTEST_ADDOPTS=--import-mode=importlib",
     },
     "Qiskit/qiskit": {
         "python": "3.11",
@@ -328,6 +341,7 @@ def dockerfile(row: dict) -> str:
         # (AVX2, FMA) is what that CPU and any recent x86 has; with it all 1926 pass.
         # Last, so changing it rebuilds one layer.
         "ENV OPENBLAS_CORETYPE=Haswell",
+        *([f"ENV {r['env']}"] if r.get("env") else []),
     ]
     return "\n".join(lines) + "\n"
 
@@ -555,6 +569,71 @@ def validate(iid: str, quiet: bool = False) -> dict:
     save_row(row)
     print(f"  {row['status']:<16} {iid:32s} {row['why'][:90]}")
     return row
+
+
+# ------------------------------------------------------------------ fill: a list of 30
+PROJECTS = ("scipy/scipy", "Qiskit/qiskit", "pandas-dev/pandas")
+CANDIDATE = ("prepared", "runnable", "broken-env", "oracle-mismatch")
+
+
+def fill(per_project: int = 10, seed: int = 0, parallel: int = 4,
+         redo: tuple[str, ...] = ()) -> dict[str, list[str]]:
+    """Build and validate candidates until each project has `per_project` runnable PRs.
+
+    Order per project: rows already runnable first (re-checked: `redo` lists those whose
+    image changed since), then every other candidate with a developer test, shuffled by
+    `seed` so the choice is reproducible and nobody picked it. Stops building a project
+    once it has enough; the list is written to `benchmark/f2p30.json` in ChaCo's format.
+    """
+    import random
+    rows = _read_rows()
+    queue: dict[str, list[str]] = {}
+    for repo in PROJECTS:
+        mine = [r for r in rows.values() if r["repo"] == repo and r["status"] in CANDIDATE
+                and "full" in r.get("chaco_lists", ["full"])]
+        done = sorted(r["instance_id"] for r in mine if r["status"] == "runnable")
+        rest = sorted(r["instance_id"] for r in mine if r["status"] != "runnable")
+        random.Random(f"{seed}:{repo}").shuffle(rest)
+        queue[repo] = done + rest
+    chosen: dict[str, list[str]] = {repo: [] for repo in PROJECTS}
+    checked: set[str] = set()
+
+    def status(iid: str) -> str:
+        return _read_rows()[iid]["status"]
+
+    while True:
+        batch = []
+        for repo in PROJECTS:
+            need = per_project - len(chosen[repo])
+            pending = [i for i in queue[repo] if i not in checked]
+            batch += pending[:max(0, need)]
+        if not batch:
+            break
+        batch = batch[:max(parallel, 1) * 2]
+        todo = [i for i in batch if i in redo or status(i) != "runnable"]
+        if todo:
+            ids = ",".join(todo)
+            for action, extra in (("build", ["--rebuild"]), ("validate", [])):
+                subprocess.run([sys.executable, "-m", "openhands_f2p.sources", action, NAME,
+                                ids, "--parallel", str(parallel), *extra])
+        for iid in batch:
+            checked.add(iid)
+            repo = rows[iid]["repo"]
+            if status(iid) == "runnable" and len(chosen[repo]) < per_project:
+                chosen[repo].append(iid)
+        print("  fill: " + ", ".join(f"{r.split('/')[1]} {len(c)}/{per_project}"
+                                     for r, c in chosen.items()), flush=True)
+    out = {"note": f"ours, not ChaCo's: {per_project} runnable PRs per project from rq_full, "
+                   f"seed {seed}, made by `sources fill chaco`",
+           "projects": {repo: {"pr_numbers": [parse_id(i)[1] for i in ids]}
+                        for repo, ids in chosen.items()}}
+    path = BENCHMARK.parent / LISTS["f2p30"]
+    path.write_text(json.dumps(out, indent=1) + "\n")
+    for iid in (i for ids in chosen.values() for i in ids):
+        row = _read_rows()[iid]
+        row["chaco_lists"] = lists_of(iid)
+        save_row(row)
+    return chosen
 
 
 # ------------------------------------------------------------------ review pages

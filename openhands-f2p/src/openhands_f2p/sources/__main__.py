@@ -74,7 +74,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("action", choices=("list", "info", "prepare", "build", "validate",
-                                      "review"))
+                                      "review", "fill"))
     p.add_argument("dataset", nargs="?", default="")
     p.add_argument("which", nargs="?", default="",
                    help="comma-separated instance ids, or 'all'")
@@ -115,6 +115,12 @@ def main() -> int:
     if not hasattr(src, "recipe"):
         raise SystemExit(f"  {a.dataset} has nothing to {a.action}: its rows and images "
                          f"come ready-made")
+    if a.action == "fill":
+        redo = tuple(w.strip() for w in a.which.split(",") if w.strip())
+        chosen = mod.fill(parallel=max(a.parallel, 1), redo=redo)
+        for repo, ids in chosen.items():
+            print(f"  {repo}: {len(ids)}  {', '.join(ids)}")
+        return 0 if all(len(v) >= 10 for v in chosen.values()) else 1
     if a.action == "review":
         print(f"  wrote {mod.review(a.which or 'ablation')}")
         return 0

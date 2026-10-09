@@ -5,7 +5,7 @@
 | field | value |
 |---|---|
 | pull request | [pandas-dev/pandas#59141](https://github.com/pandas-dev/pandas/pull/59141) (created 2024-06-28, merged 2024-07-05) |
-| ChaCo lists | full, ablation |
+| ChaCo lists | full, ablation, f2p30 |
 | status | **runnable** -- 2 developer test(s) flip; oracle reproduces it |
 | base commit | [`039edee0bc1a`](https://github.com/pandas-dev/pandas/commit/039edee0bc1a729ee9b67a6f9a337f7cd03118d1) (2024-07-05), first parent of the merge commit |
 | merge commit | [`f3ad4d50aee3`](https://github.com/pandas-dev/pandas/commit/f3ad4d50aee360092c54b918b28c2cba90c90f20) |
