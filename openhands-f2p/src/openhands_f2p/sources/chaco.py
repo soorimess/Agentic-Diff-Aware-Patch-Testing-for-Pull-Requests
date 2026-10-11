@@ -273,6 +273,9 @@ RECIPES = {
         # `xfail(using_string_dtype())` markers, and nothing differs with it off
         # (59854, 60196, 60295, 60713; audit 2026-10-11). On, as the version they target.
         "env": "PANDAS_FUTURE_INFER_STRING=1",
+        "notes": ["PANDAS_FUTURE_INFER_STRING=1: pandas' future string dtype is on "
+                  "(`pd.options.future.infer_string` is True), as in pandas 3.0 -- strings "
+                  "default to the `str` dtype, and `using_string_dtype()` is True."],
     },
     "scipy/scipy": {
         "python": "3.12",
@@ -292,6 +295,9 @@ RECIPES = {
         # results either way (25 of 28 relative-import files compared; the 3 that differ
         # are the vendored array_api_compat tests, which fail in both modes).
         "env": "PYTEST_ADDOPTS=--import-mode=importlib",
+        "notes": ["PYTEST_ADDOPTS=--import-mode=importlib: pytest imports each test file "
+                  "by its path, so a test file here cannot use relative imports "
+                  "(`from .x import y`); import from `scipy...` instead."],
     },
     "Qiskit/qiskit": {
         "python": "3.11",
@@ -435,7 +441,8 @@ def prepare_one(repo: str, number: int) -> dict:
                base_date=base_date, patch=patch, test_patch=test_patch,
                problem_statement=problem, closes_issues=issues,
                hints_text=hints(repo, issues, pr["created_at"]),
-               chaco_lists=lists_of(iid), binary_files_left_out=binary)
+               chaco_lists=lists_of(iid), binary_files_left_out=binary,
+               environment_notes=list(RECIPES.get(repo, {}).get("notes", [])))
     compiled = [p for p in _paths(patch) if p.endswith(COMPILED)]
     row["compiled_files"] = compiled
     if repo not in RECIPES:

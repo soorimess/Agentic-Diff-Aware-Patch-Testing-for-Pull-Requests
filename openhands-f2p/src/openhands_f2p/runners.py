@@ -519,7 +519,7 @@ def example_tests(box, directory: str, limit: int = 3) -> list[str]:
     return [f.strip().removeprefix("./") for f in found if f.strip()]
 
 
-def repo_facts(box, test_file: str) -> str:
+def repo_facts(box, test_file: str, environment: list[str] | None = None) -> str:
     """A short briefing on how testing works here, for the prompt."""
     runner = runner_for(box)
     directory = test_file.rsplit("/", 1)[0] if "/" in test_file else ""
@@ -543,6 +543,13 @@ def repo_facts(box, test_file: str) -> str:
     if config:
         lines += ["", "Test configuration, verbatim from the checkout:", ""]
         lines += [f"  {line}" for line in config.splitlines()]
+    # Settings the instance's image makes that change how the code or its tests behave
+    # (the dataset row's `environment_notes`). Without them the agent could not know that
+    # pandas' future string dtype was on, which is the only thing some PRs change (ChaCo
+    # canary pandas-59854, 2026-10-11). SWE-bench rows carry none.
+    if environment:
+        lines += ["", "Environment (set in this container):"]
+        lines += [f"  {note}" for note in environment]
     if runner["args"] == "labels":
         # A hard rule, not a style. A labels runner is unittest discovery underneath,
         # and unittest collects methods named test_* on TestCase subclasses and nothing

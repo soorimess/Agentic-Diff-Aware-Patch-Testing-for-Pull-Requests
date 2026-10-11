@@ -470,7 +470,9 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     briefed = "repo-facts" in features
     shown = test_file if briefed else Path(test_file).name
     task = prompt.build(repo=instance["repo"], test_file=shown,
-                        repo_facts=E.repo_facts(box, test_file) if briefed else "",
+                        repo_facts=E.repo_facts(box, test_file,
+                                                instance.get("environment_notes"))
+                        if briefed else "",
                         problem=instance["problem_statement"] if "issue" in features
                         else "",
                         patch=instance["patch"] if "patch" in features else "",
