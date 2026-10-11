@@ -739,21 +739,33 @@ def check(which: str = "ablation") -> tuple[Path, int]:
             probs.append(f"merge commit parents {[p[:12] for p in parents]}, row base "
                          f"{r['base_commit'][:12]}")
         cmp = _gh(f"repos/{repo}/compare/{r['base_commit']}...{r['merge_commit']}")
-        gh = {}
-        for f in cmp.get("files", []):
-            if f.get("status") == "renamed" and f.get("previous_filename"):
-                gh.setdefault(f["previous_filename"], ("renamed-from", 0))
-            gh[f["filename"]] = (f.get("additions", 0), f.get("deletions", 0))
         ours = _counts(r.get("patch", "") + r.get("test_patch", ""))
         skipped = set(r.get("binary_files_left_out") or [])
-        diff_issues = []
+        gh, renames, diff_issues = {}, [], []
+        for f in cmp.get("files", []):
+            if f.get("status") == "renamed" and f.get("previous_filename"):
+                renames.append(f)
+            else:
+                gh[f["filename"]] = (f.get("additions", 0), f.get("deletions", 0))
+        # Our diff is made with --no-renames: GitHub's "renamed old -> new, +a/-d" is our
+        # "old deleted (all its lines) + new added (all its lines)". Same tree exactly when
+        # new's line count = old's line count + a - d.
+        for f in renames:
+            old_p, new_p = f["previous_filename"], f["filename"]
+            o_old, o_new = ours.get(old_p), ours.get(new_p)
+            if (o_old is None or o_new is None or o_old[0] != 0 or o_new[1] != 0
+                    or o_new[0] != o_old[1] + f.get("additions", 0) - f.get("deletions", 0)):
+                diff_issues.append(f"rename `{old_p}` -> `{new_p}` (+{f.get('additions')}/"
+                                   f"-{f.get('deletions')}) not matched by ours "
+                                   f"{o_old} / {o_new}")
+            ours = {k: v for k, v in ours.items() if k not in (old_p, new_p)}
         for path in sorted(set(gh) | set(ours)):
             if path in skipped:
                 continue
             g, o = gh.get(path), ours.get(path)
             if g is None or o is None:
                 diff_issues.append(f"`{path}` only in {'ours' if g is None else 'GitHub'}")
-            elif g[0] != "renamed-from" and g != o:
+            elif g != o:
                 diff_issues.append(f"`{path}` +{o[0]}/-{o[1]} ours vs +{g[0]}/-{g[1]} GitHub")
         c3 = not diff_issues and len(cmp.get("files", [])) < 300
         if not c3:
@@ -776,8 +788,9 @@ def check(which: str = "ablation") -> tuple[Path, int]:
         ok = all((c1, c2, c3, c4, c5, c6))
         bad += not ok
         mark = lambda b: "✓" if b else "**✗**"
+        nfiles = len(_counts(r.get("patch", "") + r.get("test_patch", "")))
         lines.append(f"| [{iid}]({iid}.md) | {mark(c1)} | {mark(c2)} | {mark(c3)} "
-                     f"({len(ours)} files) | {mark(c4)} | {mark(c5)} | {mark(c6)} | "
+                     f"({nfiles} files) | {mark(c4)} | {mark(c5)} | {mark(c6)} | "
                      f"{r.get('status')} |")
         if probs:
             details.append(f"- **{iid}**: " + "; ".join(probs))
