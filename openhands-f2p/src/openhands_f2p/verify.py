@@ -75,7 +75,7 @@ class Verdict:
         return d
 
 
-def gen_test_path(instance_id: str, box: Sandbox | None = None) -> str:
+def gen_test_path(instance_id: str, box: Sandbox | None = None, patch: str = "") -> str:
     """Where a generated test has to live for this project's runner to collect it.
 
     `test_directory` reads it off the checkout: the shallowest directory named `tests`,
@@ -93,8 +93,24 @@ def gen_test_path(instance_id: str, box: Sandbox | None = None) -> str:
     name = f"test_f2p_{instance_id.replace('-', '_')}"
     if box is None:
         return f"tests/{name}.py"           # provisional, before a container exists
-    directory = E.test_directory(box)
+    # Beside the code the pull request changes when the project lays tests out that way
+    # (`E.near_test_directory`, since 2026-10-11), else the repo-wide rule above.
+    directory = (E.near_test_directory(box, _by_size(patch)) if patch else "") \
+        or E.test_directory(box)
     return f"{directory}/{name}.py" if directory else f"{name}.py"
+
+
+def _by_size(patch: str) -> list[str]:
+    """The patch's source files, the one with the most changed lines first."""
+    counts: dict[str, int] = {}
+    cur = None
+    for ln in patch.splitlines():
+        if ln.startswith("diff --git "):
+            cur = ln.split(" b/", 1)[-1].strip()
+        elif cur and ln[:1] in "+-" and not ln.startswith(("+++", "---")):
+            counts[cur] = counts.get(cur, 0) + 1
+    files = [f for f in E.patched_source_files(patch) if f in counts]
+    return sorted(files, key=lambda f: -counts[f])
 
 
 def _relative(path: str) -> str:
@@ -196,15 +212,25 @@ def shortfall(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str, st
         # refused the stop -- the check above only knew "all PASSED".
         found = ("skipped_at_base",
                  f"Every test in `{rel}` is skipped on this code. A skipped test neither "
-                 f"fails nor passes, so it cannot show the bug. Find what skips it in the "
-                 f"run below -- a skip decorator, a feature this database backend lacks, "
+                 f"fails nor passes, so it cannot show the change. Find what skips it in the "
+                 f"run below -- a skip decorator, a `skipTest` or `pytest.skip` you wrote, "
                  f"an optional package that is not installed -- and write the test so it "
                  f"runs here.")
+    elif any(st == "SKIPPED" for st in outcomes.values()):
+        # Some pass and some are skipped, none fails. Reported as "every test passes"
+        # until 2026-10-11, which hid the cause: ChaCo Qiskit-12483 skipped its own tests
+        # whenever the argument the change adds was missing (8 skipped, 1 passed).
+        skipped = sum(st == "SKIPPED" for st in outcomes.values())
+        found = ("passes_at_base",
+                 f"Nothing in `{rel}` fails on this code: {len(outcomes) - skipped} test(s) "
+                 f"pass and {skipped} are skipped. A skipped test cannot show the change -- "
+                 f"if the test skips itself when something the change adds is missing, "
+                 f"that missing thing is the old behaviour: let the test fail on it instead.")
     else:
         found = ("passes_at_base",
-                 f"Every test in `{rel}` passes on this code. The bug is still present "
-                 f"here, so a test that already passes is not testing the change -- "
-                 f"whatever it checks was true before the fix as well.")
+                 f"Every test in `{rel}` passes on this code. The change is not applied "
+                 f"here, so a test that already passes is not testing it -- whatever it "
+                 f"checks was true before the change as well.")
     return found[0], found[1] + _evidence(box, rel, r.output)
 
 
@@ -362,9 +388,11 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
                 f"It runs {cov['covered']} of the {cov['executable_changed_lines']} lines "
                 f"this pull request changes; these never run: {shown_missed}. Either the "
                 f"assertion checks something true on both sides of the change, or the "
-                f"difference lies on a line the input never reaches. `coverage` shows those "
-                f"lines and the conditions above each; work out what the changed lines "
-                f"compute differently and assert that.")
+                f"difference lies on a line the input never reaches. Work out what the "
+                f"changed lines compute differently, assert that, and check it with `verify` "
+                f"-- the flip comes first. (`coverage` shows those lines and the conditions "
+                f"above each, numbered as in the files *with* the change applied, so look "
+                f"them up in the diff rather than by line number in this checkout.)")
     # "So the input is aimed at the right code ... Keep the input" claimed more than a
     # line count shows. Running a changed line is not taking the path the fix changes:
     # django-16333's form had no many-to-many field, sympy-21612's base was a `Mul` where
@@ -882,7 +910,10 @@ def _never_entered(cov: dict) -> str:
            f"apply the change before they measure, so those lines can run. Reach them through "
            f"the public code that uses them, the behaviour the issue describes."
            if added else "")
-    return (f"Most of them are in functions your test never calls: {shown}{more}. Call those "
+    in_cold = sum(g["missed"] for g in cold)
+    share = ("Most of them are" if in_cold * 2 > len(cov.get("missed") or [])
+             else f"{in_cold} of them are")
+    return (f"{share} in functions your test never calls: {shown}{more}. Call those "
             f"with inputs that matter to this change and assert on what they return or do.{new} ")
 
 
@@ -1120,7 +1151,7 @@ def _decide(iid: str, repo: str, base: dict, head: dict, targets: list[str],
         v.f2p = "NO"
         v.why = ("passes before the fix too, so it does not test the change"
                  if any(s == "PASSED" for s in base.values())
-                 else "skipped before the fix, so it never ran against the bug"
+                 else "skipped before the fix, so it never ran against the old code"
                  if base and all(s == "SKIPPED" for s in base.values())
                  else "produced no usable failure before the fix")
     else:
@@ -1165,7 +1196,7 @@ def verify(
         # where the briefing correctly pointed it, while the verdict was computed on an
         # empty file at `tests/`, reporting "nothing collected on either side" for a
         # test that was fine. Same failure, one layer earlier.
-        rel = test_path or gen_test_path(iid, box)
+        rel = test_path or gen_test_path(iid, box, instance["patch"])
         box.write(rel, generated_test)
         flow.record(flow.VERIFY, "install test", f"{rel} "
                     f"({generated_test.count(chr(10)) + 1} lines)")

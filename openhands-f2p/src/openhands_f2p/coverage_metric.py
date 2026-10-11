@@ -18,7 +18,7 @@ import shlex
 from typing import TYPE_CHECKING
 
 from openhands_f2p.runners import runner_for, test_command
-from openhands_f2p.statements import statement_start
+from openhands_f2p.statements import executable_lines, statement_start
 from openhands_f2p.sandbox import REPO_DIR
 
 if TYPE_CHECKING:
@@ -215,9 +215,19 @@ def changed_lines(diff: str) -> dict[str, set[int]]:
     return {k: v for k, v in result.items() if v}
 
 
+# Top-level directories that hold no library code: documentation builders, benchmarks,
+# CI and release tooling. Their .py files are not what a test can import -- scipy-21462
+# changed `doc/convert_notebooks.py`, which put an unkillable mutant in the mutation pool,
+# and (once unimported files counted as missed) would have lowered coverage for lines no
+# test can reach (ChaCo audit, 2026-10-11).
+NOT_LIBRARY = ("doc", "docs", "benchmarks", "asv_bench", "tools", "ci", ".github",
+               "examples", "release", "dev")
+
+
 def patched_source_files(patch: str) -> list[str]:
-    """The non-test Python files a patch touches -- the subject of the measurement."""
-    return [p for p in changed_lines(patch) if p.endswith(".py") and not is_test_file(p)]
+    """The non-test library Python files a patch touches -- the subject of the measurement."""
+    return [p for p in changed_lines(patch) if p.endswith(".py") and not is_test_file(p)
+            and p.split("/", 1)[0] not in NOT_LIBRARY and p != "setup.py"]
 
 
 def added_lines_between(base_text: str, head_text: str) -> set[int]:
@@ -311,6 +321,7 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
     missed: list[str] = []
     environment: list[str] = []
     matched: dict[str, str] = {}
+    unimported: list[str] = []
     for path, lines in wanted.items():
         info = traced["raw"].get(path)
         if info is not None:
@@ -324,7 +335,15 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
                 if k == path or k.endswith("/" + path) or path.endswith("/" + k):
                     info, matched[path] = v, k
                     break
-        info = info or {"executed": set(), "measurable": set()}
+        if info is None:
+            # Never imported by the test (nor by anything it ran): no coverage record at
+            # all. Its executable changed lines are *missed*, not invisible. Leaving them
+            # out of the denominator reported Qiskit-14024 at 50% (4/8) with two of its
+            # five changed files -- one a new 121-line module -- not counted (ChaCo
+            # audit, 2026-10-11).
+            info = {"executed": set(),
+                    "measurable": executable_lines(heads.get(path, ""))}
+            unimported.append(path)
         # A changed line coverage cannot speak about may still belong to a statement it
         # can. A continuation line is not a statement, so it never appears in
         # `missing_lines` and appears in `executed_lines` only when it runs -- scoreable
@@ -388,6 +407,8 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
             # from the key, coverage followed a copy of the library somewhere else and
             # the line numbers are not comparable -- worth being able to see.
             "matched_files": matched,
+            # Changed files the test never imported; their lines are all in `missed`.
+            "unimported_files": unimported,
             # Carried even when the measurement succeeds, because a *low* number is as
             # likely to be a harness fault as a thin test and there is no way to tell
             # them apart afterwards without it. sympy-12096 reported 0% on a one-line

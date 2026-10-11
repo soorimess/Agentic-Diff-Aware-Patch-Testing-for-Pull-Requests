@@ -139,11 +139,15 @@ def _resolve_blocks(body: str, features: FeatureSet) -> str:
         # being kept, so a kept inline block reads exactly as if it had no tags.
         if m.start() > 0 and m.string[m.start() - 1] != "\n":
             tail = "\n" if m.group(0).endswith("\n") else ""
+            # The spaces before an inline opener are the sentence's, not the block's:
+            # "If you did, {?verify-tool}the checks...{/verify-tool}" rendered as
+            # "If you did,the checks" (ChaCo audit, 2026-10-11).
+            space = m.group(0)[:len(m.group(0)) - len(m.group(0).lstrip(" \t"))]
             if not keep:
-                return tail
+                return space + tail
             lead = "\n" if m.string[m.start(2) - 1] == "\n" else ""
             mid = "\n" if m.string[m.end(2)] == "\n" else ""
-            return lead + m.group(2) + mid + tail
+            return space + lead + m.group(2) + mid + tail
         return f"{m.group(2)}\n" if keep else ""
     while True:
         resolved = BLOCK.sub(one, body)
@@ -187,7 +191,11 @@ def followup(name: str, **fields: object) -> str:
 # lost 4,173 characters of its issue. Every one of the 36 fits now; a longer text is cut
 # with a line saying so.
 ISSUE_CHARS = 20000
-PATCH_CHARS = 30000
+# 60000 since 2026-10-11. Every SWE-bench patch fits in 30000; ChaCo's scipy-21700 is
+# 142,019 characters, and a plain cut at 30000 hid the class the PR adds (`Mixture`,
+# from character 68,330) while saying "read the files in the repository for the rest"
+# -- of a repository that is at base and has none of it. Longer ones: `clip_patch`.
+PATCH_CHARS = 60000
 
 
 def clip_marked(text: str, limit: int) -> str:
@@ -196,6 +204,68 @@ def clip_marked(text: str, limit: int) -> str:
         return text
     return (text[:limit] + f"\n[... {len(text) - limit} more characters not shown here -- "
             f"read the files in the repository for the rest ...]")
+
+
+_COMMENTISH = ("#", '"""', "'''")
+
+
+def _hunks(chunk: str) -> tuple[str, list[str]]:
+    """A file's diff split into its header and its hunks."""
+    parts = re.split(r"(?m)^(?=@@ )", chunk)
+    return parts[0], parts[1:]
+
+
+def clip_patch(patch: str, limit: int) -> str:
+    """The patch, or -- when it is longer than `limit` -- the part that says most about it.
+
+    Always the list of every file the change touches, with its added and removed line
+    counts. Then whole hunks, those adding the most code first (removed docstrings and
+    reformatting last), shown in their original order, until the budget is spent. The
+    note names what is left out and says plainly that the repository is at base, so the
+    missing new code is not there to be read.
+    """
+    if len(patch) <= limit:
+        return patch
+    chunks = [c for c in re.split(r"(?m)^(?=diff --git )", patch)
+              if c.startswith("diff --git ")]
+    summary, hunks = [], []                  # (key, file index, header, hunk, score)
+    for fi, chunk in enumerate(chunks):
+        path = chunk.split("\n", 1)[0].split(" b/", 1)[-1]
+        head, hs = _hunks(chunk)
+        lines = chunk.splitlines()
+        adds = sum(ln.startswith("+") and not ln.startswith("+++") for ln in lines)
+        dels = sum(ln.startswith("-") and not ln.startswith("---") for ln in lines)
+        summary.append(f"  {path} (+{adds}/-{dels})")
+        for hi, h in enumerate(hs):
+            code = sum(1 for ln in h.splitlines()[1:]
+                       if ln.startswith("+") and ln[1:].strip()
+                       and not ln[1:].lstrip().startswith(_COMMENTISH))
+            hunks.append(((fi, hi), fi, head, h, code))
+    intro = ("This change touches these files (lines added/removed):\n"
+             + "\n".join(summary) + "\n\n")
+    budget = limit - len(intro) - 400
+    chosen: set = set()
+    for key, _fi, head, h, _score in sorted(hunks, key=lambda t: -t[4]):
+        cost = len(h) + (0 if any(k[0] == key[0] for k in chosen) else len(head))
+        if cost <= budget:
+            chosen.add(key)
+            budget -= cost
+    out, shown_files, left = [], set(), []
+    for key, fi, head, h, _ in hunks:
+        if key in chosen:
+            if fi not in shown_files:
+                out.append(head)
+                shown_files.add(fi)
+            out.append(h)
+        else:
+            left.append(fi)
+    missing = sorted({chunks[fi].split("\n", 1)[0].split(" b/", 1)[-1] for fi in left})
+    note = (f"\n[... {len(left)} of the {len(hunks)} hunks are not shown, to keep this "
+            f"short: they are in {', '.join(missing[:12])}"
+            f"{' and others' if len(missing) > 12 else ''}. The repository is at the "
+            f"commit BEFORE this change, so it does not contain the code those hunks add; "
+            f"the file list above is complete.]")
+    return intro + "".join(out).rstrip("\n") + note
 
 
 def build(*, repo: str, test_file: str, problem: str = "", repo_facts: str = "",
@@ -218,7 +288,7 @@ def build(*, repo: str, test_file: str, problem: str = "", repo_facts: str = "",
     text = "\n\n".join(text_parts).format(
         repo=repo, test_file=test_file, repo_facts=repo_facts,
         problem=clip_marked(problem.strip(), ISSUE_CHARS),
-        patch=clip_marked(patch.strip(), PATCH_CHARS))
+        patch=clip_patch(patch.strip(), PATCH_CHARS))
     _check_no_absent_tools(text, features)
     build.last_pieces = used
     return text

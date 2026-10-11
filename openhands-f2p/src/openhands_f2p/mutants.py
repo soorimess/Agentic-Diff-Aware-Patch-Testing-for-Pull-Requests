@@ -490,6 +490,7 @@ class Score:
     # `developer_excluded` names the ones that do not (see `measure`).
     developer_measured: bool = True
     developer_excluded: list[str] = field(default_factory=list)
+    developer_why: str = ""
     mutants: list[dict] = field(default_factory=list)
 
     def _pct(self, n: int) -> float | None:
@@ -507,7 +508,8 @@ class Score:
                               if self.developer_measured else
                               {"killed": None, "total": self.total, "percent": None,
                                "excluded": self.developer_excluded,
-                               "why": "none of the developer's tests pass on the fixed "
+                               "why": self.developer_why or
+                                      "none of the developer's tests pass on the fixed "
                                       "code in this sandbox"}),
                 "mutants": self.mutants}
 
@@ -619,6 +621,13 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
             gold_ok = [n for n in gold_expected if R.outcome_of(gold_out, n) == "PASSED"]
         score.developer_excluded = [n for n in gold_expected if n not in gold_ok]
         score.developer_measured = bool(gold_ok)
+        # "none of the developer's tests pass here" was said of PRs with no developer
+        # test at all, and of ones whose tests do not flip -- nothing had been run.
+        if not instance["test_patch"].strip():
+            score.developer_why = "this pull request has no developer test"
+        elif not gold_expected:
+            score.developer_why = ("no developer test fails before the fix and passes "
+                                   "after (no FAIL_TO_PASS ids)")
         t0 = time.monotonic()
         gen_failed = _fails(box, [gen_path], gen_expected)
         gen_limit = _mutant_timeout(time.monotonic() - t0)

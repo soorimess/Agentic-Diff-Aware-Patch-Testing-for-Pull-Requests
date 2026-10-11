@@ -799,7 +799,7 @@ def mutate_saved(pr: dict, n: int, root: Path | None = None) -> dict:
     with flow.recording(d, f"{pr['id']}  mutation on the saved test"), \
             E.Sandbox(pr["id"], quiet=True, extra_packages=("coverage",)) as box:
         box.strip_git()
-        test_file = r.get("test_path") or V.gen_test_path(pr["id"], box)
+        test_file = r.get("test_path") or V.gen_test_path(pr["id"], box, inst["patch"])
         score = mutants.measure(inst, box, code, test_file, n, out_dir=d,
                                 quiet=False)
     field("mutants", mutants.line(score.as_dict()))
@@ -900,7 +900,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
         # every `verify` met "tree not at base" and the run was BROKEN. The guard removes
         # them like an edit to a file that was here (`sandbox_tools._undo_edits`).
         box.reserved_paths = V.files_the_patch_creates(inst["patch"])
-        test_file = V.gen_test_path(pr["id"], box)
+        test_file = V.gen_test_path(pr["id"], box, inst["patch"])
         flow.record(flow.SETUP, "test path", test_file)
         field("sandbox", f"{image.split('.')[-1]}   network=none, git stripped")
         # Under --repo-search this is only what the harness *would* have chosen; the

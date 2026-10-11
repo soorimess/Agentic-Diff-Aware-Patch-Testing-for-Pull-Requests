@@ -589,10 +589,19 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
                    "once the fix is in. Which lines run says nothing about that -- the file "
                    "is not fail-to-pass until `verify` says it is."
                    if cov.get("test_run_returncode") not in (0, None) else "")
+        # Before the flip, reach is the wrong question. In the ChaCo audit (2026-10-11)
+        # runs that never flipped made 90 `coverage` calls against 124 `verify` calls, and
+        # some read "runs every line" as progress for a test that passed at base.
+        from openhands_f2p import verify as V
+        rel = V._relative(action.target.split("::")[0])
+        unflipped = ("" if V.verify_settled(self.log, rel) else
+                     "\n\nNote: `verify` has not shown this file fail-to-pass yet. Which "
+                     "changed lines run matters only for a test that fails before the change "
+                     "and passes after -- get that first, with `verify`.")
         if not cov["missed"]:
             return CoverageObservation.from_text(
                 score + "Your test runs every executable line this pull request changed."
-                + import_only + failing)
+                + import_only + failing + unflipped)
         # The import-time note went out only when nothing was missed, so astropy-13398
         # (base, cap 125), whose 31 "covered" lines were all imports, constants and `def`
         # lines, never saw it in four calls.
@@ -604,7 +613,10 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         # `if not isinstance(q, SYMPY_INTS)`" says exactly what the input has to look
         # like for that line to run.
         lines += ["", "For each one you can see the code and the conditions above it -- "
-                      "those conditions are what your input has to satisfy:", ""]
+                      "those conditions are what your input has to satisfy. Line numbers "
+                      "are in the files *with* the change applied; this checkout is the code "
+                      "before it, where the same numbers can point at other lines, so find "
+                      "these lines in the diff:", ""]
         for item in cov.get("missed_source") or []:
             lines.append(f"  {item['ref']}")
             for g in item["guards"]:
@@ -634,7 +646,7 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
                       "You will be sent back while lines are missed: change the test and "
                       "call `coverage` again, until every changed line runs or an honest "
                       "attempt reaches no more of them."]
-        return CoverageObservation.from_text("\n".join(lines) + failing)
+        return CoverageObservation.from_text("\n".join(lines) + failing + unflipped)
 
 
 class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
@@ -938,8 +950,14 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     f"is applied. The test is wrong, not the code.")
         elif not flipped and base_out and all(v == "SKIPPED" for v in base_out.values()):
             head = ("NOT fail-to-pass: every test was skipped before the change, so none "
-                    "of them ran against the bug. Find what skips them in the output "
+                    "of them ran against the old code. Find what skips them in the output "
                     "below and make the test run here.")
+        elif not flipped and any(v == "SKIPPED" for v in base_out.values()):
+            n_skip = sum(v == "SKIPPED" for v in base_out.values())
+            head = (f"NOT fail-to-pass: before the change nothing fails -- "
+                    f"{len(base_out) - n_skip} test(s) pass and {n_skip} are skipped. A "
+                    f"skipped test cannot show the change; if it skips because something "
+                    f"the change adds is missing, let it fail on that instead.")
         elif not flipped:
             head = ("NOT fail-to-pass: the test already passes before the change, so it "
                     "does not test what this pull request changes.")

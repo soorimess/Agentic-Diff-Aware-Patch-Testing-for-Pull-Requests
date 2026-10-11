@@ -6,7 +6,7 @@
 |---|---|
 | pull request | [pandas-dev/pandas#60295](https://github.com/pandas-dev/pandas/pull/60295) (created 2024-11-13, merged 2024-11-15) |
 | ChaCo lists | full, ablation |
-| status | **not-fail-to-pass** -- no developer test fails before the change and passes after (279 pass on both sides) |
+| status | **runnable** -- 2 developer test(s) flip; oracle reproduces it |
 | base commit | [`63d3971328f9`](https://github.com/pandas-dev/pandas/commit/63d3971328f96fb176305ff2886e5b67a9c39454) (2024-11-15), first parent of the merge commit |
 | merge commit | [`fae3e8034faf`](https://github.com/pandas-dev/pandas/commit/fae3e8034faf66eb8ef00bcbed73d48e4ef791d3) |
 | issues closed | none |
@@ -17,11 +17,12 @@
 | compiled files changed | none |
 | binary files left out | none |
 
-## FAIL_TO_PASS (0)
+## FAIL_TO_PASS (2)
 
-(none)
+- `pandas/tests/frame/methods/test_fillna.py::TestFillNA::test_fillna_mixed_type`
+- `pandas/tests/frame/methods/test_replace.py::TestDataFrameReplace::test_regex_replace_regex_list_to_numeric`
 
-## PASS_TO_PASS (279)
+## PASS_TO_PASS (277)
 
 <details><summary>show</summary>
 
@@ -53,7 +54,6 @@
 - `pandas/tests/frame/methods/test_fillna.py::TestFillNA::test_fillna_invalid_value`
 - `pandas/tests/frame/methods/test_fillna.py::TestFillNA::test_fillna_limit_and_value`
 - `pandas/tests/frame/methods/test_fillna.py::TestFillNA::test_fillna_mixed_float`
-- `pandas/tests/frame/methods/test_fillna.py::TestFillNA::test_fillna_mixed_type`
 - `pandas/tests/frame/methods/test_fillna.py::TestFillNA::test_fillna_no_downcast[DataFrame]`
 - `pandas/tests/frame/methods/test_fillna.py::TestFillNA::test_fillna_no_downcast[Series]`
 - `pandas/tests/frame/methods/test_fillna.py::TestFillNA::test_fillna_on_column_view`
@@ -116,7 +116,6 @@
 - `pandas/tests/frame/methods/test_replace.py::TestDataFrameReplace::test_regex_replace_list_obj[True-True-to_replace2-values2-expected2]`
 - `pandas/tests/frame/methods/test_replace.py::TestDataFrameReplace::test_regex_replace_list_to_scalar`
 - `pandas/tests/frame/methods/test_replace.py::TestDataFrameReplace::test_regex_replace_numeric_to_object_conversion`
-- `pandas/tests/frame/methods/test_replace.py::TestDataFrameReplace::test_regex_replace_regex_list_to_numeric`
 - `pandas/tests/frame/methods/test_replace.py::TestDataFrameReplace::test_regex_replace_series_of_regexes`
 - `pandas/tests/frame/methods/test_replace.py::TestDataFrameReplace::test_regex_replace_str_to_numeric`
 - `pandas/tests/frame/methods/test_replace.py::TestDataFrameReplace::test_regex_replace_string_types[DataFrame-string=object-data0-to_replace0-expected0]`
@@ -769,15 +768,16 @@ index 73f44bcc6657e72d660363890719becfaf0634a5..b2320798ea9a2aabdd7704a4d30e650d
  "collected_before": 279,
  "collected_after": 279,
  "outcomes_before": {
-  "PASSED": 279
+  "PASSED": 277,
+  "FAILED": 2
  },
  "outcomes_after": {
   "PASSED": 279
  },
- "exit_before": 0,
+ "exit_before": 1,
  "exit_after": 0,
- "tail_before": "FrameReplaceRegex::test_regex_replace_scalar[False-False-True-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-True-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*\\\\.\\\\s*-nan-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*\\\\.\\\\s*-nan-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_regex_dtype_frame[False]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_regex_dtype_frame[True]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_with_value_also_being_replaced\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_categorical_no_replacement\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_object_splitting\n============================= 279 passed in 1.07s ==============================",
- "tail_after": "FrameReplaceRegex::test_regex_replace_scalar[False-False-True-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-True-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*\\\\.\\\\s*-nan-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*\\\\.\\\\s*-nan-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_regex_dtype_frame[False]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_regex_dtype_frame[True]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_with_value_also_being_replaced\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_categorical_no_replacement\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_object_splitting\n============================= 279 passed in 0.89s ==============================",
+ "tail_before": "lse-False-True-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*\\\\.\\\\s*-nan-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*\\\\.\\\\s*-nan-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_regex_dtype_frame[False]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_regex_dtype_frame[True]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_with_value_also_being_replaced\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_categorical_no_replacement\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_object_splitting\nFAILED pandas/tests/frame/methods/test_fillna.py::TestFillNA::test_fillna_mixed_type\nFAILED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplace::test_regex_replace_regex_list_to_numeric\n======================== 2 failed, 277 passed in 2.26s =========================",
+ "tail_after": "FrameReplaceRegex::test_regex_replace_scalar[False-False-True-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-True-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*\\\\.\\\\s*-nan-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*\\\\.\\\\s*-nan-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data0]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_regex_replace_scalar[False-False-False-\\\\s*(\\\\.)\\\\s*-\\\\1\\\\1\\\\1-data1]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_regex_dtype_frame[False]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_regex_dtype_frame[True]\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_with_value_also_being_replaced\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_categorical_no_replacement\nPASSED pandas/tests/frame/methods/test_replace.py::TestDataFrameReplaceRegex::test_replace_object_splitting\n============================= 279 passed in 1.17s ==============================",
  "runner": "python -m pytest -v -rA -p no:cacheprovider --tb=short --color=no"
 }
 ```

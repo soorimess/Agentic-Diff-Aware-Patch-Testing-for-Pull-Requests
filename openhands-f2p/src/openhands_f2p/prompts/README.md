@@ -10,10 +10,10 @@ stripped before the prompt is sent** — the model sees only the body.
 
 | file | job |
 |---|---|
-| `10-situation.md` | where the model is, and that the bug is still present |
+| `10-situation.md` | where the model is, and that the change is not in this code |
 | `16-explore.md` | what to establish about the checkout, when the briefing is withheld |
 | `20-goal.md` | the one deliverable, and what fail-to-pass means |
-| `30-issue.md` | the bug report, verbatim from the dataset |
+| `30-issue.md` | what the pull request is about, verbatim from the dataset |
 | `40-tools.md` | the always-present tools, that `run_tests` builds the command, and to read neighbouring tests first |
 | `45-tools-verify.md` | `verify`, which needs the diff |
 | `46-tools-coverage.md` | `coverage`, and what it is for |

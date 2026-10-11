@@ -11,8 +11,8 @@ What you have done so far:
 {recap}
 
 The goal has not changed: one test file at `{test_file}` that **fails on the code as it
-is now and passes once the bug is fixed**. You are in the same checkout you were in a
-moment ago, the bug is still present, and everything you read is still above -- you do
+is now and passes once the change is applied**. You are in the same checkout you were in
+a moment ago, the change is still not applied, and everything you read is still above -- you do
 not need to read any of it again.
 
 You have {budget} actions left of the {cap} this run started with. Nothing was added; what

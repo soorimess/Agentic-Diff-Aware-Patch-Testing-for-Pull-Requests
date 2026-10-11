@@ -174,8 +174,12 @@ class Sandbox:
                      timeout=timeout + 60)
             out = ExecResult(r.returncode, r.stdout, r.stderr)
             if r.returncode in (124, 137) and time.time() - t0 >= timeout:
-                out = ExecResult(124, r.stdout, (r.stderr or "")
-                                 + f"\ntimed out after {timeout}s and was killed")
+                # One message. `_run`'s own "timed out after {timeout + 60}s" (the client
+                # backstop) used to stand beside this one, two different numbers for one
+                # event (pandas-59854, ChaCo audit 2026-10-11).
+                err = re.sub(r"\n?timed out after \d+s$", "", r.stderr or "")
+                out = ExecResult(124, r.stdout,
+                                 err + f"\ntimed out after {timeout}s and was killed")
         except subprocess.TimeoutExpired:
             # Returned rather than raised. An agent that runs `grep -R x ..` recurses
             # out of /testbed into /proc and hangs; letting that propagate killed the

@@ -6,7 +6,7 @@
 |---|---|
 | pull request | [pandas-dev/pandas#60713](https://github.com/pandas-dev/pandas/pull/60713) (created 2025-01-13, merged 2025-01-14) |
 | ChaCo lists | full, ablation |
-| status | **not-fail-to-pass** -- no developer test fails before the change and passes after (1580 pass on both sides) |
+| status | **runnable** -- 1 developer test(s) flip; oracle reproduces it |
 | base commit | [`fa5c2550e81c`](https://github.com/pandas-dev/pandas/commit/fa5c2550e81c3e745eb7948b56adac45454853d5) (2025-01-13), first parent of the merge commit |
 | merge commit | [`8bc8c0a6119b`](https://github.com/pandas-dev/pandas/commit/8bc8c0a6119b053e520f5018dc1350863f7277e4) |
 | issues closed | none |
@@ -17,11 +17,11 @@
 | compiled files changed | none |
 | binary files left out | none |
 
-## FAIL_TO_PASS (0)
+## FAIL_TO_PASS (1)
 
-(none)
+- `pandas/tests/indexes/test_base.py::TestIndex::test_view_with_args_object_array_raises[string]`
 
-## PASS_TO_PASS (1580)
+## PASS_TO_PASS (1578)
 
 <details><summary>show</summary>
 
@@ -295,7 +295,6 @@
 - `pandas/tests/indexes/test_base.py::TestIndex::test_empty_fancy[bool_-float64]`
 - `pandas/tests/indexes/test_base.py::TestIndex::test_empty_fancy[bool_-int32]`
 - `pandas/tests/indexes/test_base.py::TestIndex::test_empty_fancy[bool_-int64]`
-- `pandas/tests/indexes/test_base.py::TestIndex::test_empty_fancy[bool_-string]`
 - `pandas/tests/indexes/test_base.py::TestIndex::test_empty_fancy[bool_-uint32]`
 - `pandas/tests/indexes/test_base.py::TestIndex::test_empty_fancy[bool_-uint64]`
 - `pandas/tests/indexes/test_base.py::TestIndex::test_empty_fancy[int-float32]`
@@ -815,7 +814,6 @@
 - `pandas/tests/indexes/test_base.py::TestIndex::test_view_with_args_object_array_raises[bool-dtype]`
 - `pandas/tests/indexes/test_base.py::TestIndex::test_view_with_args_object_array_raises[bool-object]`
 - `pandas/tests/indexes/test_base.py::TestIndex::test_view_with_args_object_array_raises[empty]`
-- `pandas/tests/indexes/test_base.py::TestIndex::test_view_with_args_object_array_raises[string]`
 - `pandas/tests/indexes/test_base.py::TestIndexUtils::test_ensure_index_from_sequences[data0-None-expected0]`
 - `pandas/tests/indexes/test_base.py::TestIndexUtils::test_ensure_index_from_sequences[data1-names1-expected1]`
 - `pandas/tests/indexes/test_base.py::TestIndexUtils::test_ensure_index_from_sequences[data2-None-expected2]`
@@ -1680,19 +1678,20 @@ index 06df8902f319c0684fe21ad3c9dabf578589284c..608158d40cf2353e72daeeb8d5f06e67
  "collected_before": 1595,
  "collected_after": 1595,
  "outcomes_before": {
-  "PASSED": 1580,
-  "XFAIL": 1,
+  "PASSED": 1578,
+  "FAILED": 1,
+  "XFAIL": 2,
   "SKIPPED": 14
  },
  "outcomes_after": {
-  "PASSED": 1580,
-  "XFAIL": 1,
+  "PASSED": 1579,
+  "XFAIL": 2,
   "SKIPPED": 14
  },
- "exit_before": 0,
+ "exit_before": 1,
  "exit_after": 0,
- "tail_before": "mbda>-extra_kwargs7]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs8]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs9]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs10]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs11]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs12]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[DatetimeIndex-extra_kwargs13]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[TimedeltaIndex-extra_kwargs14]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[PeriodIndex-extra_kwargs15]\nPASSED pandas/tests/indexes/test_base.py::test_nan_comparison_same_object[lt]\nPASSED pandas/tests/indexes/test_base.py::test_nan_comparison_same_object[gt]\nPASSED pandas/tests/indexes/test_base.py::test_is_monotonic_pyarrow_list_type\nSKIPPED [8] pandas/tests/indexes/test_base.py:588: Cannot map duplicated index\nSKIPPED [2] pandas/tests/indexes/test_base.py:586: Tested in test_categorical\nSKIPPED [4] pandas/tests/indexes/test_base.py:783: Test doesn't make sense for empty MultiIndex\nXFAIL pandas/tests/indexes/test_base.py::TestIndex::test_view_with_args_object_array_raises[categorical] - gh-25464\n================= 1578 passed, 14 skipped, 1 xfailed in 5.62s ==================",
- "tail_after": "mbda>-extra_kwargs7]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs8]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs9]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs10]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs11]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs12]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[DatetimeIndex-extra_kwargs13]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[TimedeltaIndex-extra_kwargs14]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[PeriodIndex-extra_kwargs15]\nPASSED pandas/tests/indexes/test_base.py::test_nan_comparison_same_object[lt]\nPASSED pandas/tests/indexes/test_base.py::test_nan_comparison_same_object[gt]\nPASSED pandas/tests/indexes/test_base.py::test_is_monotonic_pyarrow_list_type\nSKIPPED [8] pandas/tests/indexes/test_base.py:588: Cannot map duplicated index\nSKIPPED [2] pandas/tests/indexes/test_base.py:586: Tested in test_categorical\nSKIPPED [4] pandas/tests/indexes/test_base.py:783: Test doesn't make sense for empty MultiIndex\nXFAIL pandas/tests/indexes/test_base.py::TestIndex::test_view_with_args_object_array_raises[categorical] - gh-25464\n================= 1578 passed, 14 skipped, 1 xfailed in 4.24s ==================",
+ "tail_before": "gs9]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs10]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs11]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs12]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[DatetimeIndex-extra_kwargs13]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[TimedeltaIndex-extra_kwargs14]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[PeriodIndex-extra_kwargs15]\nPASSED pandas/tests/indexes/test_base.py::test_nan_comparison_same_object[lt]\nPASSED pandas/tests/indexes/test_base.py::test_nan_comparison_same_object[gt]\nPASSED pandas/tests/indexes/test_base.py::test_is_monotonic_pyarrow_list_type\nSKIPPED [8] pandas/tests/indexes/test_base.py:588: Cannot map duplicated index\nSKIPPED [2] pandas/tests/indexes/test_base.py:586: Tested in test_categorical\nSKIPPED [4] pandas/tests/indexes/test_base.py:783: Test doesn't make sense for empty MultiIndex\nXFAIL pandas/tests/indexes/test_base.py::TestIndex::test_view_with_args_object_array_raises[categorical] - gh-25464\nXFAIL pandas/tests/indexes/test_base.py::TestIndex::test_empty_fancy[bool_-string] - numpy behavior is buggy\nFAILED pandas/tests/indexes/test_base.py::TestIndex::test_view_with_args_object_array_raises[string]\n============ 1 failed, 1576 passed, 14 skipped, 2 xfailed in 6.60s =============",
+ "tail_after": "kwargs8]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs9]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs10]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs11]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[<lambda>-extra_kwargs12]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[DatetimeIndex-extra_kwargs13]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[TimedeltaIndex-extra_kwargs14]\nPASSED pandas/tests/indexes/test_base.py::test_construct_from_memoryview[PeriodIndex-extra_kwargs15]\nPASSED pandas/tests/indexes/test_base.py::test_nan_comparison_same_object[lt]\nPASSED pandas/tests/indexes/test_base.py::test_nan_comparison_same_object[gt]\nPASSED pandas/tests/indexes/test_base.py::test_is_monotonic_pyarrow_list_type\nSKIPPED [8] pandas/tests/indexes/test_base.py:588: Cannot map duplicated index\nSKIPPED [2] pandas/tests/indexes/test_base.py:586: Tested in test_categorical\nSKIPPED [4] pandas/tests/indexes/test_base.py:783: Test doesn't make sense for empty MultiIndex\nXFAIL pandas/tests/indexes/test_base.py::TestIndex::test_view_with_args_object_array_raises[categorical] - gh-25464\nXFAIL pandas/tests/indexes/test_base.py::TestIndex::test_empty_fancy[bool_-string] - numpy behavior is buggy\n================= 1577 passed, 14 skipped, 2 xfailed in 4.50s ==================",
  "runner": "python -m pytest -v -rA -p no:cacheprovider --tb=short --color=no"
 }
 ```

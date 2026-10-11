@@ -6,7 +6,7 @@
 |---|---|
 | pull request | [pandas-dev/pandas#59854](https://github.com/pandas-dev/pandas/pull/59854) (created 2024-09-20, merged 2024-09-25) |
 | ChaCo lists | full, ablation |
-| status | **not-fail-to-pass** -- no developer test fails before the change and passes after (254 pass on both sides) |
+| status | **runnable** -- 7 developer test(s) flip; oracle reproduces it |
 | base commit | [`7e5282f5f125`](https://github.com/pandas-dev/pandas/commit/7e5282f5f125406cff7fdf80b452e114adfa4c26) (2024-09-25), first parent of the merge commit |
 | merge commit | [`c8a67401932c`](https://github.com/pandas-dev/pandas/commit/c8a67401932c773ace0f62660f09b5684f39a148) |
 | issues closed | none |
@@ -17,11 +17,17 @@
 | compiled files changed | none |
 | binary files left out | none |
 
-## FAIL_TO_PASS (0)
+## FAIL_TO_PASS (7)
 
-(none)
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-False-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-False-1]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-False-0]`
+- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-False-1]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_indexing`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_noop[0]`
+- `pandas/tests/apply/test_numba.py::test_numba_vs_python_noop[1]`
 
-## PASS_TO_PASS (254)
+## PASS_TO_PASS (244)
 
 <details><summary>show</summary>
 
@@ -45,7 +51,6 @@
 - `pandas/tests/apply/test_frame_apply.py::test_agg_dist_like_and_nonunique_columns`
 - `pandas/tests/apply/test_frame_apply.py::test_agg_listlike_result`
 - `pandas/tests/apply/test_frame_apply.py::test_agg_mapping_func_deprecated`
-- `pandas/tests/apply/test_frame_apply.py::test_agg_multiple_mixed`
 - `pandas/tests/apply/test_frame_apply.py::test_agg_multiple_mixed_raises`
 - `pandas/tests/apply/test_frame_apply.py::test_agg_reduce[axis='columns']`
 - `pandas/tests/apply/test_frame_apply.py::test_agg_reduce[axis='index']`
@@ -60,12 +65,8 @@
 - `pandas/tests/apply/test_frame_apply.py::test_aggregation_func_column_order`
 - `pandas/tests/apply/test_frame_apply.py::test_any_apply_keyword_non_zero_axis_regression`
 - `pandas/tests/apply/test_frame_apply.py::test_apply[python]`
-- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-False-0]`
-- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-False-1]`
 - `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-True-0]`
 - `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-True-1]`
-- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-False-0]`
-- `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-False-1]`
 - `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-True-0]`
 - `pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-True-1]`
 - `pandas/tests/apply/test_frame_apply.py::test_apply_args[python-False-False-0]`
@@ -232,12 +233,10 @@
 - `pandas/tests/apply/test_frame_apply.py::test_listlike_lambda_raises[ops3]`
 - `pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[max-df0]`
 - `pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[min-df0]`
-- `pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[sum-df0]`
 - `pandas/tests/apply/test_frame_apply.py::test_named_agg_reduce_axis1_raises`
 - `pandas/tests/apply/test_frame_apply.py::test_non_callable_aggregates[agg]`
 - `pandas/tests/apply/test_frame_apply.py::test_non_callable_aggregates[apply]`
 - `pandas/tests/apply/test_frame_apply.py::test_nuisance_depr_passes_through_warnings`
-- `pandas/tests/apply/test_frame_apply.py::test_nuiscance_columns`
 - `pandas/tests/apply/test_frame_apply.py::test_nunique_empty`
 - `pandas/tests/apply/test_frame_apply.py::test_result_type`
 - `pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast[python]`
@@ -267,9 +266,6 @@
 - `pandas/tests/apply/test_numba.py::test_numba_parallel_unsupported`
 - `pandas/tests/apply/test_numba.py::test_numba_unsupported_dtypes[0]`
 - `pandas/tests/apply/test_numba.py::test_numba_unsupported_dtypes[1]`
-- `pandas/tests/apply/test_numba.py::test_numba_vs_python_indexing`
-- `pandas/tests/apply/test_numba.py::test_numba_vs_python_noop[0]`
-- `pandas/tests/apply/test_numba.py::test_numba_vs_python_noop[1]`
 - `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[0-<lambda>0]`
 - `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[0-<lambda>1]`
 - `pandas/tests/apply/test_numba.py::test_numba_vs_python_reductions[0-<lambda>2]`
@@ -396,19 +392,20 @@ index 825d295043e69151cadb4904db362a31fde7a293..d6cd9c321ace612323c85296a53480fd
  "collected_before": 271,
  "collected_after": 271,
  "outcomes_before": {
-  "PASSED": 254,
-  "XFAIL": 11,
+  "PASSED": 244,
+  "XFAIL": 14,
+  "FAILED": 7,
   "SKIPPED": 6
  },
  "outcomes_after": {
-  "PASSED": 254,
-  "XFAIL": 11,
+  "PASSED": 251,
+  "XFAIL": 14,
   "SKIPPED": 6
  },
- "exit_before": 0,
+ "exit_before": 1,
  "exit_after": 0,
- "tail_before": "ba] - numba engine not supporting numpy ufunc yet\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast[numba] - numba engine doesn't support list return\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast_series_func[numba] - numba Series constructor only support ndarrays not list data\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_series_result[numba] - numba Series constructor only support ndarrays not list data\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_series_result_other_index[numba] - no support in numba Series constructor for list of columns\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-2] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-3] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-5] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_datetime_tz_issue[numba] - numba engine doesn't support non-numeric indexes\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_no_suffix_index[numba] - numba engine doesn't support list-likes/dict-like callables\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_getitem_axis_1[numba] - numba engine not supporting duplicate index values\n=========== 254 passed, 6 skipped, 11 xfailed, 8 warnings in 45.69s ============",
- "tail_after": "ba] - numba engine not supporting numpy ufunc yet\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast[numba] - numba engine doesn't support list return\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_broadcast_series_func[numba] - numba Series constructor only support ndarrays not list data\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_series_result[numba] - numba Series constructor only support ndarrays not list data\nXFAIL pandas/tests/apply/test_frame_apply.py::test_result_type_series_result_other_index[numba] - no support in numba Series constructor for list of columns\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-2] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-3] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-5] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_datetime_tz_issue[numba] - numba engine doesn't support non-numeric indexes\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_no_suffix_index[numba] - numba engine doesn't support list-likes/dict-like callables\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_getitem_axis_1[numba] - numba engine not supporting duplicate index values\n=========== 254 passed, 6 skipped, 11 xfailed, 8 warnings in 39.87s ============",
+ "tail_before": "dices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-5] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_datetime_tz_issue[numba] - numba engine doesn't support non-numeric indexes\nXFAIL pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[sum-df0] - TODO(infer_string)\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_no_suffix_index[numba] - numba engine doesn't support list-likes/dict-like callables\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_getitem_axis_1[numba] - numba engine not supporting duplicate index values\nXPASS pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[min-df0] - TODO(infer_string)\nXPASS pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[max-df0] - TODO(infer_string)\nFAILED pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-False-0]\nFAILED pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-True-False-1]\nFAILED pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-False-0]\nFAILED pandas/tests/apply/test_frame_apply.py::test_apply_args[numba-False-False-1]\nFAILED pandas/tests/apply/test_numba.py::test_numba_vs_python_noop[0] - Asser...\nFAILED pandas/tests/apply/test_numba.py::test_numba_vs_python_noop[1] - Attri...\nFAILED pandas/tests/apply/test_numba.py::test_numba_vs_python_indexing - Attr...\n= 7 failed, 242 passed, 6 skipped, 14 xfailed, 2 xpassed, 6 warnings in 37.64s =",
+ "tail_after": "das/tests/apply/test_frame_apply.py::test_result_type_series_result_other_index[numba] - no support in numba Series constructor for list of columns\nXFAIL pandas/tests/apply/test_frame_apply.py::test_agg_multiple_mixed - TODO(infer_string)\nXFAIL pandas/tests/apply/test_frame_apply.py::test_nuiscance_columns - TODO(infer_string)\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-2] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-3] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_frequency_is_original[numba-5] - numba engine only supports numeric indices\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_datetime_tz_issue[numba] - numba engine doesn't support non-numeric indexes\nXFAIL pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[sum-df0] - TODO(infer_string)\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_no_suffix_index[numba] - numba engine doesn't support list-likes/dict-like callables\nXFAIL pandas/tests/apply/test_frame_apply.py::test_apply_getitem_axis_1[numba] - numba engine not supporting duplicate index values\nXPASS pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[min-df0] - TODO(infer_string)\nXPASS pandas/tests/apply/test_frame_apply.py::test_mixed_column_raises[max-df0] - TODO(infer_string)\n====== 249 passed, 6 skipped, 14 xfailed, 2 xpassed, 8 warnings in 41.74s ======",
  "runner": "python -m pytest -v -rA -p no:cacheprovider --tb=short --color=no"
 }
 ```

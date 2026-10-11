@@ -267,6 +267,12 @@ RECIPES = {
         "deps": "uv pip install --system --exclude-newer {date} -r requirements-dev.txt",
         "install": "python -m pip install --no-build-isolation -e . ",
         "check": "python -c 'import pandas; print(pandas.__version__)'",
+        # pandas 3.0 development moved to the string dtype behind `future.infer_string`,
+        # and pandas' CI runs the suite with it on as well as off. Many ChaCo pandas PRs
+        # only change behaviour with it on: their developer tests merely drop
+        # `xfail(using_string_dtype())` markers, and nothing differs with it off
+        # (59854, 60196, 60295, 60713; audit 2026-10-11). On, as the version they target.
+        "env": "PANDAS_FUTURE_INFER_STRING=1",
     },
     "scipy/scipy": {
         "python": "3.12",
@@ -294,7 +300,12 @@ RECIPES = {
         "rust": True,
         "deps": ("uv pip install --system --exclude-newer {date} "
                  "$( [ -f constraints.txt ] && echo -c constraints.txt ) "
-                 "-r requirements.txt -r requirements-dev.txt setuptools-rust 'pytest<8.2'"),
+                 "-r requirements.txt -r requirements-dev.txt setuptools-rust 'pytest<8.2' "
+                 "matplotlib pylatexenc pillow seaborn"),
+        # matplotlib, pylatexenc, pillow, seaborn: Qiskit's drawers import them and they
+        # are in requirements-optional.txt, not requirements-dev.txt. Qiskit-12608 (pulse
+        # drawer) met "No module named 'matplotlib'" (audit 2026-10-11). ChaCo's own
+        # Qiskit Dockerfile installs the same four.
         # pytest: Qiskit runs its suite with stestr, and the harness runs tests with pytest
         # (it reads pytest's output), which collects Qiskit's unittest classes as they
         # are. Not in requirements-dev.txt; ChaCo's Qiskit Dockerfile adds it too.
@@ -341,6 +352,14 @@ def dockerfile(row: dict) -> str:
         # The harness's `coverage` wheel is installed offline per run (Sandbox); the
         # project's own test dependencies are all here, because the run has no network.
         "RUN " + r["check"],
+        # The harness deletes /testbed/.git before the agent starts (Sandbox.strip_git).
+        # meson-python's editable install stamps the version from git, so without .git
+        # the stamp changes and the first import of every container rebuilt all 338
+        # SciPy build steps: 124 s on an idle server, 800+ s under a 29-run load, and once
+        # a failed rebuild (audit 2026-10-11). So the image is made in that state already:
+        # the base commit recorded outside /testbed (what `validate` checks the checkout
+        # against), .git removed, and the one rebuild paid here.
+        "RUN git rev-parse HEAD > /f2p_base_commit && rm -rf .git && " + r["check"],
         # OpenBLAS picks its kernels from cpuid, and on the server's QEMU virtual CPU it
         # picks one that executes an instruction the CPU lacks: SciPy's test_lapack.py
         # died with "Illegal instruction" after 8 of 1927 tests (2026-10-09). Haswell
@@ -506,7 +525,7 @@ def validate(iid: str, quiet: bool = False) -> dict:
     files = E.patched_test_files(row["test_patch"])
     with E.Sandbox(iid, quiet=quiet) as box:
         # The image's checkout, read before `.git` goes: it has to be the base commit.
-        head = box.exec("git rev-parse HEAD").stdout.strip()
+        head = box.exec("git rev-parse HEAD 2>/dev/null || cat /f2p_base_commit").stdout.strip()
         if head != row["base_commit"]:
             row.update(status="broken-env", validated_at=time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()), validation={"image_head": head},

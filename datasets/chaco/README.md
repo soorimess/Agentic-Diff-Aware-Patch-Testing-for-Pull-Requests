@@ -81,6 +81,20 @@ These are adapted from ChaCo's own Dockerfiles; `chaco.RECIPES` holds the recipe
 | pandas | 3.11 | meson-python editable (C extensions rebuilt on import, offline); X/GL libraries for `pytest-qt` |
 | SciPy | 3.12 | meson-python editable, gfortran + OpenBLAS, submodules |
 
+Every image also has three settings added after the trajectory audit of 2026-10-11:
+- **The base commit is recorded in `/f2p_base_commit` and `.git` is removed at build
+  time**, after which the project is imported once. The harness removes `.git` before the
+  agent starts, and meson-python's editable install stamps the version from git, so a
+  container built with `.git` rebuilt all of SciPy on its first import: 124 s idle, and
+  over 800 s with 29 runs competing.
+- **pandas runs with `PANDAS_FUTURE_INFER_STRING=1`**, the string-dtype mode its 3.0
+  development targets. Several ChaCo pandas PRs only change behaviour with it on.
+- **Qiskit images add matplotlib, pylatexenc, pillow and seaborn**, which its drawers
+  import. ChaCo's own Qiskit Dockerfile adds the same four.
+
+Every image is labelled with a hash of its Dockerfile, and an image or archive built from
+an older Dockerfile is rebuilt.
+
 Every image sets `OPENBLAS_CORETYPE=Haswell`. On the server's QEMU virtual CPU, OpenBLAS
 autodetects a kernel that uses an instruction the CPU lacks. SciPy's `test_lapack.py` died
 with "Illegal instruction" after 8 of its 1927 tests until the core type was pinned.

@@ -9,7 +9,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --pr
 RUN pip install uv
 RUN git clone --filter=blob:none -q https://github.com/Qiskit/qiskit.git /testbed && cd /testbed && git checkout -q 1ed5951a98b594808525c8428e06178c160cfcbb
 WORKDIR /testbed
-RUN uv pip install --system --exclude-newer 2024-06-25T10:53:54+00:00 $( [ -f constraints.txt ] && echo -c constraints.txt ) -r requirements.txt -r requirements-dev.txt setuptools-rust 'pytest<8.2'
+RUN uv pip install --system --exclude-newer 2024-06-25T10:53:54+00:00 $( [ -f constraints.txt ] && echo -c constraints.txt ) -r requirements.txt -r requirements-dev.txt setuptools-rust 'pytest<8.2' matplotlib pylatexenc pillow seaborn
 RUN python -m pip install --no-build-isolation -e . 
 RUN python -c 'import qiskit; print(qiskit.__version__)'
+RUN git rev-parse HEAD > /f2p_base_commit && rm -rf .git && python -c 'import qiskit; print(qiskit.__version__)'
 ENV OPENBLAS_CORETYPE=Haswell

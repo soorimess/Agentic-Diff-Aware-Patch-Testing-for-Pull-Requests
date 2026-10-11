@@ -127,6 +127,37 @@ as BROKEN (a developer test). The user asked how much that rule had cost, and ac
 that fails to import on both sides, through a typo or a missing package, has no tests
 after the fix either and still counts for nothing.
 
+### Fixes from the ChaCo trajectory audit (2026-10-11)
+
+Two read-only audits of the first 23 ChaCo runs found no wrong verdict. They did find
+flaws that made a YES harder to reach or a number look better than it was. All of these
+apply to SWE-bench as well:
+
+- **Coverage counts changed files the test never imports.** Their executable lines
+  (statement starts, docstrings excluded, `statements.executable_lines`) are now *missed*,
+  and listed in `unimported_files`. Before, they were in neither hit nor missed, which
+  inflated the figure: Qiskit-14024 reported 50% with 2 of its 5 changed files left out.
+- **Long patches are clipped, not cut.** `prompt.clip_patch` keeps the full list of
+  changed files and fills the budget (now 60,000 characters) with the hunks that add the
+  most code. Its note says that the repository is at base and so does not contain what is
+  left out. The old 30,000-character cut hid scipy-21700's new class, and told the agent
+  to "read the rest" in a checkout that does not have it.
+- **The agent's instructions no longer assume a bug fix.** The prompt says "change". A
+  test that fails at base because a name the change adds does not exist yet fails for the
+  right reason; this matches `verify.unimportable_at_base`. The old line ("an import error
+  tells you nothing") led agents to catch or skip exactly that error.
+- **A base run with some tests skipped and some passing is named as such**, not
+  reported as "every test passes".
+- **`coverage` says its line numbers refer to the files with the change applied**, and
+  says to get the flip from `verify` first when the test has not flipped yet.
+- **Tests go beside the changed code.** `runners.near_test_directory` applies to pytest
+  projects only. It walks up from the most-changed source file to the nearest test
+  directory, or finds the mirrored directory (Qiskit's `test/python/<package path>`). It
+  falls back to the repo-wide rule.
+- **Smaller fixes.** Doc, benchmark and tooling `.py` files are out of the coverage and
+  mutation pools. The developer mutation column says why it was not measured. A timeout
+  reports one message, not two. Inline prompt blocks keep the space before them.
+
 ## Coverage
 
 One definition: **of the executable lines this pull request changed, how many did the test
@@ -569,36 +600,36 @@ pair on 36 should be read as direction, not effect.
 | `agent.py` | 1474 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 167 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 293 | How does the generated test compare with the developer's, on concept, issue coverage and readability? |
-| `coverage_metric.py` | 580 | Of the lines this pull request changed, how many did the test execute? |
+| `coverage_metric.py` | 601 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 13 | One instance, from whichever dataset this run is over. |
 | `docs.py` | 168 | Refresh the generated blocks in `docs/system-design.md`. |
 | `features.py` | 343 | What the agent is given, as one registry that everything else reads. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
-| `image_build.py` | 91 | Images no registry has: built here, from the Dockerfile a dataset's adapter wrote. |
+| `image_build.py` | 125 | Images no registry has: built here, from the Dockerfile a dataset's adapter wrote. |
 | `image_cache.py` | 313 | Instance images kept on the host disk, so each one is pulled from the registry once. |
-| `images.py` | 471 | Instance images -- pulled from a registry or built (image_build.py) -- and the disk they compete for. |
+| `images.py` | 480 | Instance images -- pulled from a registry or built (image_build.py) -- and the disk they compete for. |
 | `layout.py` | 41 | Where the project is on disk, and the environment it runs with. |
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 187 | One place the model connection is configured, shared by every caller. |
 | `models.py` | 343 | Which model answers, and what it needs, read from `models.json`. |
-| `mutants.py` | 677 | Does the test notice when the fix is subtly wrong? |
+| `mutants.py` | 696 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
 | `parallel.py` | 262 | Running several pull requests at once, as separate processes. |
-| `prompt.py` | 272 | Assemble the agent's prompt from the pieces in prompts/. |
+| `prompt.py` | 342 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 354 | The instances we develop against: twenty-six, spanning every repository and a decade. |
-| `runners.py` | 514 | Three test-runner conventions, and how to read what they print. |
+| `runners.py` | 570 | Three test-runner conventions, and how to read what they print. |
 | `runs.py` | 626 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
-| `sandbox.py` | 365 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 1167 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sandbox.py` | 369 | One container per instance, and the only door into it. |
+| `sandbox_tools.py` | 1188 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `sources/__init__.py` | 113 | Where instances come from: one adapter per dataset, one standard row for the harness. |
-| `sources/__main__.py` | 147 | The datasets, and getting one ready to run. |
-| `sources/chaco.py` | 563 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
+| `sources/__main__.py` | 162 | The datasets, and getting one ready to run. |
+| `sources/chaco.py` | 951 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
 | `sources/swebench.py` | 94 | SWE-bench Verified: the dataset the harness was built on, read as it always was. |
-| `statements.py` | 89 | Which statement a line belongs to. |
+| `statements.py` | 111 | Which statement a line belongs to. |
 | `swebench_env.py` | 93 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 425 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 1237 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 1297 | The F2P decision. One implementation, used by every arm. |
 | `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
 <!-- /generated:modules -->
 
@@ -915,11 +946,11 @@ one arm and kept for another.
 <!-- generated:prompts -->
 | file | job |
 |---|---|
-| `10-situation.md` | Establishes where the model is and, critically, that the bug is still present. Without this the model tends to assume the code is already correct and writes a t |
+| `10-situation.md` | Establishes where the model is and, critically, that the change is not in this code. "A bug" until 2026-10-11; feature and refactor PRs (ChaCo) are not bug fixe |
 | `15-repo.md` | How testing works in this checkout -- runner, target path, neighbouring tests, and the project's own pytest configuration verbatim. Read off the tree by `repo_f |
 | `16-explore.md` | What to establish about the checkout, for runs where the harness hands none of it over. The counterpart to `15-repo.md`, which is dropped in the same configurat |
 | `20-goal.md` | The deliverable, stated as an engineering task rather than as our scoring function. This was rewritten after review. The earlier version read "write a test that |
-| `30-issue.md` | The bug report, verbatim from the dataset's problem_statement field. This is the only instance data the model ever sees. The developer's fix and the developer's |
+| `30-issue.md` | What the pull request is about, verbatim from the dataset's problem_statement field (SWE-bench: the issue; ChaCo: the issues it closes and the PR's own descript |
 | `35-change.md` | The pull request's diff, framed as evidence to interpret rather than a target to satisfy. The closing instruction used to be "the test has to run the lines abov |
 | `40-tools.md` | Describes the tools in terms of when to reach for each, since the schemas already say what they are. Two things are stated outright because leaving them implici |
 | `45-tools-verify.md` | Introduces `verify` as the property the test must have rather than a score. Separable because it only exists once the diff is an input: with the patch withheld  |

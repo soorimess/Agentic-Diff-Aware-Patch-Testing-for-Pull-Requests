@@ -6,7 +6,7 @@
 |---|---|
 | pull request | [pandas-dev/pandas#60196](https://github.com/pandas-dev/pandas/pull/60196) (created 2024-11-05, merged 2024-11-05) |
 | ChaCo lists | full, ablation |
-| status | **not-fail-to-pass** -- no developer test fails before the change and passes after (209 pass on both sides) |
+| status | **not-fail-to-pass** -- no developer test fails before the change and passes after (208 pass on both sides) |
 | base commit | [`e449b4971620`](https://github.com/pandas-dev/pandas/commit/e449b49716203bbf04d20bc867fda7ea6d562ef5) (2024-11-05), first parent of the merge commit |
 | merge commit | [`169b00e1eaf0`](https://github.com/pandas-dev/pandas/commit/169b00e1eaf06924aee585d8e5469dc284992382) |
 | issues closed | none |
@@ -21,7 +21,7 @@
 
 (none)
 
-## PASS_TO_PASS (209)
+## PASS_TO_PASS (208)
 
 <details><summary>show</summary>
 
@@ -30,7 +30,6 @@
 - `pandas/tests/frame/test_api.py::TestDataFrameMisc::test_axis_aliases`
 - `pandas/tests/frame/test_api.py::TestDataFrameMisc::test_class_axis`
 - `pandas/tests/frame/test_api.py::TestDataFrameMisc::test_column_contains_raises`
-- `pandas/tests/frame/test_api.py::TestDataFrameMisc::test_column_name_contains_unicode_surrogate`
 - `pandas/tests/frame/test_api.py::TestDataFrameMisc::test_constructor_expanddim`
 - `pandas/tests/frame/test_api.py::TestDataFrameMisc::test_deepcopy`
 - `pandas/tests/frame/test_api.py::TestDataFrameMisc::test_display_max_dir_items`
@@ -357,15 +356,17 @@ index 79a55eb357f87922b9dd3d15288a02af74c26b81..4b369bb0bc86935ac94113a858cfb5d9
  "collected_before": 209,
  "collected_after": 209,
  "outcomes_before": {
-  "PASSED": 209
+  "PASSED": 208,
+  "XFAIL": 1
  },
  "outcomes_after": {
-  "PASSED": 209
+  "PASSED": 208,
+  "XFAIL": 1
  },
  "exit_before": 0,
  "exit_after": 0,
- "tail_before": "ge-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cummax-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-shift-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-diff-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cumsum-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cummin-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cumprod-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-fillna-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-ffill-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-bfill-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-sample-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-tail-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-take-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-head-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cov-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-corr-False]\n============================= 209 passed in 2.80s ==============================",
- "tail_after": "ge-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cummax-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-shift-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-diff-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cumsum-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cummin-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cumprod-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-fillna-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-ffill-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-bfill-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-sample-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-tail-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-take-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-head-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cov-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-corr-False]\n============================= 209 passed in 0.91s ==============================",
+ "tail_before": "eries/test_api.py::TestSeriesMisc::test_numeric_only[object-shift-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-diff-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cumsum-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cummin-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cumprod-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-fillna-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-ffill-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-bfill-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-sample-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-tail-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-take-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-head-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cov-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-corr-False]\nXFAIL pandas/tests/frame/test_api.py::TestDataFrameMisc::test_column_name_contains_unicode_surrogate - surrogates not allowed\n======================== 208 passed, 1 xfailed in 3.73s ========================",
+ "tail_after": "eries/test_api.py::TestSeriesMisc::test_numeric_only[object-shift-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-diff-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cumsum-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cummin-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cumprod-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-fillna-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-ffill-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-bfill-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-sample-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-tail-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-take-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-head-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-cov-False]\nPASSED pandas/tests/series/test_api.py::TestSeriesMisc::test_numeric_only[object-corr-False]\nXFAIL pandas/tests/frame/test_api.py::TestDataFrameMisc::test_column_name_contains_unicode_surrogate - surrogates not allowed\n======================== 208 passed, 1 xfailed in 1.95s ========================",
  "runner": "python -m pytest -v -rA -p no:cacheprovider --tb=short --color=no"
 }
 ```

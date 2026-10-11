@@ -87,3 +87,25 @@ def widen(source: str, lines: set[int]) -> set[int]:
     contributes nothing.
     """
     return lines | set(statement_start(source, lines).values())
+
+
+def executable_lines(source: str) -> set[int]:
+    """First line of every statement in `source`, docstrings excluded.
+
+    What coverage would call measurable, worked out without running anything -- for a file
+    the test never imported, which therefore has no coverage record to read it from.
+    """
+    import ast
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    docstrings = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if (isinstance(body, list) and body and isinstance(body[0], ast.Expr)
+                and isinstance(getattr(body[0], "value", None), ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            docstrings.add(body[0].lineno)
+    return {n.lineno for n in ast.walk(tree)
+            if isinstance(n, ast.stmt) and n.lineno not in docstrings}

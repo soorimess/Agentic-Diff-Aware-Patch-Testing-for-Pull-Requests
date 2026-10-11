@@ -146,6 +146,58 @@ def test_directory(box) -> str:
     return best
 
 
+def _holds_tests(box, d: str) -> int:
+    n = box.exec(f"ls -1 {d}/test_*.py {d}/*_test.py 2>/dev/null | wc -l").output.strip()
+    try:
+        return int(n)
+    except ValueError:
+        return 0
+
+
+def near_test_directory(box, sources: list[str]) -> str:
+    """The test directory that belongs to the code a pull request changes, or "".
+
+    For pytest projects only (nodes runner); a project runner keeps `test_directory`'s
+    answer, because its labels are relative to its own directory. Two layouts, tried for
+    each changed source file, most-changed first:
+
+      beside the code   walk up from the file to the nearest `tests`/`test`/`testing`
+                        directory that holds tests -- `scipy/stats/tests` for a
+                        `scipy/stats` change;
+      mirrored          tests in a separate tree that repeats the package path --
+                        Qiskit's `test/python/circuit` for `qiskit/circuit/...`.
+
+    The repo-wide rule put every SciPy test in `scipy/special/tests` -- for stats,
+    linalg, signal and optimize PRs alike -- and offered special's tests as the examples
+    to follow (ChaCo audit, 2026-10-11).
+    """
+    if runner_for(box)["args"] != "nodes":
+        return ""
+    names = ("tests", "test", "testing")
+    for src in sources:
+        parts = src.split("/")[:-1]
+        for i in range(len(parts), 0, -1):
+            for n in names:
+                d = "/".join(parts[:i] + [n])
+                if box.exists(d) and _holds_tests(box, d):
+                    return d
+    roots = [ln[2:] if ln.startswith("./") else ln for ln in box.exec(
+        "find . -maxdepth 2 -type d \\( -name tests -o -name test \\) "
+        "-not -path './.*' 2>/dev/null").output.split()]
+    for src in sources:
+        sub = src.split("/")[1:-1]          # the path inside the top-level package
+        for k in range(len(sub), 0, -1):
+            tail = "/".join(sub[:k])
+            for root in roots:
+                found = box.exec(f"find {root} -maxdepth 4 -type d -path '*/{tail}' "
+                                 f"2>/dev/null | head -5").output.split()
+                for d in sorted(found, key=lambda x: x.count("/")):
+                    d = d[2:] if d.startswith("./") else d
+                    if _holds_tests(box, d):
+                        return d
+    return ""
+
+
 def patched_test_files(test_patch: str) -> list[str]:
     """Test files the developer's patch touches -- the modules an instance lives in."""
     out = []
@@ -481,7 +533,11 @@ def repo_facts(box, test_file: str) -> str:
     ]
     others = [f for f in example_tests(box, directory) if f != test_file]
     if others:
-        lines += ["", "Tests already in that directory:"]
+        # "in that directory" was wrong when the examples came from one level down
+        # (Qiskit: `test/` holds no test file; `test/python/...` does).
+        here = all("/".join(f.split("/")[:-1]) == directory for f in others)
+        lines += ["", "Tests already in that directory:" if here
+                  else "Tests in and below that directory:"]
         lines += [f"  {f}" for f in others]
     config = test_config(box)
     if config:

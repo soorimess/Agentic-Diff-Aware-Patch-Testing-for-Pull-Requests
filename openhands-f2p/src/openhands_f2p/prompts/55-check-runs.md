@@ -19,7 +19,11 @@ can quietly stop the test failing on the old code, and then it is no longer the 
 set out to write.
 {/verify-tool}
 
-{?verify-tool}**1. `run_tests` — does the file run at all?**{/verify-tool}{?!verify-tool}**`run_tests` — does the file run at all?**{/!verify-tool} A test that errors on an import, a typo or
-a missing fixture tells you nothing about the library; it never reached the code. What you
-want to see here is the library behaving the old way: an assertion that does not hold, or
-the wrong exception coming back.
+{?verify-tool}**1. `run_tests` — does the file run at all?**{/verify-tool}{?!verify-tool}**`run_tests` — does the file run at all?**{/!verify-tool} A test that errors on a typo, a missing
+fixture or a name this project never had tells you nothing about the library; it never
+reached the code. A name the change *adds* is different: here it does not exist yet, so an
+`ImportError`, `AttributeError` or `TypeError` about it is exactly the old behaviour, and a
+test that uses it the way the change intends fails here for the right reason. Do not catch
+or skip that error to make the test pass on this code. What you want to see here is the
+library behaving the old way: an assertion that does not hold, the wrong exception coming
+back, or a name the change adds not being there yet.
