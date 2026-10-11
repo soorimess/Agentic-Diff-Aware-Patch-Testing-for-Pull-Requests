@@ -40,6 +40,30 @@ def is_built(image: str) -> bool:
     return src is not None and hasattr(src, "recipe")
 
 
+LABEL = "f2p.dockerfile-sha256"
+
+
+def recipe_hash(dockerfile: Path) -> str:
+    import hashlib
+    return hashlib.sha256(dockerfile.read_bytes()).hexdigest()
+
+
+def built_from(image: str) -> str | None:
+    """The Dockerfile hash an image was built from (its label), None if unlabelled."""
+    from openhands_f2p.images import _run
+    r = _run(["docker", "image", "inspect", image, "--format",
+              "{{index .Config.Labels \"" + LABEL + "\"}}"], timeout=60)
+    v = r.stdout.strip()
+    return v if r.returncode == 0 and v and v != "<no value>" else None
+
+
+def current(image: str) -> bool:
+    """Whether the image in Docker was built from its dataset's present Dockerfile."""
+    from openhands_f2p import sources
+    _, dockerfile = sources.source_of_image(image).recipe(image)
+    return built_from(image) == recipe_hash(dockerfile)
+
+
 def log_for(image: str) -> Path:
     return BUILDS / re.sub(r"[^A-Za-z0-9._-]", "_", image) / "build.log"
 
@@ -50,14 +74,23 @@ def build(image: str, quiet: bool = False, need_gb: float = BUILD_HEADROOM_GB,
     from openhands_f2p import image_cache, sources
     from openhands_f2p.images import PLATFORM, _pull_slot, have_image, make_room
 
-    if have_image(image) and not force:
-        return
-    if not force and image_cache.have_archive(image) and image_cache.load(image, quiet=quiet):
-        return
     src = sources.source_of_image(image)
     iid, dockerfile = src.recipe(image)
+    want = recipe_hash(dockerfile)
+    # An image (or its archive) is only good for the Dockerfile it was built from. Three
+    # SciPy images built before the import fix was added to the recipe were reused as
+    # they were, and their runs failed on the bug the fix removes (2026-10-11). The
+    # Dockerfile's hash is a label on the image, and a mismatch means rebuild.
+    if not force and have_image(image) and built_from(image) == want:
+        return
+    if (not force and not have_image(image) and image_cache.have_archive(image)
+            and image_cache.load(image, quiet=quiet) and built_from(image) == want):
+        return
+    if have_image(image) and not force and not quiet:
+        print(f"  {image} was built from another version of its Dockerfile; rebuilding")
+    image_cache.archive_for(image).unlink(missing_ok=True)
     with _pull_slot("build", BUILD_SLOTS):
-        if have_image(image) and not force:
+        if have_image(image) and not force and built_from(image) == want:
             return                  # a sibling worker built it while we waited
         free = make_room(image, max(need_gb, BUILD_HEADROOM_GB))
         if free is not None and free < BUILD_HEADROOM_GB:
@@ -68,6 +101,7 @@ def build(image: str, quiet: bool = False, need_gb: float = BUILD_HEADROOM_GB,
         # The context is the empty directory holding the log: every Dockerfile here
         # fetches what it needs itself, so nothing on the host is sent to the daemon.
         cmd = ["docker", "build", "--platform", PLATFORM, "--progress=plain",
+               "--label", f"{LABEL}={want}",
                "-t", image, "-f", str(dockerfile), str(log.parent)]
         if not quiet:
             print(f"  building {image} for {iid} (log: {log})", flush=True)

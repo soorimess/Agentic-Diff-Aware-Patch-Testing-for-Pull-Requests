@@ -371,6 +371,15 @@ def pull_image(image: str, quiet: bool = False,
     the image exists. `have_image` is re-checked after the wait because the worker ahead
     may have been fetching the very same image.
     """
+    # An image we build is only current while its Dockerfile is unchanged
+    # (image_build.built_from vs recipe_hash); a stale one, or a stale archive, goes to
+    # image_build.build, which rebuilds it. A pulled image is current by definition.
+    from openhands_f2p import image_build
+    if image_build.is_built(image):
+        if have_image(image) and image_build.current(image):
+            return
+        image_build.build(image, quiet=quiet, need_gb=need_gb)
+        return
     if have_image(image):
         return
     # The archive is tried *before* the lock, because a load is a local operation and
