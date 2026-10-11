@@ -584,10 +584,14 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
             if text is not None:
                 box.write(f"{BASE_COPIES}/{path}", text)
         box.apply_patch(instance["patch"])
-        box.apply_patch(instance["test_patch"])
+        # A PR without a developer test (9 of ChaCo's 30 ablation PRs) has an empty
+        # test_patch: applying it failed and the run died before writing its result
+        # (ChaCo Qiskit-12608, 2026-10-11). The developer column is then not measured.
+        if instance["test_patch"].strip():
+            box.apply_patch(instance["test_patch"])
         box.write(gen_path, generated_test)
 
-        gold_targets = V.targets_for_gold(box, instance)
+        gold_targets = V.targets_for_gold(box, instance) if gold_expected else []
         collected = V.own_outcomes(R.parse_output(
             box.exec(R.test_command(box, [gen_path]), timeout=1800).output), [gen_path])
         if not collected:
@@ -604,11 +608,15 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
         # base run (2026-09-30) had no mutation score for a test that passed. Now the
         # developer's column uses the tests that pass, names the ones left out, and is
         # marked unmeasured only when none pass.
-        t0 = time.monotonic()
-        gold_out = R.parse_output(
-            box.exec(R.test_command(box, gold_targets), timeout=1800).output)
-        gold_limit = _mutant_timeout(time.monotonic() - t0)
-        gold_ok = [n for n in gold_expected if R.outcome_of(gold_out, n) == "PASSED"]
+        # No FAIL_TO_PASS ids, no developer run: with no targets the runner would run the
+        # project's whole suite (up to 30 minutes) to measure nothing.
+        gold_limit, gold_ok = 0, []
+        if gold_expected:
+            t0 = time.monotonic()
+            gold_out = R.parse_output(
+                box.exec(R.test_command(box, gold_targets), timeout=1800).output)
+            gold_limit = _mutant_timeout(time.monotonic() - t0)
+            gold_ok = [n for n in gold_expected if R.outcome_of(gold_out, n) == "PASSED"]
         score.developer_excluded = [n for n in gold_expected if n not in gold_ok]
         score.developer_measured = bool(gold_ok)
         t0 = time.monotonic()
@@ -661,6 +669,8 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
         # Back to base, tests off before the fix because they went on after it. A tree
         # left patched would make the next "before the fix" run be the after run.
         for undo in (instance["test_patch"], instance["patch"]):
+            if not undo.strip():
+                continue
             try:
                 box.apply_patch(undo, revert=True)
             except Exception:
