@@ -471,7 +471,8 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     shown = test_file if briefed else Path(test_file).name
     task = prompt.build(repo=instance["repo"], test_file=shown,
                         repo_facts=E.repo_facts(box, test_file,
-                                                instance.get("environment_notes"))
+                                                instance.get("environment_notes"),
+                                                V._by_size(instance["patch"]))
                         if briefed else "",
                         problem=instance["problem_statement"] if "issue" in features
                         else "",
@@ -650,9 +651,11 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             if "passes_at_base" in reason and "coverage-tool" in features:
                 diag = V.reach_diagnosis(box, instance, rel)
                 if diag:
-                    marker = "whatever it checks was true before the fix as well."
+                    marker = "whatever it checks was true before the change as well."
                     say = (say.replace(marker, marker + diag, 1) if marker in say
                            else say + diag)
+            if "passes_at_base" in reason or "verify_open" in reason:
+                say += V.lost_flip(tool_log, rel, box.read(rel))
             if stuck(reason) and streak + 1 >= MAX_PASSES_AT_BASE_ROUNDS:
                 box._unscoreable_capped = True
             nudge = prompt.followup("second-chance", shortfall=say,

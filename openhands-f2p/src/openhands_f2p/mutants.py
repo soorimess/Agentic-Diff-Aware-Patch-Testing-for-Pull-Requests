@@ -421,6 +421,17 @@ def probe(box: Sandbox, patch: str, test_path: str, n: int) -> dict:
         t0 = time.monotonic()
         failed = _fails(box, [test_path], expected)
         limit = _mutant_timeout(time.monotonic() - t0)
+        if failed and all(v == "PASSED" for v in collected.values()):
+            # Passed, then failed, on the same file and the same code: the test is flaky.
+            # Said as such -- "does not pass on the fixed code yet" was told to Qiskit-12483
+            # (ChaCo wave 2) right after `verify` called the file fail-to-pass; its test
+            # drew random circuits without a seed.
+            return {"ok": False,
+                    "why": "your test passed on the fixed code and then failed on it, with "
+                           "nothing changed in between: it is not deterministic. Remove "
+                           "the randomness or timing it depends on (seed random generators; "
+                           "pass `seed=` where the API takes one) before asking what it "
+                           "notices about a wrong fix"}
         if failed:
             return {"ok": False,
                     "why": "your test does not pass on the fixed code yet, so asking "
@@ -632,7 +643,10 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
         gen_failed = _fails(box, [gen_path], gen_expected)
         gen_limit = _mutant_timeout(time.monotonic() - t0)
         if gen_failed:
-            score.why = "the generated test does not pass on the fixed code here"
+            score.why = ("the generated test passed on the fixed code once and then failed "
+                         "on it: it is not deterministic"
+                         if all(v == "PASSED" for v in collected.values()) else
+                         "the generated test does not pass on the fixed code here")
             return score
 
         # Always the scoring half of the split, with or without the tool. With it, the

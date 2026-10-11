@@ -158,6 +158,30 @@ apply to SWE-bench as well:
   mutation pools. The developer mutation column says why it was not measured. A timeout
   reports one message, not two. Inline prompt blocks keep the space before them.
 
+### Fixes from the second ChaCo audit (2026-10-11/12)
+
+A canary wave of 3 PRs runs before any wide wave, and `sources/watch.py` scans every
+finished run for the failure signatures found so far. This second round of fixes again
+applies to SWE-bench as well:
+
+- **The briefing lists the instance image's environment settings** (the row's
+  `environment_notes`). With these notes, ChaCo pandas-59854 went from NO in 92 actions
+  to YES in 26: the agent had not known that pandas' future string dtype was on.
+- **A coverage or mutation loop closes after two attempts that broke the flip.** Such
+  attempts were never measured, so the loop could only end at `MAX_REFUSALS`
+  (`verify._broke_flip_since`).
+- **`verify` and the refusals offer back the last version `verify` called
+  fail-to-pass** when the current file has lost it (`verify.lost_flip`).
+- **`verify` names tests that skip on the old code, even when the file flips.**
+- **A test that passes and then fails on the fixed code is called flaky** in mutation.
+- **A backwards test is no longer also listed as "still failing".**
+- **`coverage` puts its verify-first note at the top** and, before the flip, asks for
+  `verify` rather than another `coverage`.
+- **Tests go into mirrored test trees** (`pandas/tests/arrays` for `pandas/core/arrays`),
+  and the example tests offered are named after the changed modules.
+- **The goal prompt says not every PR fixes a bug**, and that a check that a private name
+  exists tests spelling, not behaviour.
+
 ## Coverage
 
 One definition: **of the executable lines this pull request changed, how many did the test
@@ -597,7 +621,7 @@ pair on 36 should be read as direction, not effect.
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1474 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1479 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 167 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 293 | How does the generated test compare with the developer's, on concept, issue coverage and readability? |
 | `coverage_metric.py` | 601 | Of the lines this pull request changed, how many did the test execute? |
@@ -612,24 +636,25 @@ pair on 36 should be read as direction, not effect.
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 187 | One place the model connection is configured, shared by every caller. |
 | `models.py` | 343 | Which model answers, and what it needs, read from `models.json`. |
-| `mutants.py` | 696 | Does the test notice when the fix is subtly wrong? |
+| `mutants.py` | 710 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
 | `parallel.py` | 262 | Running several pull requests at once, as separate processes. |
 | `prompt.py` | 342 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 354 | The instances we develop against: twenty-six, spanning every repository and a decade. |
-| `runners.py` | 570 | Three test-runner conventions, and how to read what they print. |
+| `runners.py` | 597 | Three test-runner conventions, and how to read what they print. |
 | `runs.py` | 626 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 369 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 1188 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sandbox_tools.py` | 1213 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `sources/__init__.py` | 113 | Where instances come from: one adapter per dataset, one standard row for the harness. |
 | `sources/__main__.py` | 162 | The datasets, and getting one ready to run. |
-| `sources/chaco.py` | 951 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
+| `sources/chaco.py` | 958 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
 | `sources/swebench.py` | 94 | SWE-bench Verified: the dataset the harness was built on, read as it always was. |
+| `sources/watch.py` | 149 | Scan finished runs for every failure signature found so far, so none repeats unseen. |
 | `statements.py` | 111 | Which statement a line belongs to. |
 | `swebench_env.py` | 93 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 425 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 1297 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 1340 | The F2P decision. One implementation, used by every arm. |
 | `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
 <!-- /generated:modules -->
 

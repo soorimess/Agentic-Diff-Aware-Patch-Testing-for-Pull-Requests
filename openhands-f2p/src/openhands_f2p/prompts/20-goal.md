@@ -37,6 +37,12 @@ not a test.
 Work out what the code does *now*, what it will do *after* the change, and assert the
 difference. That difference is the whole subject of the test -- not the surrounding
 function, and not some other property that happens to be broken at the same time.
+
+Not every pull request fixes a bug. A feature adds something that does not exist here
+yet; a refactor or a speed-up may change little that a caller can see. Look for what
+does change -- a result for some input, an error raised or no longer raised, a new
+argument or name that now works. A test that only checks that a private name exists
+tests the code's spelling, not its behaviour.
 {/patch}
 {?issue}
 The report itself is not the subject. It describes a symptom somebody noticed; what you

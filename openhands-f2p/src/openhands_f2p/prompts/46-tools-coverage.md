@@ -15,8 +15,9 @@ Aim for a test that runs every line the change touched, and reach each one throu
 behaviour you are asserting. Use `coverage` to see which lines yours still misses, and
 act on what it says — repeatedly. This is a working instrument, not a final
 report: measure, add the case the missed lines point at, measure again. It applies the
-change and reverts it itself, so calling it costs you nothing and leaves nothing behind,
-and there is no reason to save it for the end.
+change and reverts it itself, so calling it costs you nothing and leaves nothing behind.
+Start using it once `verify` says your test is fail-to-pass: before that, which lines run
+is not yet the question.
 
 {?require-tools-with-score-report}
 In this run it also reports your changed-line coverage as a percentage, and that number is

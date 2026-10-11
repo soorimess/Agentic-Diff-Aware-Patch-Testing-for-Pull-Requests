@@ -727,6 +727,42 @@ def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, st
                            f"* {say}")
 
 
+LOST_FLIP_CHARS = 3000
+
+
+def lost_flip(tool_log: list, rel: str, current: str | None) -> str:
+    """An offer of the last version of `rel` that `verify` called fail-to-pass, when the
+    file on disk is no longer that version. Coverage had a rewind ("your test was better
+    before"); `verify` had none, and scipy-21485 (ChaCo wave 2, 2026-10-11) flipped at
+    tool 49, lost it while chasing coverage, and was refused into a NO without being told
+    the flipping version existed."""
+    shots = [(i, e["f2p_test"]) for i, e in enumerate(tool_log)
+             if e.get("tool") == "verify" and e.get("f2p_test")
+             and names_test(tool_log, e.get("target", ""), rel)]
+    if not shots or current is None:
+        return ""
+    i, text = shots[-1]
+    if text.strip() == (current or "").strip():
+        return ""
+    shown = text if len(text) <= LOST_FLIP_CHARS else (
+        text[:LOST_FLIP_CHARS] + f"\n# ... [{len(text) - LOST_FLIP_CHARS} more characters]")
+    return (f"\n\nEarlier, `verify` called this file fail-to-pass (tool call {i + 1}). Your "
+            f"edits since have lost that. If they have not got closer, write that version "
+            f"back and build from it:\n\n```python\n{shown.rstrip()}\n```")
+
+
+def _broke_flip_since(tool_log: list, rel: str, since: int) -> int:
+    """`verify` calls on edited versions of `rel` after `since` that were not fail-to-pass:
+    attempts at a duty that broke the flip instead of improving the answer."""
+    n = 0
+    for i, e in enumerate(tool_log):
+        if (i > since and e.get("tool") == "verify" and "error" not in e
+                and names_test(tool_log, e.get("target", ""), rel) and not e.get("flipped")
+                and any(since < j < i for j in test_writes(tool_log, rel))):
+            n += 1
+    return n
+
+
 def _no_better(tool_log: list, tool: str, rel: str, score,
                since: int | None = None, rewound: bool = False) -> bool:
     """Whether the agent's last attempt to improve this answer did not improve it: the test
@@ -742,6 +778,13 @@ def _no_better(tool_log: list, tool: str, rel: str, score,
     credited with were made before it had been asked for anything (user, 2026-09-30)."""
     if since is None:
         return False
+    # Attempts that broke the flip are attempts. `mutation` refuses to run on a file that
+    # is not fail-to-pass, so such an attempt was never measured, a return to the measured
+    # version counted as a revert, and the loop could only end at MAX_REFUSALS: scipy-20137,
+    # Qiskit-12483, pandas-60505 (ChaCo wave 2) spent ~40 actions each that way. Two of
+    # them, with the file fail-to-pass again, is an honest "it does not get better".
+    if _broke_flip_since(tool_log, rel, since) >= 2 and verify_settled(tool_log, rel):
+        return True
     calls = [(i, e) for i, e in enumerate(tool_log) if e.get("tool") == tool
              and "error" not in e and names_test(tool_log, e.get("target", ""), rel)]
     if not calls:

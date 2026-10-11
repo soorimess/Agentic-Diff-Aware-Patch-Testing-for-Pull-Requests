@@ -180,6 +180,14 @@ def near_test_directory(box, sources: list[str]) -> str:
             for n in names:
                 d = "/".join(parts[:i] + [n])
                 if box.exists(d) and _holds_tests(box, d):
+                    # A test root that repeats the package path below it: pandas keeps
+                    # `pandas/core/arrays/...` tests in `pandas/tests/arrays/`, and every
+                    # pandas run landed in `pandas/tests` (ChaCo wave 2). Deepest match.
+                    rest = parts[i:]
+                    for k in range(len(rest)):
+                        sub = f"{d}/" + "/".join(rest[k:])
+                        if box.exists(sub) and _holds_tests(box, sub):
+                            return sub
                     return d
     roots = [ln[2:] if ln.startswith("./") else ln for ln in box.exec(
         "find . -maxdepth 2 -type d \\( -name tests -o -name test \\) "
@@ -501,7 +509,8 @@ def test_config(box) -> str:
     return "\n".join(out)
 
 
-def example_tests(box, directory: str, limit: int = 3) -> list[str]:
+def example_tests(box, directory: str, limit: int = 3,
+                  sources: list[str] | None = None) -> list[str]:
     """A few files near the new one that actually define a test.
 
     Named by content, not by filename. The first version listed `test_*.py` in the
@@ -512,6 +521,16 @@ def example_tests(box, directory: str, limit: int = 3) -> list[str]:
     then one level down, where django keeps its real tests.
     """
     d = directory or "."
+    # Tests named after the changed modules first: scipy-22549 (ChaCo wave 2) was shown
+    # `test__basinhopping.py` while `test_differentiable_functions.py` was right there.
+    stems = [s.rsplit("/", 1)[-1][:-3].lstrip("_") for s in (sources or []) if s.endswith(".py")]
+    stems = [x for x in dict.fromkeys(stems) if x and x != "__init__"]
+    if stems:
+        pats = " ".join(f"{d}/test_{x}*.py {d}/test__{x}*.py" for x in stems[:4])
+        named = box.exec(f"ls -1 {pats} 2>/dev/null | head -{limit}").output.split()
+        named = [f.strip().removeprefix("./") for f in named if f.strip()]
+        if named:
+            return named[:limit]
     probe = (f"for f in {d}/test_*.py {d}/*_test.py {d}/*/tests.py {d}/*/test_*.py; do "
              f"[ -f \"$f\" ] && grep -qE '^[[:space:]]*def test|^class [A-Za-z0-9_]*Test' "
              f"\"$f\" && echo \"$f\"; done 2>/dev/null | head -{limit}")
@@ -519,7 +538,8 @@ def example_tests(box, directory: str, limit: int = 3) -> list[str]:
     return [f.strip().removeprefix("./") for f in found if f.strip()]
 
 
-def repo_facts(box, test_file: str, environment: list[str] | None = None) -> str:
+def repo_facts(box, test_file: str, environment: list[str] | None = None,
+               sources: list[str] | None = None) -> str:
     """A short briefing on how testing works here, for the prompt."""
     runner = runner_for(box)
     directory = test_file.rsplit("/", 1)[0] if "/" in test_file else ""
@@ -531,7 +551,7 @@ def repo_facts(box, test_file: str, environment: list[str] | None = None) -> str
         f"Targets       {ARGS_HELP.get(runner['args'], runner['args'])}",
         f"Your test     {test_file}",
     ]
-    others = [f for f in example_tests(box, directory) if f != test_file]
+    others = [f for f in example_tests(box, directory, sources=sources) if f != test_file]
     if others:
         # "in that directory" was wrong when the examples came from one level down
         # (Qiskit: `test/` holds no test file; `test/python/...` does).

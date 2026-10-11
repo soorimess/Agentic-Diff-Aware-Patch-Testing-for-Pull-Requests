@@ -598,14 +598,17 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
                      "\n\nNote: `verify` has not shown this file fail-to-pass yet. Which "
                      "changed lines run matters only for a test that fails before the change "
                      "and passes after -- get that first, with `verify`.")
+        # First, not last: appended after "call `coverage` again" it was read past -- 57 of
+        # 103 coverage calls in ChaCo wave 2 still came before any flip.
+        first = unflipped.strip() + "\n\n" if unflipped else ""
         if not cov["missed"]:
             return CoverageObservation.from_text(
-                score + "Your test runs every executable line this pull request changed."
-                + import_only + failing + unflipped)
+                first + score + "Your test runs every executable line this pull request "
+                "changed." + import_only + failing)
         # The import-time note went out only when nothing was missed, so astropy-13398
         # (base, cap 125), whose 31 "covered" lines were all imports, constants and `def`
         # lines, never saw it in four calls.
-        lines = [score + "Some lines this pull request changed never ran under your test."
+        lines = [first + score + "Some lines this pull request changed never ran under your test."
                  + _spawn_note(self.box, action.target) + import_only]
 
         # The source and the guards, not just the numbers. "line 1631 is uncovered" is
@@ -630,7 +633,9 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         lines += ["Write the test so that every line the change touched runs: pick inputs "
                   "that make those conditions true, or add a second test for a separate "
                   "case the same change fixes. Reach each line through the behaviour you "
-                  "are asserting. Then call `coverage` again."]
+                  "are asserting. "
+                  + ("Then call `verify`: the test has to flip first." if unflipped
+                     else "Then call `coverage` again.")]
         # The rule, where the shortfall is read. Deliberately paired with the escape
         # hatch: some changed lines cannot be reached from a test at all, and an
         # assertion written only to execute one buys a number and costs a reviewer's
@@ -646,7 +651,7 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
                       "You will be sent back while lines are missed: change the test and "
                       "call `coverage` again, until every changed line runs or an honest "
                       "attempt reaches no more of them."]
-        return CoverageObservation.from_text("\n".join(lines) + failing + unflipped)
+        return CoverageObservation.from_text("\n".join(lines) + failing)
 
 
 class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
@@ -938,9 +943,13 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             # (no-second-chance) had one test flip and one backwards and was told only
             # "backwards", never to keep the one that worked.
             back = [n for n in still_failing if n in inverted]
+            # The backwards ones named once, under "backwards": Qiskit-12483 (ChaCo wave 2)
+            # was told the same test "still fails" and "passes before and fails after".
+            both = [n for n in still_failing if n not in back]
             head = (f"NOT fail-to-pass yet, but part of it is right: {flipped[:3]} fail "
-                    f"before the change and pass after -- keep those. {still_failing[:3]} "
-                    f"still fail after the change is applied: fix them or delete them. "
+                    f"before the change and pass after -- keep those. "
+                    + (f"{both[:3]} still fail after the change is applied: fix them or "
+                       f"delete them. " if both else "") +
                     f"Every test in the file has to pass once the change is in."
                     + (f" {back[:3]} pass before the change and fail after: those assert "
                        f"the old side of the behaviour -- assert what the change makes "
@@ -1032,6 +1041,22 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             elsewhere = (f"\n\nNote: this run is scored on the file named "
                          f"`{self.scored_name}`, and `{action.target}` is not it. This "
                          f"answer is about `{action.target}` only.")
+        # Tests that skip on the old code and pass on the new one tested nothing before
+        # the change. A file is still fail-to-pass when another test flips, but the agent
+        # is told: scipy-21996 (ChaCo wave 2) caught the new API's TypeError and skipped
+        # in 9 of 15 tests, was credited with all of them, and never heard about it.
+        skipped_base = sorted(n for n, v in base_out.items()
+                              if v == "SKIPPED" and head_out.get(n) == "PASSED")
+        if ok and skipped_base:
+            head += (f" But {len(skipped_base)} test(s) are skipped on the code before the "
+                     f"change ({skipped_base[:3]}): they never ran against the old code, so "
+                     f"they do not test the change. Make each one fail on the old code for "
+                     f"the right reason, or remove it.")
+        # The version that flipped, when this one does not.
+        if not ok:
+            from openhands_f2p import verify as V
+            head += V.lost_flip(self.log[:-1], action.target.split("::")[0],
+                                self.box.read(action.target.split("::")[0]))
         return VerifyObservation.from_text(head + elsewhere + duty + missed + nxt + body,
                                            is_error=False)
 
