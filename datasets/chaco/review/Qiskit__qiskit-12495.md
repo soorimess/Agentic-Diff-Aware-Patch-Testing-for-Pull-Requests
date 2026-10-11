@@ -6,11 +6,11 @@
 |---|---|
 | pull request | [Qiskit/qiskit#12495](https://github.com/Qiskit/qiskit/pull/12495) (created 2024-06-03, merged 2024-06-04) |
 | ChaCo lists | full, ablation |
-| status | **no-developer-test** -- the PR adds or changes no test: FAIL_TO_PASS cannot be derived |
+| status | **no-developer-test** -- no developer test (FAIL_TO_PASS cannot be derived); image at the base commit, patch applies and reverts |
 | base commit | [`797bb285632a`](https://github.com/Qiskit/qiskit/commit/797bb285632a4b58c35c9e4cf5be44502b5bd78a) (2024-06-03), first parent of the merge commit |
 | merge commit | [`72ff2cf20e10`](https://github.com/Qiskit/qiskit/commit/72ff2cf20e1047236c15f27f08c384c40f4a82f8) |
 | issues closed | none |
-| version | (set by validate) |
+| version | 1.2 |
 | image | `f2p-chaco/qiskit__qiskit-12495:latest` -- [Dockerfile](../dockerfiles/Qiskit__qiskit-12495.Dockerfile) |
 | source files (`patch`) | `crates/circuit/src/circuit_data.rs`, `qiskit/circuit/quantumcircuit.py` |
 | test files (`test_patch`) | none |
@@ -272,3 +272,11 @@ index a157f04375a387ad76a39d46d95bf739eb1d376a..73c5101bb4692d6d21e4e0417bc29ee4
 
 ```
 
+## Validation
+
+```json
+{
+ "image_head": "797bb285632a4b58c35c9e4cf5be44502b5bd78a",
+ "patch_applies": true
+}
+```

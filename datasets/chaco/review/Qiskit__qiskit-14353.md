@@ -6,11 +6,11 @@
 |---|---|
 | pull request | [Qiskit/qiskit#14353](https://github.com/Qiskit/qiskit/pull/14353) (created 2025-05-13, merged 2025-05-18) |
 | ChaCo lists | full, ablation |
-| status | **no-developer-test** -- the PR adds or changes no test: FAIL_TO_PASS cannot be derived |
+| status | **no-developer-test** -- no developer test (FAIL_TO_PASS cannot be derived); image at the base commit, patch applies and reverts |
 | base commit | [`d4df68bceee9`](https://github.com/Qiskit/qiskit/commit/d4df68bceee9a96f73e928076f466c7ea858fdee) (2025-05-16), first parent of the merge commit |
 | merge commit | [`a18e15163d8a`](https://github.com/Qiskit/qiskit/commit/a18e15163d8a93c0e072d4d3c50151a2cd9f036a) |
 | issues closed | none |
-| version | (set by validate) |
+| version | 2.1 |
 | image | `f2p-chaco/qiskit__qiskit-14353:latest` -- [Dockerfile](../dockerfiles/Qiskit__qiskit-14353.Dockerfile) |
 | source files (`patch`) | `qiskit/transpiler/preset_passmanagers/builtin_plugins.py`, `releasenotes/notes/no-layout-presets-87e0bcde698f002e.yaml` |
 | test files (`test_patch`) | none |
@@ -191,3 +191,11 @@ index 0000000000000000000000000000000000000000..becc15f5bafc0ce1413a4f81ac61078c
 
 ```
 
+## Validation
+
+```json
+{
+ "image_head": "d4df68bceee9a96f73e928076f466c7ea858fdee",
+ "patch_applies": true
+}
+```

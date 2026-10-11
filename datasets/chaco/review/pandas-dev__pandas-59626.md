@@ -6,11 +6,11 @@
 |---|---|
 | pull request | [pandas-dev/pandas#59626](https://github.com/pandas-dev/pandas/pull/59626) (created 2024-08-27, merged 2024-08-28) |
 | ChaCo lists | full, ablation |
-| status | **no-developer-test** -- the PR adds or changes no test: FAIL_TO_PASS cannot be derived |
+| status | **no-developer-test** -- no developer test (FAIL_TO_PASS cannot be derived); image at the base commit, patch applies and reverts |
 | base commit | [`5ad25d0eba90`](https://github.com/pandas-dev/pandas/commit/5ad25d0eba90726e87bda0d5b7f33a5acb7b0f6b) (2024-08-28), first parent of the merge commit |
 | merge commit | [`675293573cf3`](https://github.com/pandas-dev/pandas/commit/675293573cf3be8c59b45e34fce20f473186634e) |
 | issues closed | none |
-| version | (set by validate) |
+| version | 3.0 |
 | image | `f2p-chaco/pandas-dev__pandas-59626:latest` -- [Dockerfile](../dockerfiles/pandas-dev__pandas-59626.Dockerfile) |
 | source files (`patch`) | `pandas/core/arrays/_arrow_string_mixins.py`, `pandas/core/arrays/arrow/array.py`, `pandas/core/arrays/string_arrow.py` |
 | test files (`test_patch`) | none |
@@ -227,3 +227,11 @@ index 7c359d1a3132bc96081e32bf66ea70e33adc0f08..15807c365ecfd8a6bb512b786490a44e
 
 ```
 
+## Validation
+
+```json
+{
+ "image_head": "5ad25d0eba90726e87bda0d5b7f33a5acb7b0f6b",
+ "patch_applies": true
+}
+```

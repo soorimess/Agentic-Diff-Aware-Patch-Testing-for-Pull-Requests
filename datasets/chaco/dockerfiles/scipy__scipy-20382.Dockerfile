@@ -12,3 +12,4 @@ RUN uv pip install --system --exclude-newer 2024-04-03T09:45:54-06:00 -r require
 RUN python -m pip install --no-build-isolation -e . 
 RUN python -c 'import scipy; print(scipy.__version__)'
 ENV OPENBLAS_CORETYPE=Haswell
+ENV PYTEST_ADDOPTS=--import-mode=importlib

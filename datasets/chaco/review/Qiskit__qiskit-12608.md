@@ -6,11 +6,11 @@
 |---|---|
 | pull request | [Qiskit/qiskit#12608](https://github.com/Qiskit/qiskit/pull/12608) (created 2024-06-20, merged 2024-06-20) |
 | ChaCo lists | full, ablation |
-| status | **no-developer-test** -- the PR adds or changes no test: FAIL_TO_PASS cannot be derived |
+| status | **no-developer-test** -- no developer test (FAIL_TO_PASS cannot be derived); image at the base commit, patch applies and reverts |
 | base commit | [`591260f0694f`](https://github.com/Qiskit/qiskit/commit/591260f0694fb1944507283ce10cf8f068bd3935) (2024-06-20), first parent of the merge commit |
 | merge commit | [`7d1731b60d8d`](https://github.com/Qiskit/qiskit/commit/7d1731b60d8dd6219a292dc62f24d1a8d780e43a) |
 | issues closed | none |
-| version | (set by validate) |
+| version | 1.2 |
 | image | `f2p-chaco/qiskit__qiskit-12608:latest` -- [Dockerfile](../dockerfiles/Qiskit__qiskit-12608.Dockerfile) |
 | source files (`patch`) | `qiskit/visualization/pulse_v2/device_info.py`, `releasenotes/notes/fix-v2-pulse-drawer-d05e4e392766909f.yaml` |
 | test files (`test_patch`) | none |
@@ -182,3 +182,11 @@ index 0000000000000000000000000000000000000000..b158703c6b89fca120c0456741b11dc7
 
 ```
 
+## Validation
+
+```json
+{
+ "image_head": "591260f0694fb1944507283ce10cf8f068bd3935",
+ "patch_applies": true
+}
+```

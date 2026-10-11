@@ -6,11 +6,11 @@
 |---|---|
 | pull request | [Qiskit/qiskit#13343](https://github.com/Qiskit/qiskit/pull/13343) (created 2024-10-17, merged 2024-11-01) |
 | ChaCo lists | full, ablation |
-| status | **no-developer-test** -- the PR adds or changes no test: FAIL_TO_PASS cannot be derived |
+| status | **no-developer-test** -- no developer test (FAIL_TO_PASS cannot be derived); image at the base commit, patch applies and reverts |
 | base commit | [`ccfcef808458`](https://github.com/Qiskit/qiskit/commit/ccfcef8084584b6760e606b052292d65a4baa91d) (2024-11-01), first parent of the merge commit |
 | merge commit | [`8b210131e6ae`](https://github.com/Qiskit/qiskit/commit/8b210131e6ae0dd0022308f56fbee6b80722e47d) |
 | issues closed | none |
-| version | (set by validate) |
+| version | 1.3 |
 | image | `f2p-chaco/qiskit__qiskit-13343:latest` -- [Dockerfile](../dockerfiles/Qiskit__qiskit-13343.Dockerfile) |
 | source files (`patch`) | `qiskit/qasm3/ast.py`, `qiskit/qasm3/exporter.py` |
 | test files (`test_patch`) | none |
@@ -730,3 +730,11 @@ index d101f2cfbaa74133a98b70ada0a58dc136351c1d..8997770c14e7904a70a93e1d31487491
 
 ```
 
+## Validation
+
+```json
+{
+ "image_head": "ccfcef8084584b6760e606b052292d65a4baa91d",
+ "patch_applies": true
+}
+```

@@ -6,11 +6,11 @@
 |---|---|
 | pull request | [Qiskit/qiskit#13251](https://github.com/Qiskit/qiskit/pull/13251) (created 2024-10-01, merged 2024-10-02) |
 | ChaCo lists | full, ablation |
-| status | **no-developer-test** -- the PR adds or changes no test: FAIL_TO_PASS cannot be derived |
+| status | **no-developer-test** -- no developer test (FAIL_TO_PASS cannot be derived); image at the base commit, patch applies and reverts |
 | base commit | [`f1b25806e976`](https://github.com/Qiskit/qiskit/commit/f1b25806e97674428b8d687bd5886f23fd6cbe80) (2024-10-02), first parent of the merge commit |
 | merge commit | [`fee9f771c2c2`](https://github.com/Qiskit/qiskit/commit/fee9f771c2c28bd3bc67b364fbed2e71e3b1b805) |
 | issues closed | none |
-| version | (set by validate) |
+| version | 1.3 |
 | image | `f2p-chaco/qiskit__qiskit-13251:latest` -- [Dockerfile](../dockerfiles/Qiskit__qiskit-13251.Dockerfile) |
 | source files (`patch`) | `qiskit/qpy/__init__.py`, `qiskit/qpy/binary_io/schedules.py`, `qiskit/qpy/binary_io/value.py`, `qiskit/qpy/common.py`, `qiskit/qpy/interface.py`, `releasenotes/notes/fix-qpy-symengine-compat-858970a9a1d6bc14.yaml`, `requirements.txt` |
 | test files (`test_patch`) | none |
@@ -304,3 +304,11 @@ index 2dd5e49e2b3d207735b7fa1ddb0c768619cf533b..4c13eb6dc60af405385c3c7fbfd4126b
 
 ```
 
+## Validation
+
+```json
+{
+ "image_head": "f1b25806e97674428b8d687bd5886f23fd6cbe80",
+ "patch_applies": true
+}
+```

@@ -38,8 +38,7 @@ def _ids(mod, which: str, buildable: bool = False) -> list[str]:
             out.append(w)
     out = list(dict.fromkeys(out))
     if buildable:
-        out = [i for i in out if rows.get(i, {}).get("status", "unsupported")
-               not in ("unsupported", "no-developer-test")]
+        out = [i for i in out if rows.get(i, {}).get("status", "unsupported") != "unsupported"]
     return out
 
 
@@ -74,7 +73,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("action", choices=("list", "info", "prepare", "build", "validate",
-                                      "review", "fill"))
+                                      "review", "fill", "check"))
     p.add_argument("dataset", nargs="?", default="")
     p.add_argument("which", nargs="?", default="",
                    help="comma-separated instance ids, or 'all'")
@@ -115,6 +114,10 @@ def main() -> int:
     if not hasattr(src, "recipe"):
         raise SystemExit(f"  {a.dataset} has nothing to {a.action}: its rows and images "
                          f"come ready-made")
+    if a.action == "check":
+        out, bad = mod.check(a.which or "ablation")
+        print(f"  wrote {out}: {bad} PR(s) with a problem")
+        return 1 if bad else 0
     if a.action == "fill":
         redo = tuple(w.strip() for w in a.which.split(",") if w.strip())
         chosen = mod.fill(parallel=max(a.parallel, 1), redo=redo)

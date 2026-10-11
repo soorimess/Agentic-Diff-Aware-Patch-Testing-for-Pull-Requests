@@ -6,11 +6,11 @@
 |---|---|
 | pull request | [Qiskit/qiskit#14024](https://github.com/Qiskit/qiskit/pull/14024) (created 2025-03-14, merged 2025-03-17) |
 | ChaCo lists | full, ablation |
-| status | **no-developer-test** -- the PR adds or changes no test: FAIL_TO_PASS cannot be derived |
+| status | **no-developer-test** -- no developer test (FAIL_TO_PASS cannot be derived); image at the base commit, patch applies and reverts |
 | base commit | [`a5c33a8aa3fa`](https://github.com/Qiskit/qiskit/commit/a5c33a8aa3face520c3819520441f0f4f2c996ee) (2025-03-17), first parent of the merge commit |
 | merge commit | [`8bcc9f1f73d5`](https://github.com/Qiskit/qiskit/commit/8bcc9f1f73d53bb6c19f33949d3decb3133c7f4c) |
 | issues closed | none |
-| version | (set by validate) |
+| version | 2.1 |
 | image | `f2p-chaco/qiskit__qiskit-14024:latest` -- [Dockerfile](../dockerfiles/Qiskit__qiskit-14024.Dockerfile) |
 | source files (`patch`) | `qiskit/circuit/parameterexpression.py`, `qiskit/circuit/tools/pi_check.py`, `qiskit/qpy/binary_io/parse_sympy_repr.py`, `qiskit/qpy/binary_io/value.py`, `qiskit/transpiler/passes/optimization/template_matching/template_substitution.py`, `releasenotes/notes/fix-ace-qpyv1-609551d84531e016.yaml` |
 | test files (`test_patch`) | none |
@@ -309,3 +309,11 @@ index 0000000000000000000000000000000000000000..eea32ab5f4f244590b5024b5f2b7a8e9
 
 ```
 
+## Validation
+
+```json
+{
+ "image_head": "a5c33a8aa3face520c3819520441f0f4f2c996ee",
+ "patch_applies": true
+}
+```

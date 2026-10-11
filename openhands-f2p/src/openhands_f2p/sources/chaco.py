@@ -48,6 +48,7 @@ HOME = PROJECT_ROOT / "datasets" / NAME
 INSTANCES = HOME / "instances.json"
 PRS_FILE = HOME / "prs.json"
 DOCKERFILES = HOME / "dockerfiles"
+REVIEW = HOME / "review"
 BENCHMARK = HOME / "benchmark" / "rq_full.json"
 # ChaCo's lists. `full` is the benchmark (RQ1, 145 PRs); `ablation` is the 30 (10 per
 # project) its ablation study (RQ3) ran on, all of them inside `full`.
@@ -426,18 +427,22 @@ def prepare_one(repo: str, number: int) -> dict:
         row.update(status="unsupported", why="the change touches no Python source")
     elif not test_patch.strip():
         # Common in ChaCo, whose PRs were chosen for lines their own tests leave
-        # uncovered: 9 of the 30 ablation PRs add no test at all. Not built or run for
-        # now -- FAIL_TO_PASS cannot be derived, and the developer column of mutation
-        # and the judge both need a developer test.
+        # uncovered: 9 of the 30 ablation PRs add no test at all. FAIL_TO_PASS cannot be
+        # derived, and the developer column of mutation is "not measured"; the image is
+        # still built and `validate` checks the patch applies and reverts in it, because
+        # the user runs the whole ablation list (2026-10-11).
         row.update(status="no-developer-test",
                    why="the PR adds or changes no test: FAIL_TO_PASS cannot be derived")
     elif any(p.endswith(".rs") for p in compiled):
-        row.update(status="unsupported",
-                   why=f"the change touches Rust ({compiled[:3]}), which the editable "
-                       f"install does not rebuild on import")
+        # Qiskit's Rust is built once and not rebuilt when the patch is applied. Whether
+        # the developer's tests still flip on the Python half alone is for `validate`
+        # to find out, not to be assumed here.
+        row.update(status="prepared",
+                   why=f"awaiting build and validate; the change also touches Rust "
+                       f"({compiled[:2]}), which is not rebuilt when the patch is applied")
     else:
         row.update(status="prepared", why="awaiting build and validate")
-    if row["status"] not in ("unsupported", "no-developer-test"):
+    if row["status"] != "unsupported":
         DOCKERFILES.mkdir(parents=True, exist_ok=True)
         (DOCKERFILES / f"{iid}.Dockerfile").write_text(dockerfile(row))
     return row
@@ -469,7 +474,7 @@ def prepare(ids: list[str] | None = None) -> list[dict]:
         iid = instance_id(repo, number)
         row = prepare_one(repo, number)
         old = _read_rows().get(iid)
-        if (old and old.get("validated_at") and row["status"] == "prepared"
+        if (old and old.get("validated_at") and row["status"] in ("prepared", "no-developer-test")
                 and all(old.get(k) == row.get(k)
                         for k in ("base_commit", "patch", "test_patch"))):
             row.update({k: old[k] for k in VALIDATION_FIELDS if k in old})
@@ -494,13 +499,45 @@ def validate(iid: str, quiet: bool = False) -> dict:
     if iid not in rows:
         raise SystemExit(f"{iid} is not prepared; run prepare first")
     row = rows[iid]
-    if row["status"] in ("unsupported", "no-developer-test") or not row["test_patch"].strip():
+    if row["status"] == "unsupported":
         print(f"  {iid}: {row['status']} -- {row.get('why')}")
         return row
     sources.select(NAME)
     files = E.patched_test_files(row["test_patch"])
     with E.Sandbox(iid, quiet=quiet) as box:
+        # The image's checkout, read before `.git` goes: it has to be the base commit.
+        head = box.exec("git rev-parse HEAD").stdout.strip()
+        if head != row["base_commit"]:
+            row.update(status="broken-env", validated_at=time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()), validation={"image_head": head},
+                why=f"the image's /testbed is at {head[:12]}, not the base commit "
+                    f"{row['base_commit'][:12]}")
+            save_row(row)
+            print(f"  {row['status']:<16} {iid:32s} {row['why'][:90]}")
+            return row
         box.strip_git()
+        if not row["test_patch"].strip():
+            # No developer test: what can still be checked is that the change applies to
+            # this tree and comes off it again, exactly as the harness will do it.
+            box.apply_patch(row["patch"])
+            at_head = box.patch_state(row["patch"])
+            box.apply_patch(row["patch"], revert=True)
+            at_base = box.patch_state(row["patch"])
+            ok = at_head == "head" and at_base == "base"
+            row.update(validated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       validation={"image_head": head, "patch_applies": ok},
+                       status="no-developer-test" if ok else "broken-env",
+                       why=("no developer test (FAIL_TO_PASS cannot be derived); image at "
+                            "the base commit, patch applies and reverts" if ok else
+                            f"patch did not apply and revert cleanly ({at_head}/{at_base})"))
+            dist = RECIPES[row["repo"]]["dist"]
+            v = box.exec("python -c \"import importlib.metadata as m; print(m.version('"
+                         + dist + "'))\"", workdir="/").stdout.strip().splitlines()
+            m = re.match(r"(\d+)\.(\d+)", v[-1] if v else "")
+            row["version"] = f"{m.group(1)}.{m.group(2)}" if m else ""
+            save_row(row)
+            print(f"  {row['status']:<16} {iid:32s} {row['why'][:90]}")
+            return row
         box.apply_patch(row["test_patch"])
         files = [f for f in files if box.exists(f)]
         cmd = E.test_command(box, files)
@@ -529,7 +566,8 @@ def validate(iid: str, quiet: bool = False) -> dict:
             return out
         row.update(FAIL_TO_PASS=json.dumps(f2p), PASS_TO_PASS=json.dumps(p2p),
                    validated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                   validation={"test_files": files, "collected_before": len(b),
+                   validation={"image_head": head, "patch_applies": True,
+                               "test_files": files, "collected_before": len(b),
                                "collected_after": len(a),
                                "outcomes_before": tally(b), "outcomes_after": tally(a),
                                "exit_before": before.returncode,
@@ -641,8 +679,118 @@ def fill(per_project: int = 10, seed: int = 0, parallel: int = 4,
     return chosen
 
 
+# ------------------------------------------------------------------ check: against GitHub
+def _counts(diff: str) -> dict[str, tuple[int, int]]:
+    """Lines added and removed per file in a unified diff, counted inside hunks only."""
+    out: dict[str, list[int]] = {}
+    cur, in_hunk = None, False
+    for ln in diff.splitlines():
+        if ln.startswith("diff --git "):
+            cur, in_hunk = ln.split(" b/", 1)[-1].strip(), False
+            out.setdefault(cur, [0, 0])
+        elif ln.startswith("@@"):
+            in_hunk = True
+        elif in_hunk and cur:
+            if ln.startswith("+"):
+                out[cur][0] += 1
+            elif ln.startswith("-"):
+                out[cur][1] += 1
+    return {k: (a, d) for k, (a, d) in out.items()}
+
+
+def check(which: str = "ablation") -> tuple[Path, int]:
+    """Cross-check every row of `which` against GitHub's own record of the PR.
+
+    Independent of how `prepare` derived the row: the PR, the merge commit's parents and
+    the base...merge comparison all come from the GitHub API, not from our git mirror,
+    and are compared with what the row says. Adds what `validate` saw inside the image
+    (its checkout is the base commit, the patch applies and reverts). Writes
+    `review/CHECK.md`; returns it and the number of PRs with a problem.
+    """
+    rows = _read_rows()
+    ids = [instance_id(r, n) for r, n in benchmark(which)]
+    lines = [f"# ChaCo `{which}`: cross-check against GitHub", "",
+             f"Generated by `python -m openhands_f2p.sources check chaco {which}` "
+             f"({time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}). Each row of "
+             "[`instances.json`](../instances.json) compared with the GitHub API -- the PR, "
+             "the merge commit's parents, and GitHub's own `base...merge` comparison -- "
+             "plus what `validate` found inside the built image.", "",
+             "| PR | merged, same merge commit | base = merge's 1st parent | files and +/- "
+             "lines match GitHub | tests vs source split | problem statement | image at "
+             "base, patch applies | status |", "|---|---|---|---|---|---|---|---|"]
+    details, bad = [], 0
+    for iid in ids:
+        r = rows.get(iid)
+        if r is None:
+            lines.append(f"| {iid} | not prepared | | | | | | |")
+            bad += 1
+            continue
+        repo, n = r["repo"], r["pull_number"]
+        probs: list[str] = []
+        pr = _gh(f"repos/{repo}/pulls/{n}")
+        c1 = bool(pr.get("merged")) and pr.get("merge_commit_sha") == r.get("merge_commit")
+        if not c1:
+            probs.append(f"PR merged={pr.get('merged')}, GitHub merge commit "
+                         f"{str(pr.get('merge_commit_sha'))[:12]} vs row {r.get('merge_commit', '')[:12]}")
+        commit = _gh(f"repos/{repo}/commits/{r['merge_commit']}")
+        parents = [p["sha"] for p in commit.get("parents", [])]
+        c2 = bool(parents) and parents[0] == r["base_commit"]
+        if not c2:
+            probs.append(f"merge commit parents {[p[:12] for p in parents]}, row base "
+                         f"{r['base_commit'][:12]}")
+        cmp = _gh(f"repos/{repo}/compare/{r['base_commit']}...{r['merge_commit']}")
+        gh = {}
+        for f in cmp.get("files", []):
+            if f.get("status") == "renamed" and f.get("previous_filename"):
+                gh.setdefault(f["previous_filename"], ("renamed-from", 0))
+            gh[f["filename"]] = (f.get("additions", 0), f.get("deletions", 0))
+        ours = _counts(r.get("patch", "") + r.get("test_patch", ""))
+        skipped = set(r.get("binary_files_left_out") or [])
+        diff_issues = []
+        for path in sorted(set(gh) | set(ours)):
+            if path in skipped:
+                continue
+            g, o = gh.get(path), ours.get(path)
+            if g is None or o is None:
+                diff_issues.append(f"`{path}` only in {'ours' if g is None else 'GitHub'}")
+            elif g[0] != "renamed-from" and g != o:
+                diff_issues.append(f"`{path}` +{o[0]}/-{o[1]} ours vs +{g[0]}/-{g[1]} GitHub")
+        c3 = not diff_issues and len(cmp.get("files", [])) < 300
+        if not c3:
+            probs += diff_issues[:5] or ["GitHub lists 300+ files (truncated)"]
+        tests, srcs = _paths(r.get("test_patch", "")), _paths(r.get("patch", ""))
+        mis = [f for f in tests if not is_test_path(f)] + [f for f in srcs if is_test_path(f)]
+        c4 = not mis
+        if not c4:
+            probs.append(f"split: {mis[:3]}")
+        ps = r.get("problem_statement", "")
+        c5 = pr["title"].strip() in ps and all(f"Issue #{i}:" in ps
+                                              for i in r.get("closes_issues", []))
+        if not c5:
+            probs.append("problem statement lacks the PR title or a closed issue")
+        v = r.get("validation") or {}
+        c6 = v.get("image_head") == r["base_commit"] and v.get("patch_applies") is True
+        if not c6:
+            probs.append(f"image check: head={str(v.get('image_head'))[:12]}, "
+                         f"patch_applies={v.get('patch_applies')}")
+        ok = all((c1, c2, c3, c4, c5, c6))
+        bad += not ok
+        mark = lambda b: "✓" if b else "**✗**"
+        lines.append(f"| [{iid}]({iid}.md) | {mark(c1)} | {mark(c2)} | {mark(c3)} "
+                     f"({len(ours)} files) | {mark(c4)} | {mark(c5)} | {mark(c6)} | "
+                     f"{r.get('status')} |")
+        if probs:
+            details.append(f"- **{iid}**: " + "; ".join(probs))
+    lines += ["", f"**{len(ids) - bad} of {len(ids)} PRs pass every check.**", ""]
+    if details:
+        lines += ["## Problems", "", *details, ""]
+    REVIEW.mkdir(parents=True, exist_ok=True)
+    out = REVIEW / "CHECK.md"
+    out.write_text("\n".join(lines) + "\n")
+    return out, bad
+
+
 # ------------------------------------------------------------------ review pages
-REVIEW = HOME / "review"
 
 
 def _fence(text: str, lang: str = "") -> str:

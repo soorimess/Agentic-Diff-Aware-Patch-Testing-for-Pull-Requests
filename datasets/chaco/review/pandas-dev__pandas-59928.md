@@ -6,11 +6,11 @@
 |---|---|
 | pull request | [pandas-dev/pandas#59928](https://github.com/pandas-dev/pandas/pull/59928) (created 2024-09-30, merged 2024-10-03) |
 | ChaCo lists | full, ablation |
-| status | **no-developer-test** -- the PR adds or changes no test: FAIL_TO_PASS cannot be derived |
+| status | **no-developer-test** -- no developer test (FAIL_TO_PASS cannot be derived); image at the base commit, patch applies and reverts |
 | base commit | [`198ed865420c`](https://github.com/pandas-dev/pandas/commit/198ed865420c2a206dc062a32be47c7cc5e76bc0) (2024-10-03), first parent of the merge commit |
 | merge commit | [`c47296ad3b99`](https://github.com/pandas-dev/pandas/commit/c47296ad3b9908f77fba5830ec9dbb7f546cb720) |
 | issues closed | none |
-| version | (set by validate) |
+| version | 3.0 |
 | image | `f2p-chaco/pandas-dev__pandas-59928:latest` -- [Dockerfile](../dockerfiles/pandas-dev__pandas-59928.Dockerfile) |
 | source files (`patch`) | `pandas/core/indexes/base.py` |
 | test files (`test_patch`) | none |
@@ -102,3 +102,11 @@ index 852049804a4f566ebce5c2ac1d2b07ed3660370f..749a5fea4d5137cd8d0ba863cff109fa
 
 ```
 
+## Validation
+
+```json
+{
+ "image_head": "198ed865420c2a206dc062a32be47c7cc5e76bc0",
+ "patch_applies": true
+}
+```
