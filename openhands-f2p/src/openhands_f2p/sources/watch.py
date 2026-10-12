@@ -14,12 +14,15 @@ import re
 import sys
 from pathlib import Path
 
-# (name, severity, where, pattern). `where`: "tools" (text the agent was shown), "logs"
+# (name, severity, where, pattern). `where`: "tools" (text the agent was shown),
+# "test-runs" (what verify, run_tests, coverage and mutation showed), "logs"
 # (verdict test runs), "child" (the process log), "prompt" (first prompt), "test" (final
 # test file). severity: "stop" = a harness/environment bug, fix before more runs;
 # "read" = read the trajectory; "note" = informational.
 SIGNATURES = [
-    ("env-import-of-new-test", "stop", "tools",
+    # Test runs only: scipy-21996 (base rerun, 2026-10-12) imported its new test module
+    # with `python -c`, which an editable meson install cannot do and pytest never needs.
+    ("env-import-of-new-test", "stop", "test-runs",
      r"ModuleNotFoundError: No module named '[\w.]+\.tests?\.test_f2p"),
     ("meson-rebuild", "stop", "tools", r"meson-python: building|re-building the \w+ meson"),
     ("meson-rebuild-failed", "stop", "tools", r"CalledProcessError: Command '\['/usr/local/bin/ninja'"),
@@ -42,12 +45,13 @@ SIGNATURES = [
 ]
 
 
-def _shown(run: Path) -> str:
+def _shown(run: Path, tools: tuple[str, ...] | None = None) -> str:
     try:
         log = json.loads((run / "tool_log.json").read_text())
     except (OSError, ValueError):
         return ""
-    return "\n".join(str(e.get("shown") or "") for e in log)
+    return "\n".join(str(e.get("shown") or "") for e in log
+                     if tools is None or e.get("tool") in tools)
 
 
 def _prompt(run: Path) -> str:
@@ -63,6 +67,7 @@ def scan(run: Path) -> dict:
     r = json.loads((run / "result.json").read_text())
     texts = {
         "tools": _shown(run),
+        "test-runs": _shown(run, ("verify", "run_tests", "coverage", "mutation")),
         "logs": "".join((run / f).read_text(errors="replace")
                         for f in ("before_fix.log", "after_fix.log") if (run / f).exists()),
         "child": (run / "child.log").read_text(errors="replace") if (run / "child.log").exists() else "",
