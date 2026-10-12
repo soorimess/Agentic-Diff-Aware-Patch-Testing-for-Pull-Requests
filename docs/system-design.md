@@ -170,6 +170,10 @@ applies to SWE-bench as well:
 - **A coverage or mutation loop closes after two attempts that broke the flip.** Such
   attempts were never measured, so the loop could only end at `MAX_REFUSALS`
   (`verify._broke_flip_since`).
+  An attempt "broke the flip" when its `verify` was not fail-to-pass by the verdict's rule
+  (something flipped *and* nothing still fails), not only when nothing flipped: SciPy
+  22549 (canary, 2026-10-12) broke its file eight times with one test still flipping and
+  never counted, so the loop ran into `MAX_REFUSALS` at 0% and 0/20.
 - **`verify` and the refusals offer back the last version `verify` called
   fail-to-pass** when the current file has lost it (`verify.lost_flip`).
 - **`verify` names tests that skip on the old code, even when the file flips.**

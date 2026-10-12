@@ -624,8 +624,7 @@ def verify_settled(tool_log: list, rel: str | None = None) -> bool:
     if not found:
         return False
     i, e = found[-1]
-    still = [n for n, st in (e.get("after") or {}).items() if st in BEHAVIOURAL]
-    return bool(e.get("flipped")) and not still and not wrote_test_after(tool_log, i, rel)
+    return _says_f2p(e) and not wrote_test_after(tool_log, i, rel)
 
 
 def _last(tool_log: list, tool: str, rel: str) -> tuple[int, dict] | None:
@@ -751,13 +750,23 @@ def lost_flip(tool_log: list, rel: str, current: str | None) -> str:
             f"back and build from it:\n\n```python\n{shown.rstrip()}\n```")
 
 
+def _says_f2p(e: dict) -> bool:
+    """Whether one `verify` entry said fail-to-pass: something flipped, nothing still fails."""
+    still = [n for n, st in (e.get("after") or {}).items() if st in BEHAVIOURAL]
+    return bool(e.get("flipped")) and not still
+
+
 def _broke_flip_since(tool_log: list, rel: str, since: int) -> int:
     """`verify` calls on edited versions of `rel` after `since` that were not fail-to-pass:
     attempts at a duty that broke the flip instead of improving the answer."""
+    # Not fail-to-pass by the verdict's rule, not just "nothing flipped": scipy-22549
+    # (ChaCo canary, 2026-10-12) broke its file eight times with one test still flipping
+    # beside one failing after the change, none of them counted, and the loop ran into
+    # MAX_REFUSALS on a file that measured 0% and 0/20 every time.
     n = 0
     for i, e in enumerate(tool_log):
         if (i > since and e.get("tool") == "verify" and "error" not in e
-                and names_test(tool_log, e.get("target", ""), rel) and not e.get("flipped")
+                and names_test(tool_log, e.get("target", ""), rel) and not _says_f2p(e)
                 and any(since < j < i for j in test_writes(tool_log, rel))):
             n += 1
     return n
