@@ -194,6 +194,43 @@ def _import_only(box: Sandbox, cov: dict) -> str:
             "copy, not the project.")
 
 
+def _first_error(output: str, node: str) -> str:
+    """The first `E   ` line pytest printed for `node`, or "" when there is none."""
+    key = re.escape(".".join(node.split("::")[1:]))
+    head = re.search(rf"^_{{3,}} (?:ERROR at \w+ of )?{key} _{{3,}}$", output, re.M)
+    if not head:
+        return ""
+    end = re.search(r"^(_{3,} |={3,} )", output[head.end():], re.M)
+    section = output[head.end(): head.end() + end.start() if end else len(output)]
+    line = next((ln for ln in section.splitlines() if ln.startswith("E ")), "")
+    return line[1:].strip().replace("`", "'")[:200]
+
+
+def _why_both(before: str, after: str, nodes: list[str]) -> str:
+    """For tests failing on both sides: whether they fail the same way.
+
+    scipy-22549 (ChaCo base, 2026-10-12) failed before the change on the missing
+    `workers` keyword -- the right failure -- and after it on its own `hess=None`. Told
+    only "still fail after the change", it ran `verify` ten more times without touching
+    `hess`. pandas-60295 failed on the same ValueError on both sides.
+    """
+    said = []
+    for n in nodes[:3]:
+        b, a = _first_error(before, n), _first_error(after, n)
+        if not (b and a):
+            continue
+        name = n.split("::")[-1]
+        if b == a:
+            said.append(f"`{name}` fails the same way on both sides (`{a}`), so the change "
+                        f"does not touch what fails: fix that first.")
+        else:
+            said.append(f"`{name}` fails before the change with `{b}` and after it with "
+                        f"`{a}`. The first can be the right failure -- what the change "
+                        f"fixes; the second is a mistake in the test itself: fix that and "
+                        f"keep the rest.")
+    return (" " + " ".join(said)) if said else ""
+
+
 def _condense(text: str) -> str:
     """`text` without the lines that describe the runner instead of the test."""
     kept, in_warnings, in_astropy, frame_body = [], False, False, False
@@ -948,14 +985,16 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             head = (f"NOT fail-to-pass yet, but part of it is right: {flipped[:3]} fail "
                     f"before the change and pass after -- keep those. "
                     + (f"{both[:3]} still fail after the change is applied: fix them or "
-                       f"delete them. " if both else "") +
+                       f"delete them.{_why_both(before.output, after.output, both)} "
+                       if both else "") +
                     f"Every test in the file has to pass once the change is in."
                     + (f" {back[:3]} pass before the change and fail after: those assert "
                        f"the old side of the behaviour -- assert what the change makes "
                        f"true instead." if back else ""))
         elif still_failing:
             head = (f"NOT fail-to-pass: {still_failing[:3]} still fail after the change "
-                    f"is applied. The test is wrong, not the code.")
+                    f"is applied. The test is wrong, not the code."
+                    + _why_both(before.output, after.output, still_failing))
         elif not flipped and base_out and all(v == "SKIPPED" for v in base_out.values()):
             head = ("NOT fail-to-pass: every test was skipped before the change, so none "
                     "of them ran against the old code. Find what skips them in the output "

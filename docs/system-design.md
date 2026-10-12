@@ -180,6 +180,15 @@ applies to SWE-bench as well:
   at the top was tried first and was ignored: in the 9-PR fix rerun, SciPy 20382 still
   made 10 coverage calls before any flip and Qiskit 13343 made 8. A refused call is
   logged with `error`, so it never counts as an answer in the coverage loop.
+- **`verify` names the error on each side for a test that fails on both** (2026-10-12).
+  When they differ it says the failure before the change can be the right one and the one
+  after is the test's own mistake; when they match, that the change does not touch what
+  fails (`sandbox_tools._why_both`). SciPy 22549 failed at base on the missing `workers`
+  keyword and after on its own `hess=None`, and ran `verify` ten more times unchanged.
+- **The goal prompt says to simulate a situation the container lacks** -- a missing
+  optional package, another library version -- for example with `monkeypatch`
+  (2026-10-12). pandas 60196 (jinja2 missing) and Qiskit 13251 (another symengine
+  version) were NO for the agent and YES by hand that way.
 - **Tests go into mirrored test trees** (`pandas/tests/arrays` for `pandas/core/arrays`),
   and the example tests offered are named after the changed modules.
 - **The goal prompt says not every PR fixes a bug**, and that a check that a private name

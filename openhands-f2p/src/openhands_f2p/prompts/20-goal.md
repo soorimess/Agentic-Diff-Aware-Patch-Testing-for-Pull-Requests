@@ -43,6 +43,12 @@ yet; a refactor or a speed-up may change little that a caller can see. Look for 
 does change -- a result for some input, an error raised or no longer raised, a new
 argument or name that now works. A test that only checks that a private name exists
 tests the code's spelling, not its behaviour.
+
+Some changes are about a situation this container does not have: an optional package
+that is missing, another version of a library, another platform. Then create that
+situation inside the test -- for example with pytest's `monkeypatch`, by hiding a module
+(`monkeypatch.setitem(sys.modules, "name", None)`) or replacing a value -- and assert
+what the change does there.
 {/patch}
 {?issue}
 The report itself is not the subject. It describes a symptom somebody noticed; what you
