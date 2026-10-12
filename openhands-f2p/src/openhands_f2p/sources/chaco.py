@@ -924,6 +924,11 @@ class ChaCo:
     def prs(self) -> list[dict] | None:
         return json.loads(PRS_FILE.read_text()) if PRS_FILE.exists() else []
 
+    def groups(self) -> dict:
+        """PRs a report must mark (`pr-groups.json`): not behavioural, not Python."""
+        f = HOME / "pr-groups.json"
+        return json.loads(f.read_text()) if f.exists() else {}
+
     def image_for(self, iid: str) -> str:
         return image_for(iid)
 

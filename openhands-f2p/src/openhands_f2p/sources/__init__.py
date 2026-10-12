@@ -54,6 +54,7 @@ class Source(Protocol):
     def image_for(self, instance_id: str) -> str: ...
     def owns_image(self, image: str) -> bool: ...
     def summary(self) -> dict: ...
+    def groups(self) -> dict: ...
 
 
 def _registry() -> dict[str, Source]:
@@ -92,6 +93,11 @@ def select(name: str | None) -> Source:
 
 def load(instance_id: str) -> dict:
     return active().load(instance_id)
+
+
+def groups() -> dict:
+    """The active dataset's PR groups that reports mark: {key: {label, why, ids: {id: note}}}."""
+    return active().groups()
 
 
 def image_for(instance_id: str) -> str:

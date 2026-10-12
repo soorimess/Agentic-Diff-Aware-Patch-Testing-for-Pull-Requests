@@ -380,6 +380,19 @@ def build(root: Path = OUT) -> str:
     rescued = [r for r in rows if r.get("restart") and not r["restart"].get("skipped")
                and r["f2p"] == "YES"]
 
+    # PR groups the dataset says a report must mark (ChaCo, user 2026-10-12): PRs no
+    # behavioural test can capture, and PRs left out because the change is not Python.
+    # The fail-to-pass count without the first group goes in the summary; the groups,
+    # with each PR's verdict, at the end.
+    from openhands_f2p import sources
+    marked = sources.groups()
+    by_id = {r["id"]: r for r in rows}
+    nb = set((marked.get("not_behavioural") or {}).get("ids") or {})
+    rest = [r for r in decided if r["id"] not in nb]
+    nb_line = (f"- **{sum(r['f2p'] == 'YES' for r in rest)}/{len(rest)}** fail-to-pass "
+               f"without the {len(nb & set(by_id))} not-behavioural PRs (see PR groups at "
+               f"the end)") if nb & set(by_id) else ""
+
     out = ["# Run status, per pull request", "",
            f"Last run in this table: {stamps[-1] if stamps else 'none'}.", ""]
     # Where the runs come from, when they were not all made by one launch -- reused
@@ -402,6 +415,7 @@ def build(root: Path = OUT) -> str:
             f"**{len({r['id'].split('__')[0] for r in rows})}** repositories",
             f"- **{len(yes)}/{len(decided)}** fail-to-pass, of those that reached a "
             f"verdict",
+            nb_line,
             # Said up front whenever the second chance was on (user, 2026-10-04): how
             # much of the YES count the restart bought, so an arm with it and an arm
             # without it can be compared on first attempts too.
@@ -434,6 +448,7 @@ def build(root: Path = OUT) -> str:
             f"- \\${sum(r['cost'] for r in rows):.2f} and "
             f"{sum(r['tokens'] for r in rows) / 1e6:.1f}M tokens in total",
             ""]
+
 
     # A second chance is not part of the feature configuration, so the `full` line below
     # says nothing about it -- and two runs that differ only by this are not comparable.
@@ -589,6 +604,16 @@ def build(root: Path = OUT) -> str:
             out.append(f"- **{r['id']}** ({r['issue']})")
             for u in r["uncovered"][:3]:
                 out.append(f"  - {u}")
+
+    if marked:
+        out += ["", "## PR groups", ""]
+        for g in marked.values():
+            ids = g.get("ids") or {}
+            out += [f"**{g.get('label')}** ({len(ids)}): {g.get('why', '')}", ""]
+            out += [f"- `{i}` -- {note} -- "
+                    + (f"**{by_id[i]['f2p']}** here" if i in by_id else "not run")
+                    for i, note in ids.items()]
+            out += [""]
 
     unresolved = [r for r in rows if r["f2p"] not in ("YES", "NO")]
     if unresolved:

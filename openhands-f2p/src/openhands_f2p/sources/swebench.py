@@ -81,6 +81,9 @@ class SweBench:
     def owns_image(self, image: str) -> bool:
         return image.startswith("swebench/")
 
+    def groups(self) -> dict:
+        return {}
+
     def summary(self) -> dict:
         try:
             n = len(_rows())
