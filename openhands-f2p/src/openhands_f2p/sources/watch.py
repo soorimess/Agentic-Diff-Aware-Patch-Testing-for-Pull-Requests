@@ -35,6 +35,9 @@ SIGNATURES = [
      r"except\s*\(?\s*(TypeError|ImportError|AttributeError|ModuleNotFoundError)[^:]*:\s*\n\s*"
      r"(pass|self\.skipTest|pytest\.skip|return)"),
     ("skips-itself", "read", "test", r"self\.skipTest\(|pytest\.skip\("),
+    # pandas-60196 (base, 2026-10-12) wrapped its only real check in `except Exception: pass`.
+    ("swallows-all-errors", "read", "test",
+     r"except(\s+(Exception|BaseException))?\s*(as \w+)?\s*:\s*\n(\s*#[^\n]*\n)*\s*pass\b"),
     ("patch-clipped", "note", "prompt", r"hunks are not shown, to keep this short"),
 ]
 
