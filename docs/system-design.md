@@ -175,8 +175,11 @@ applies to SWE-bench as well:
 - **`verify` names tests that skip on the old code, even when the file flips.**
 - **A test that passes and then fails on the fixed code is called flaky** in mutation.
 - **A backwards test is no longer also listed as "still failing".**
-- **`coverage` puts its verify-first note at the top** and, before the flip, asks for
-  `verify` rather than another `coverage`.
+- **`coverage` refuses to run until the test is fail-to-pass** by its own last `verify`,
+  unchanged since -- the same gate `mutation` has (user, 2026-10-12). A verify-first note
+  at the top was tried first and was ignored: in the 9-PR fix rerun, SciPy 20382 still
+  made 10 coverage calls before any flip and Qiskit 13343 made 8. A refused call is
+  logged with `error`, so it never counts as an answer in the coverage loop.
 - **Tests go into mirrored test trees** (`pandas/tests/arrays` for `pandas/core/arrays`),
   and the example tests offered are named after the changed modules.
 - **The goal prompt says not every PR fixes a bug**, and that a check that a private name

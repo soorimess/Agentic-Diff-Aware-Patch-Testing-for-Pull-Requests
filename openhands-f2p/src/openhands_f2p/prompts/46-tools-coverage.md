@@ -16,8 +16,8 @@ behaviour you are asserting. Use `coverage` to see which lines yours still misse
 act on what it says — repeatedly. This is a working instrument, not a final
 report: measure, add the case the missed lines point at, measure again. It applies the
 change and reverts it itself, so calling it costs you nothing and leaves nothing behind.
-Start using it once `verify` says your test is fail-to-pass: before that, which lines run
-is not yet the question.
+It runs only once `verify` says your test is fail-to-pass: before that, which lines run
+is not yet the question, and it will tell you to call `verify` instead.
 
 {?require-tools-with-score-report}
 In this run it also reports your changed-line coverage as a percentage, and that number is

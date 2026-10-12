@@ -547,6 +547,19 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         self.log = log if log is not None else []
 
     def __call__(self, action: CoverageAction, conversation=None) -> CoverageObservation:
+        from openhands_f2p import verify as V
+        # Only for a test that is fail-to-pass by its own last `verify`, unchanged since,
+        # as `mutation` (user, 2026-10-12). A note on top was not enough: after it went in,
+        # SciPy 20382 still made 10 coverage calls before any flip and Qiskit 13343 made 8,
+        # reading "runs every line" as progress on a test that passed at base.
+        if not V.verify_settled(self.log, V._relative(action.target.split("::")[0])):
+            self.log.append({"tool": "coverage", "target": action.target,
+                             "error": "not fail-to-pass by its last verify"})
+            return CoverageObservation.from_text(
+                f"not run: `coverage` asks which changed lines {action.target} runs, which "
+                f"only matters once the test fails before the change and passes after. Its "
+                f"last `verify` did not say fail-to-pass for the file as it is now. Call "
+                f"`verify` and get it there first.", is_error=True)
         state = self.box.ensure_base(self.patch)
         if state != "base":
             return CoverageObservation.from_text(
@@ -589,26 +602,14 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
                    "once the fix is in. Which lines run says nothing about that -- the file "
                    "is not fail-to-pass until `verify` says it is."
                    if cov.get("test_run_returncode") not in (0, None) else "")
-        # Before the flip, reach is the wrong question. In the ChaCo audit (2026-10-11)
-        # runs that never flipped made 90 `coverage` calls against 124 `verify` calls, and
-        # some read "runs every line" as progress for a test that passed at base.
-        from openhands_f2p import verify as V
-        rel = V._relative(action.target.split("::")[0])
-        unflipped = ("" if V.verify_settled(self.log, rel) else
-                     "\n\nNote: `verify` has not shown this file fail-to-pass yet. Which "
-                     "changed lines run matters only for a test that fails before the change "
-                     "and passes after -- get that first, with `verify`.")
-        # First, not last: appended after "call `coverage` again" it was read past -- 57 of
-        # 103 coverage calls in ChaCo wave 2 still came before any flip.
-        first = unflipped.strip() + "\n\n" if unflipped else ""
         if not cov["missed"]:
             return CoverageObservation.from_text(
-                first + score + "Your test runs every executable line this pull request "
+                score + "Your test runs every executable line this pull request "
                 "changed." + import_only + failing)
         # The import-time note went out only when nothing was missed, so astropy-13398
         # (base, cap 125), whose 31 "covered" lines were all imports, constants and `def`
         # lines, never saw it in four calls.
-        lines = [first + score + "Some lines this pull request changed never ran under your test."
+        lines = [score + "Some lines this pull request changed never ran under your test."
                  + _spawn_note(self.box, action.target) + import_only]
 
         # The source and the guards, not just the numbers. "line 1631 is uncovered" is
@@ -633,14 +634,11 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         lines += ["Write the test so that every line the change touched runs: pick inputs "
                   "that make those conditions true, or add a second test for a separate "
                   "case the same change fixes. Reach each line through the behaviour you "
-                  "are asserting. "
-                  + ("Then call `verify`: the test has to flip first." if unflipped
-                     else "Then call `coverage` again.")]
+                  "are asserting. Then call `coverage` again."]
         # The rule, where the shortfall is read. Deliberately paired with the escape
         # hatch: some changed lines cannot be reached from a test at all, and an
         # assertion written only to execute one buys a number and costs a reviewer's
         # trust. Saying why a line is unreachable satisfies this as fully as reaching it.
-        from openhands_f2p import verify as V
         loop_open = V.verify_settled(self.log, action.target.split("::")[0])
         if self.scored and loop_open:
             lines += ["",
@@ -665,7 +663,8 @@ class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
         return [cls(
             name="coverage",
             description=("List the lines this pull request changed that your test never "
-                         "runs, with the code of each and the conditions above it."),
+                         "runs, with the code of each and the conditions above it. Runs only "
+                         "once `verify` says the test is fail-to-pass."),
             action_type=CoverageAction,
             observation_type=CoverageObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
