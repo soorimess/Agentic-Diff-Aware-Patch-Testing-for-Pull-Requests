@@ -27,7 +27,7 @@ from openhands_f2p.images import (CLAIMS, DEFAULT_IMAGE_HEADROOM_GB, IMAGE, PLAT
 from openhands_f2p.runners import (ANSI, DEFAULT_RUNNER, DJANGO_LINE, PYTEST,
                                    PYTEST_LINE, PYTEST_VERBOSE, SYMPY_LINE,
                                    detect_runner, near_test_directory, repo_facts, test_directory,
-                                   dotted_label, outcome_of, parse_output,
+                                   dotted_label, outcome_of, parse_output, truncated_id,
                                    patched_test_files, runner_for, test_command)
 from openhands_f2p.sandbox import REPO_DIR, ExecResult, Sandbox
 
@@ -40,6 +40,7 @@ __all__ = [
     # runners
     "ANSI", "DEFAULT_RUNNER", "DJANGO_LINE", "PYTEST", "PYTEST_LINE", "PYTEST_VERBOSE",
     "SYMPY_LINE", "detect_runner", "dotted_label", "outcome_of", "parse_output",
+    "truncated_id",
     "repo_facts",
     "test_directory", "near_test_directory",
     "patched_test_files", "runner_for", "test_command",

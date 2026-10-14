@@ -1134,7 +1134,14 @@ def targets_for_gold(box: Sandbox, instance: dict[str, Any]) -> list[str]:
     module the test patch touches and the outcome is read out of the output.
     """
     if E.runner_for(box)["args"] == "nodes":
-        return json.loads(instance["FAIL_TO_PASS"])
+        ids = json.loads(instance["FAIL_TO_PASS"])
+        # A cut-off id is not one pytest can find, and one unknown id aborts the whole run
+        # ("no tests ran"), so every expected test went missing: 11 of the large SWE-bench
+        # set's oracle checks, 2026-10-14. Their files run whole instead, and the cut-off
+        # ids are matched as prefixes (`runners.outcome_of`).
+        if any(E.truncated_id(n) for n in ids):
+            return sorted({n.split("::")[0] for n in ids})
+        return ids
     return E.patched_test_files(instance["test_patch"])
 
 

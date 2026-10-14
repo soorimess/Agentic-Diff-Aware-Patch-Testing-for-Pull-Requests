@@ -431,6 +431,11 @@ def parse_output(output: str) -> dict[str, str]:
     return out
 
 
+def truncated_id(node_id: str) -> bool:
+    """A pytest id whose parameter list was cut short: an `[` that never closes."""
+    return node_id.count("[") > node_id.count("]")
+
+
 def outcome_of(outcomes: dict[str, str], node_id: str) -> str | None:
     """Look a node id up in parsed output, tolerating the formats' small differences."""
     if node_id in outcomes:
@@ -440,6 +445,15 @@ def outcome_of(outcomes: dict[str, str], node_id: str) -> str | None:
     ids = getattr(outcomes, "aliases", {}).get(node_id)
     if ids:
         got = [outcomes[i] for i in ids if i in outcomes]
+        for bad in ("ERROR", "FAILED"):
+            if bad in got:
+                return bad
+        return got[0] if got else None
+    # A parametrised id SWE-bench cut at its first space -- `test_forest_oob_error[X0-y0-
+    # params0-Out` for `...[X0-y0-params0-Out of bag ...]` (its log parser split on
+    # whitespace). Every printed id it is the start of answers, the worst first.
+    if truncated_id(node_id):
+        got = [v for k, v in outcomes.items() if k.startswith(node_id)]
         for bad in ("ERROR", "FAILED"):
             if bad in got:
                 return bad

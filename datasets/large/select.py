@@ -63,6 +63,12 @@ SWE_DROPPED: dict[str, str] = {
     "django__django-11991": "oracle BROKEN: the gold tests never appear in the output",
     "psf__requests-2678": "oracle NO: 6 of 7 gold tests still fail after the fix",
     "astropy__astropy-13398": "oracle NO: 1 of 4 gold tests still fails after the fix",
+    "django__django-16092": "oracle BROKEN: the gold tests never appear in the output",
+    "django__django-13207": "oracle BROKEN: the gold tests never appear in the output",
+    "pydata__xarray-7179": "oracle BROKEN: the gold tests never appear in the output",
+    "pytest-dev__pytest-8055": "oracle BROKEN: nothing collected on either side",
+    "pytest-dev__pytest-7122": "oracle BROKEN: the gold tests never appear in the output",
+    "scikit-learn__scikit-learn-12983": "oracle BROKEN: the gold tests never appear in the output",
 }
 
 
