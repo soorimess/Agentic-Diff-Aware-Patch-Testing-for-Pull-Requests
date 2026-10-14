@@ -605,7 +605,9 @@ def build(root: Path = OUT) -> str:
             for u in r["uncovered"][:3]:
                 out.append(f"  - {u}")
 
-    if marked:
+    # Only for a series that holds some of them: a set chosen without them (the large-PR
+    # sets) would otherwise list every one as "not run".
+    if marked and any(i in by_id for g in marked.values() for i in g.get("ids") or {}):
         out += ["", "## PR groups", ""]
         for g in marked.values():
             ids = g.get("ids") or {}

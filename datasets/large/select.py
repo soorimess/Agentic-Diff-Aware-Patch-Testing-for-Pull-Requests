@@ -53,24 +53,45 @@ QUOTA = {"mwaskom/seaborn": 1, "pallets/flask": 1, "psf/requests": 2, "pylint-de
          "sphinx-doc/sphinx": 3, "pydata/xarray": 4, "django/django": 4,
          "scikit-learn/scikit-learn": 4, "sympy/sympy": 4}
 # Replacements after the oracle check found the gold test does not flip here.
-SWE_DROPPED: dict[str, str] = {}
+SWE_DROPPED: dict[str, str] = {
+    "pylint-dev__pylint-4551": "oracle BROKEN: the gold tests never appear in the output",
+    "pydata__xarray-3733": "oracle BROKEN: the gold tests never appear in the output",
+    "django__django-11991": "oracle BROKEN: the gold tests never appear in the output",
+    "psf__requests-2678": "oracle NO: 6 of 7 gold tests still fail after the fix",
+    "astropy__astropy-13398": "oracle NO: 1 of 4 gold tests still fails after the fix",
+}
 
 
 def swebench(full_path):
     rows = json.loads(Path(full_path).read_text())
     verified = {r["instance_id"] for r in json.loads((ROOT / "data/swebench_verified.json").read_text())}
     rng = random.Random(14)
-    picked, sizes = [], {}
-    for repo, n in QUOTA.items():
+    pools = {}
+    for repo in QUOTA:
         pool = []
         for r in rows:
-            if r["repo"] != repo or r["instance_id"] in SWE_DROPPED:
+            if r["repo"] != repo:
                 continue
             a, nonpy = size(r["patch"])
             if a >= MIN_LINES and not nonpy and len(r["patch"]) <= MAX_PATCH_CHARS:
+                # The draw is made before any drop, so dropping a PR only promotes the
+                # next one in its repo and leaves every other pick where it was.
                 pool.append((r["instance_id"] in verified, rng.random(), r["instance_id"], a))
         pool.sort(key=lambda t: (not t[0], t[1]))
-        for v, _, iid, a in pool[:n]:
+        pools[repo] = [t for t in pool if t[2] not in SWE_DROPPED]
+    quota = dict(QUOTA)
+    # A repo without enough PRs left hands its slot to the repo with the largest pool.
+    short = sum(max(0, n - len(pools[repo])) for repo, n in quota.items())
+    for repo in quota:
+        quota[repo] = min(quota[repo], len(pools[repo]))
+    for repo in sorted(pools, key=lambda r: -len(pools[r])):
+        while short and quota[repo] < len(pools[repo]):
+            quota[repo] += 1
+            short -= 1
+            break
+    picked, sizes = [], {}
+    for repo, n in quota.items():
+        for v, _, iid, a in pools[repo][:n]:
             picked.append({"id": iid, "tier": 0,
                            "note": f"large set, {repo}, {a} added code lines"
                                    + (", Verified" if v else "")})
@@ -85,7 +106,11 @@ CHACO_OUT = {
     "pandas-dev__pandas-58792": "refactor that breaks up a function; no developer test",
     "scipy__scipy-23028": "maintenance: a module moved to solve a circular import",
     "Qiskit__qiskit-13343": "speed-up; its only observable change is `__slots__`",
+    "scipy__scipy-20789": "validate: oracle-mismatch (verify finds the developer tests broken)",
 }
+# Spares below 50 lines, taken in this order when a PR above is left out after validation.
+CHACO_SPARE = ["Qiskit__qiskit-12608", "Qiskit__qiskit-12767"]
+SPARES_USED = 1                    # one PR (scipy-20789) left out after validation
 
 
 def chaco():
@@ -93,7 +118,8 @@ def chaco():
     picked, sizes = [], {}
     for r in rows:
         a, nonpy = size(r["patch"])
-        if a >= MIN_LINES and not nonpy and r["instance_id"] not in CHACO_OUT:
+        if ((a >= MIN_LINES or r["instance_id"] in CHACO_SPARE[:SPARES_USED])
+                and not nonpy and r["instance_id"] not in CHACO_OUT):
             picked.append({"id": r["instance_id"], "tier": 0,
                            "note": f"large set, {r['repo']}, {a} added code lines"})
             sizes[r["instance_id"]] = a
