@@ -220,8 +220,11 @@ def changed_lines(diff: str) -> dict[str, set[int]]:
 # changed `doc/convert_notebooks.py`, which put an unkillable mutant in the mutation pool,
 # and (once unimported files counted as missed) would have lowered coverage for lines no
 # test can reach (ChaCo audit, 2026-10-11).
+# matplotlib keeps runnable documentation in `tutorials/`, `galleries/` and `plot_types/`:
+# matplotlib-24604 (large set, 2026-10-14) edits `tutorials/provisional/mosaic.py`, and
+# 7 of the 8 lines its test "missed" were that tutorial's (17/25 instead of 17/18).
 NOT_LIBRARY = ("doc", "docs", "benchmarks", "asv_bench", "tools", "ci", ".github",
-               "examples", "release", "dev")
+               "examples", "release", "dev", "tutorials", "galleries", "plot_types")
 
 
 def patched_source_files(patch: str) -> list[str]:
