@@ -48,9 +48,15 @@ ROOT = HERE.parent.parent                  # swe-bench-outs/out-v2 -> the projec
 # (`python -m openhands_f2p.sources info <dataset>`) into `<dataset>-outs/<name>/`.
 _pre = argparse.ArgumentParser(add_help=False)
 _pre.add_argument("--dataset", default=None)
-DATASET = _pre.parse_known_args()[0].dataset or os.getenv("F2P_DATASET_NAME") or "swebench"
+_pre.add_argument("--results", default=None)
+_known = _pre.parse_known_args()[0]
+DATASET = _known.dataset or os.getenv("F2P_DATASET_NAME") or "swebench"
 os.environ["F2P_DATASET_NAME"] = DATASET
 RESULTS = HERE if DATASET == "swebench" else ROOT / f"{DATASET}-outs"
+# `--results DIR`: an experiment series of its own, e.g. the large-PR sets
+# (`chaco-outs/large-35`, `swe-bench-outs/large-35`), each config in `DIR/<name>/`.
+if _known.results:
+    RESULTS = Path(_known.results).resolve()
 # Set before the harness is imported: `prs.py` and `image_cache.py` read them at import.
 if DATASET == "swebench":
     os.environ.setdefault("F2P_PRS_FILE", str(ROOT / "swe-bench-outs" / "evaluation" / "local-36-prs.json"))
@@ -165,6 +171,9 @@ def main() -> int:
     p.add_argument("--dataset", default=None,
                    help="swebench (default: the 36 local instances) or another prepared "
                         "dataset, e.g. chaco; results then go to <dataset>-outs/<name>/")
+    p.add_argument("--results", default=None,
+                   help="the folder that holds one subfolder per config (default: "
+                        "out-v2/ for swebench, <dataset>-outs/ otherwise)")
     p.add_argument("--with-judge", action="store_true",
                    help="judge each YES inside the run (off by default)")
     p.add_argument("--judge", action="store_true",
