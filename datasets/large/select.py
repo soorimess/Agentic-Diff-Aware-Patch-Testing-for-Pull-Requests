@@ -58,17 +58,18 @@ QUOTA = {"mwaskom/seaborn": 1, "pallets/flask": 1, "psf/requests": 2, "pylint-de
          "scikit-learn/scikit-learn": 4, "sympy/sympy": 4}
 # Replacements after the oracle check found the gold test does not flip here.
 SWE_DROPPED: dict[str, str] = {
-    "pylint-dev__pylint-4551": "oracle BROKEN: the gold tests never appear in the output",
-    "pydata__xarray-3733": "oracle BROKEN: the gold tests never appear in the output",
-    "django__django-11991": "oracle BROKEN: the gold tests never appear in the output",
+    # Real failures of the oracle check (the gold test through verify), after the two
+    # harness fixes of 2026-10-14: SWE-bench ids cut at a space, and django runs that
+    # cannot start before the fix. Three PRs with a few gold tests that never print
+    # (xarray-7179 1344/1351, sklearn-25363 489/496, sklearn-10483 114/122 flip, none
+    # still failing) are kept.
     "psf__requests-2678": "oracle NO: 6 of 7 gold tests still fail after the fix",
     "astropy__astropy-13398": "oracle NO: 1 of 4 gold tests still fails after the fix",
-    "django__django-16092": "oracle BROKEN: the gold tests never appear in the output",
-    "django__django-13207": "oracle BROKEN: the gold tests never appear in the output",
-    "pydata__xarray-7179": "oracle BROKEN: the gold tests never appear in the output",
+    "pydata__xarray-7052": "oracle NO: the gold tests pass before the fix too",
+    "pydata__xarray-3733": "oracle: 1325 of 1630 gold tests never appear in the output",
     "pytest-dev__pytest-8055": "oracle BROKEN: nothing collected on either side",
-    "pytest-dev__pytest-7122": "oracle BROKEN: the gold tests never appear in the output",
-    "scikit-learn__scikit-learn-12983": "oracle BROKEN: the gold tests never appear in the output",
+    "pytest-dev__pytest-7122": "oracle: 85 of 145 gold tests never appear in the output",
+    "scikit-learn__scikit-learn-12983": "oracle: 122 of 132 gold tests never appear in the output",
 }
 
 
