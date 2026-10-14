@@ -1155,6 +1155,13 @@ def _decide(iid: str, repo: str, base: dict, head: dict, targets: list[str],
     if expected is not None:
         # Gold test: we know exactly which ids must flip, so check those and nothing else.
         base = unimportable_at_base(base, head)
+        # The whole run could not start before the fix and every expected test passes after
+        # it: django-10680 (large set, 2026-10-14) changes a test app's models.py, which
+        # imports only with the fix, so django's runner died in setup and printed no test
+        # at all. That is the import-at-base rule one level up (user, 2026-10-09).
+        if (not base and head and expected
+                and all(E.outcome_of(head, n) == "PASSED" for n in expected)):
+            base = {n: "ERROR" for n in expected}
         pairs = [(n, E.outcome_of(base, n), E.outcome_of(head, n))
                  for n in expected]
         flipped = [n for n, b, h in pairs if b in BEHAVIOURAL and h == "PASSED"]
