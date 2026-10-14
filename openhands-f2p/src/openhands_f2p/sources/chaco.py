@@ -936,13 +936,22 @@ class ChaCo:
         return image.startswith(IMAGE_REPO + "/")
 
     def recipe(self, image: str) -> tuple[str, Path]:
-        """(instance id, Dockerfile) for one of this dataset's images."""
+        """(instance id, Dockerfile) for one of this dataset's images.
+
+        The Dockerfile is written from the current recipe every time, not read as `prepare`
+        left it: 23 of the large ChaCo set's Dockerfiles predated the SciPy import-mode,
+        pandas string-dtype and Qiskit package fixes, `build` built them as they were, and
+        every new SciPy test file failed to import (2026-10-14). A changed file changes the
+        image label, so `image_build` rebuilds the image."""
         name = image.split("/", 1)[1].rsplit(":", 1)[0]
-        for iid in _read_rows():
+        rows = _read_rows()
+        for iid, row in rows.items():
             if iid.lower() == name:
                 df = DOCKERFILES / f"{iid}.Dockerfile"
-                if not df.exists():
-                    raise SystemExit(f"{iid}: no Dockerfile at {df}; prepare it first")
+                text = dockerfile(row)
+                if not df.exists() or df.read_text() != text:
+                    df.parent.mkdir(parents=True, exist_ok=True)
+                    df.write_text(text)
                 return iid, df
         raise SystemExit(f"no prepared ChaCo instance has the image {image}")
 

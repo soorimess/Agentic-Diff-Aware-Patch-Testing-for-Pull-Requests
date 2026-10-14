@@ -11,4 +11,6 @@ RUN git submodule update --init --recursive --depth 1 -q
 RUN uv pip install --system --exclude-newer 2024-12-12T07:40:28+02:00 -r requirements/build.txt -r requirements/test.txt -r requirements/default.txt
 RUN python -m pip install --no-build-isolation -e . 
 RUN python -c 'import scipy; print(scipy.__version__)'
+RUN git rev-parse HEAD > /f2p_base_commit && rm -rf .git && python -c 'import scipy; print(scipy.__version__)'
 ENV OPENBLAS_CORETYPE=Haswell
+ENV PYTEST_ADDOPTS=--import-mode=importlib
