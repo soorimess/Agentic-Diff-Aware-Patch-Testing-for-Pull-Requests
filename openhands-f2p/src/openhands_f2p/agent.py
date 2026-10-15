@@ -569,6 +569,9 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                          or V.duty_gap(tool_log, instruments(features), rel, scored=scored,
                                        refused=_first_refusals(injected),
                                        last_refused=_last_refusals(injected),
+                                       coverage_rounds=[m.get("at_tool", 0) for m in injected
+                                                        if V.COVERAGE_TARGET_SAID
+                                                        in (m.get("text") or "")],
                                        rewound={d for d in ("coverage", "mutation")
                                                 if any(V.rewind_said(d) in (m.get("text") or "")
                                                        for m in injected)}))

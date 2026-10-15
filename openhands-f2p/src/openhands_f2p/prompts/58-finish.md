@@ -90,13 +90,14 @@ sequence:
 {?coverage-tool}
 {?!require-tools-with-score-report}
 - `coverage`, as a loop: while it lists lines your test never runs, change the test and
-  call it again, until every changed line runs or an honest attempt reaches no more. An
+  call it again, until every changed line runs or every part of the change (each function
+  holding a missed line) has had one turn. An
   assertion added only to execute a line does not count;
 {/!require-tools-with-score-report}
 {?require-tools-with-score-report}
 - `coverage`, as a loop with a score: your changed-line coverage must reach 100%. While it
-  is below, change the test and call it again, until it does or an honest attempt raises
-  it no further;
+  is below, change the test and call it again, until it does or every part of the change
+  (each function holding a missed line) has had one turn;
 {/require-tools-with-score-report}
 {/coverage-tool}
 {?mutation-tool}

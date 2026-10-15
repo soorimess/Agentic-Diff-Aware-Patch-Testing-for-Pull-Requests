@@ -969,6 +969,59 @@ def _never_entered(cov: dict) -> str:
             f"with inputs that matter to this change and assert on what they return or do.{new} ")
 
 
+# How a coverage refusal names the round's target -- what the agent loop looks for to know
+# which refusals were coverage rounds.
+COVERAGE_TARGET_SAID = "**Next part of the change to reach:**"
+
+
+def _coverage_groups(e: dict) -> list[dict]:
+    """The missed changed lines of one measured `coverage` call, grouped by the function
+    holding them (`<module>` for lines outside any function), biggest first."""
+    cov = e.get("result") or {}
+    groups = [g for g in cov.get("missed_by_function") or [] if g.get("missed")]
+    if not groups and cov.get("missed"):
+        by_file: dict[str, int] = {}
+        for ref in cov["missed"]:
+            by_file[ref.rpartition(":")[0]] = by_file.get(ref.rpartition(":")[0], 0) + 1
+        groups = [{"path": p, "function": "<module>", "missed": n, "ran": 0}
+                  for p, n in by_file.items()]
+    return sorted(groups, key=lambda g: (-g["missed"], g["path"], g["function"]))
+
+
+def _measured_coverage(tool_log: list, rel: str, before: int | None = None) -> list[tuple[int, dict]]:
+    end = len(tool_log) if before is None else before
+    return [(i, e) for i, e in enumerate(tool_log[:end]) if e.get("tool") == "coverage"
+            and "error" not in e and (e.get("result") or {}).get("measured")
+            and names_test(tool_log, e.get("target", ""), rel)]
+
+
+def _next_target(groups: list[dict], tried: list[tuple[str, str]]) -> dict | None:
+    return next((g for g in groups if (g["path"], g["function"]) not in tried), None)
+
+
+def coverage_tried(tool_log: list, rel: str, rounds: list[int]) -> list[tuple[str, str]]:
+    """Parts of the change -- functions with missed lines -- the agent has had its turn at.
+
+    The coverage loop's exhaustion point (user, 2026-10-15). Each coverage refusal names
+    one target: the biggest missed function not yet tried. It is tried once the test was
+    changed after that refusal and `coverage` measured it again, covered or not. Replayed
+    from the record, so the loop keeps no state of its own. `rounds` are the tool-log
+    positions of the coverage refusals that named a target."""
+    tried: list[tuple[str, str]] = []
+    for k, r in enumerate(rounds):
+        before = _measured_coverage(tool_log, rel, r)
+        if not before:
+            continue
+        target = _next_target(_coverage_groups(before[-1][1]), tried)
+        if target is None:
+            continue
+        end = rounds[k + 1] if k + 1 < len(rounds) else len(tool_log)
+        writes = [j for j in test_writes(tool_log, rel) if r <= j < end]
+        if writes and any(writes[0] < i < end for i, _ in _measured_coverage(tool_log, rel)):
+            tried.append((target["path"], target["function"]))
+    return tried
+
+
 def coverage_score(e: dict) -> float | None:
     cov = e.get("result") or {}
     return cov.get("percent") if cov.get("measured") else None
@@ -982,7 +1035,8 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
              scored: bool = False,
              refused: dict[str, int] | None = None,
              last_refused: dict[str, int] | None = None,
-             rewound: set[str] | None = None) -> tuple[str, str] | None:
+             rewound: set[str] | None = None,
+             coverage_rounds: list[int] | None = None) -> tuple[str, str] | None:
     """The coverage and mutation loops, once the test flips. `require-tools`.
 
     Two loops (user, 2026-09-29), each on the tool's answer about the scored file:
@@ -1061,25 +1115,39 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                              f"`coverage` again on what is on disk now."))
             elif not cov.get("measured") or not cov.get("missed"):
                 pass
-            elif not _no_better(tool_log, "coverage", rel, coverage_score,
-                                refused.get("coverage"), "coverage" in rewound):
-                # After the rewind was offered, no "get that back" either: it promised that a
-                # lower score then counts like any attempt (astropy-13398 base was told both
-                # "your last round did not change the test" and "your last change lowered it").
-                lost = (_rewind(tool_log, "coverage", rel, coverage_score, pct, "%")
-                        or _lost(tool_log, "coverage", rel, coverage_score, pct, "%")
-                        if "coverage" not in rewound else "")
-                lost += _never_entered(cov)
-                gaps.append(("coverage",
-                             f"{score}{unchanged_since_refusal('coverage')}{lost}`coverage` last listed {len(cov['missed'])} changed "
-                             f"line(s) your test never runs. Keep going: work the missed "
-                             f"lines one at a time -- the same behaviour by another route, a "
-                             f"separate case that deserves its own test -- change the test, "
-                             f"call `verify`, then `coverage` again. Reach each line through "
-                             f"behaviour you assert; a call with no assertion behind it does "
-                             f"not count. If an honest attempt leaves the lines missed, "
-                             f"that ends this -- an attempt is a changed test followed by "
-                             f"`coverage`."))
+            else:
+                # Open until exhausted (user, 2026-10-15): every function holding a missed
+                # line has had one targeted turn, not one attempt for the whole change. A
+                # single non-improving attempt closed the loop before, and Qiskit-12825
+                # (large set) stopped at 17% of 307 lines with 93 actions unused.
+                tried = coverage_tried(tool_log, rel, coverage_rounds or [])
+                target = _next_target(_coverage_groups(e), tried)
+                if target is not None:
+                    lost = (_rewind(tool_log, "coverage", rel, coverage_score, pct, "%")
+                            or _lost(tool_log, "coverage", rel, coverage_score, pct, "%")
+                            if "coverage" not in rewound else "")
+                    left = [g for g in _coverage_groups(e)
+                            if (g["path"], g["function"]) not in tried]
+                    fname = target["path"].rsplit("/", 1)[-1]
+                    where = (f"the module-level lines of `{target['path']}` (imports, "
+                             f"constants, class bodies) -- they run when the module is "
+                             f"imported, so import it and use it"
+                             if target["function"] == "<module>" else
+                             f"`{target['function']}` in `{fname}`")
+                    new = (f" `{target['path']}` is a file this change adds: absent before "
+                           f"the fix, as expected -- `coverage` applies the change before it "
+                           f"measures." if target["path"] in (cov.get("new_files") or []) else "")
+                    gaps.append(("coverage",
+                                 f"{score}{unchanged_since_refusal('coverage')}{lost}`coverage` last listed {len(cov['missed'])} changed "
+                                 f"line(s) your test never runs, in {len(left)} part(s) of the "
+                                 f"change it has not tried yet.\n\n{COVERAGE_TARGET_SAID} "
+                                 f"{where} ({target['missed']} missed line"
+                                 f"{'s' if target['missed'] != 1 else ''}).{new} Change the test "
+                                 f"so it goes through that code, asserting on what it returns, "
+                                 f"raises or does there -- then call `verify`, then `coverage`. "
+                                 f"Each part of the change gets one such turn; this ends when "
+                                 f"every part has had its turn or every line runs. A call with no "
+                                 f"assertion behind it does not count."))
     if "mutation" in instruments:
         got = _last(tool_log, "mutation", rel)
         if got is None:

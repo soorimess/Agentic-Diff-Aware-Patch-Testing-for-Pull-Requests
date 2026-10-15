@@ -193,6 +193,14 @@ applies to SWE-bench as well:
   optional package, another library version -- for example with `monkeypatch`
   (2026-10-12). pandas 60196 (jinja2 missing) and Qiskit 13251 (another symengine
   version) were NO for the agent and YES by hand that way.
+- **The coverage loop ends at an exhaustion point, not after one attempt** (user,
+  2026-10-15). Each coverage refusal names one target: the biggest function holding a
+  missed line that has not had its turn (`<module>` lines of a file count as one). A
+  target is tried once the test changed after its refusal and `coverage` measured again,
+  covered or not; the loop ends when every such function has been tried or every line
+  runs (`verify.coverage_tried`, replayed from the record). Before, one attempt that did
+  not raise the score ended it: Qiskit-12825 (large set) stopped at 17% of 307 lines with
+  93 actions unused. The mutation loop keeps the one-attempt rule.
 - **Tests go into mirrored test trees** (`pandas/tests/arrays` for `pandas/core/arrays`),
   and the example tests offered are named after the changed modules.
 - **The goal prompt says not every PR fixes a bug**, and that a check that a private name

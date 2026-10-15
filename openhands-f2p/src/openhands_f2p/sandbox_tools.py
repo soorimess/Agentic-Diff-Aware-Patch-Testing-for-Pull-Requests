@@ -680,12 +680,13 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
         if self.scored and loop_open:
             lines += ["",
                       "The target is 100%: you will be sent back while it is below, until "
-                      "it gets there or an honest attempt raises it no further."]
+                      "it gets there or every part of the change with a missed line -- "
+                      "each function holding one -- has had one turn."]
         elif self.require_tools and loop_open:
             lines += ["",
-                      "You will be sent back while lines are missed: change the test and "
-                      "call `coverage` again, until every changed line runs or an honest "
-                      "attempt reaches no more of them."]
+                      "You will be sent back while lines are missed, one part of the change "
+                      "at a time -- each function holding a missed line gets one turn -- "
+                      "until every changed line runs or every part has had its turn."]
         return CoverageObservation.from_text("\n".join(lines) + failing)
 
 

@@ -17,8 +17,9 @@ your input has to satisfy to get there.
 **Call `coverage`, and if it lists changed lines your test never runs, change the test
 before you stop.** The aim is a test that runs every line the change touched.{?require-tools}
 That is a loop, and it is checked: while `coverage` lists lines your test never runs you
-will be sent back to change the test and call it again, until none is missed or an honest
-attempt reaches no more of them.{/require-tools} It is not a demand that every line runs whatever it takes —
+will be sent back to change the test and call it again, one part of the change at a time --
+each function holding a missed line gets one turn -- until none is missed or every part
+has had its turn.{/require-tools} It is not a demand that every line runs whatever it takes —
 sometimes a line is genuinely outside what this test is for — it is a demand that each
 missed line gets an answer rather than being noted and passed over. Decide what the missed lines are, change the test,
 call `coverage` again; you do not need to re-run the earlier checks in between. Keep going

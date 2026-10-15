@@ -122,9 +122,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("require-tools", "add the stop checks, as three loops: `verify` until the test "
                              "is fail-to-pass (the harness also runs it at base: no file, "
                              "nothing collected, passing or skipped is refused), then "
-                             "`coverage` until no changed line is missed and `mutation` "
-                             "until no variant survives -- each ending early when an "
-                             "honest attempt stops improving it",
+                             "`coverage` until no changed line is missed or each function "
+                             "holding one has had a turn, and `mutation` until no variant "
+                             "survives or an honest attempt stops improving it",
             added=True, needs=("verify-tool",)),
     Feature("require-tools-with-score-report",
             "add the loops of --add-require-tools, with scores: `coverage` and `mutation` "
