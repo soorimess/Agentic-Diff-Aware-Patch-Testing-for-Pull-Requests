@@ -211,6 +211,11 @@ applies to SWE-bench as well:
   `verify.swallow_note`), naming the lines (user, 2026-10-16: warn, not refuse). Under the
   exhaustion rule 6 of 20 fail-to-pass tests in the large sets swallowed errors (0 of 9
   before): changed lines run, untested.
+- **Hand-backs carry the whole file** (2026-10-16). The lost fail-to-pass version
+  (`lost_flip`) was cut at 3000 characters and the coverage-regression version at 8000
+  (silently), while both tell the model to write that version back. Large-set base: 11 runs
+  got a cut copy; pylint-5136 lost its flip and ended NO, matplotlib-24013 and sphinx-7380
+  ended below their best.
 - **Tests go into mirrored test trees** (`pandas/tests/arrays` for `pandas/core/arrays`),
   and the example tests offered are named after the changed modules.
 - **The goal prompt says not every PR fixes a bug**, and that a check that a private name

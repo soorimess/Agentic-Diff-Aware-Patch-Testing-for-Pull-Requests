@@ -726,9 +726,6 @@ def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, st
                            f"* {say}")
 
 
-LOST_FLIP_CHARS = 3000
-
-
 def lost_flip(tool_log: list, rel: str, current: str | None) -> str:
     """An offer of the last version of `rel` that `verify` called fail-to-pass, when the
     file on disk is no longer that version. Coverage had a rewind ("your test was better
@@ -743,11 +740,11 @@ def lost_flip(tool_log: list, rel: str, current: str | None) -> str:
     i, text = shots[-1]
     if text.strip() == (current or "").strip():
         return ""
-    shown = text if len(text) <= LOST_FLIP_CHARS else (
-        text[:LOST_FLIP_CHARS] + f"\n# ... [{len(text) - LOST_FLIP_CHARS} more characters]")
+    # Whole, never cut: the model is told to write it back, and a cut copy cannot be
+    # (pylint-5136, large set 2026-10-16, was handed 3000 characters and lost its flip).
     return (f"\n\nEarlier, `verify` called this file fail-to-pass (tool call {i + 1}). Your "
             f"edits since have lost that. If they have not got closer, write that version "
-            f"back and build from it:\n\n```python\n{shown.rstrip()}\n```")
+            f"back and build from it:\n\n```python\n{text.rstrip()}\n```")
 
 
 def _says_f2p(e: dict) -> bool:
@@ -921,7 +918,7 @@ def _rewind(tool_log: list, tool: str, rel: str, score, now: float | None,
     return (f"{rewind_said(tool)} Earlier, `{tool}` reported {score(best)}{unit} "
             f"for it -- {what} -- and your edits since lowered it to {now}{unit}. This is "
             f"that version, exactly as `{tool}` measured it:\n\n```python\n"
-            f"{text[:8000]}\n```\n\nWrite it back with `write_file` -- keep a newer "
+            f"{text.rstrip()}\n```\n\nWrite it back with `write_file` -- keep a newer "
             f"assertion only if it loses nothing -- then call `verify` and `{tool}`. "
             + (f"You will be sent back while your test runs fewer changed lines than this "
                f"version did.\n\n" if repeat else
