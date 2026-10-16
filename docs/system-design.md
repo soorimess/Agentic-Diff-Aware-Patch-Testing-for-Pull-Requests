@@ -201,6 +201,16 @@ applies to SWE-bench as well:
   runs (`verify.coverage_tried`, replayed from the record). Before, one attempt that did
   not raise the score ended it: Qiskit-12825 (large set) stopped at 17% of 307 lines with
   93 actions unused. The mutation loop keeps the one-attempt rule.
+- **A coverage regression is refused until restored** (user, 2026-10-16). While the file
+  runs fewer changed lines than its best fail-to-pass version `coverage` measured, the stop
+  is refused and that version is handed back, every time rather than once
+  (`_rewind(..., repeat=True)`), ahead of the next target. Under the exhaustion rule long
+  loops ended on worse files: Qiskit-12825 best 15% final 1%, Qiskit-12904 67% then 39%.
+  The agent's last file is still what is scored.
+- **`verify` and `coverage` warn about catch-all handlers** (`except Exception: pass`,
+  `verify.swallow_note`), naming the lines (user, 2026-10-16: warn, not refuse). Under the
+  exhaustion rule 6 of 20 fail-to-pass tests in the large sets swallowed errors (0 of 9
+  before): changed lines run, untested.
 - **Tests go into mirrored test trees** (`pandas/tests/arrays` for `pandas/core/arrays`),
   and the example tests offered are named after the changed modules.
 - **The goal prompt says not every PR fixes a bug**, and that a check that a private name

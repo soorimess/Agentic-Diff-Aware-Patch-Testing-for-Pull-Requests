@@ -639,10 +639,11 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
                    "once the fix is in. Which lines run says nothing about that -- the file "
                    "is not fail-to-pass until `verify` says it is."
                    if cov.get("test_run_returncode") not in (0, None) else "")
+        swallow = V.swallow_note(self.box.read(action.target.split("::")[0]))
         if not cov["missed"]:
             return CoverageObservation.from_text(
                 score + "Your test runs every executable line this pull request "
-                "changed." + import_only + failing)
+                "changed." + import_only + swallow + failing)
         # The import-time note went out only when nothing was missed, so astropy-13398
         # (base, cap 125), whose 31 "covered" lines were all imports, constants and `def`
         # lines, never saw it in four calls.
@@ -687,7 +688,7 @@ class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
                       "You will be sent back while lines are missed, one part of the change "
                       "at a time -- each function holding a missed line gets one turn -- "
                       "until every changed line runs or every part has had its turn."]
-        return CoverageObservation.from_text("\n".join(lines) + failing)
+        return CoverageObservation.from_text("\n".join(lines) + swallow + failing)
 
 
 class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
@@ -1096,8 +1097,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             from openhands_f2p import verify as V
             head += V.lost_flip(self.log[:-1], action.target.split("::")[0],
                                 self.box.read(action.target.split("::")[0]))
-        return VerifyObservation.from_text(head + elsewhere + duty + missed + nxt + body,
-                                           is_error=False)
+        swallow = V.swallow_note(self.box.read(action.target.split("::")[0]))
+        return VerifyObservation.from_text(head + swallow + elsewhere + duty + missed + nxt
+                                           + body, is_error=False)
 
     def _reach(self, target: str) -> str:
         """How much of the change this test runs, and what to do if it is not all of it.

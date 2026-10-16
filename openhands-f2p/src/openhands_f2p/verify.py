@@ -891,7 +891,7 @@ def rewind_said(duty: str) -> str:
 
 
 def _rewind(tool_log: list, tool: str, rel: str, score, now: float | None,
-            unit: str) -> str:
+            unit: str, repeat: bool = False) -> str:
     """The better earlier version of the test, handed back (user, 2026-10-05).
 
     Asking the agent to "get back" a score it had just lost meant asking it to regenerate
@@ -922,9 +922,11 @@ def _rewind(tool_log: list, tool: str, rel: str, score, now: float | None,
             f"for it -- {what} -- and your edits since lowered it to {now}{unit}. This is "
             f"that version, exactly as `{tool}` measured it:\n\n```python\n"
             f"{text[:8000]}\n```\n\nWrite it back with `write_file` -- keep a newer "
-            f"assertion only if it loses nothing -- then call `verify` and `{tool}`. It is "
-            f"offered once: after it, a lower score counts like any attempt that did not "
-            f"improve.\n\n")
+            f"assertion only if it loses nothing -- then call `verify` and `{tool}`. "
+            + (f"You will be sent back while your test runs fewer changed lines than this "
+               f"version did.\n\n" if repeat else
+               f"It is offered once: after it, a lower score counts like any attempt that "
+               f"did not improve.\n\n"))
 
 
 def _lost(tool_log: list, tool: str, rel: str, score, now: float | None, unit: str) -> str:
@@ -1022,6 +1024,26 @@ def coverage_tried(tool_log: list, rel: str, rounds: list[int]) -> list[tuple[st
     return tried
 
 
+# A handler that catches every exception and drops it. Warned about, not refused (user,
+# 2026-10-16): under the longer coverage loop 6 of 20 fail-to-pass tests in the large sets
+# wrapped calls this way (0 of 9 before), running changed lines without testing them.
+_SWALLOW = re.compile(r"^[ \t]*except(?:[ \t]+(?:Exception|BaseException)(?:[ \t]+as[ \t]+\w+)?)?"
+                      r"[ \t]*:[ \t]*(?:#[^\n]*)?\n(?:[ \t]*#[^\n]*\n)*[ \t]*pass\b", re.M)
+
+
+def swallow_note(test_text: str | None) -> str:
+    """A note when the test catches every exception and ignores it, naming the lines."""
+    lines = [test_text.count("\n", 0, m.start()) + 1
+             for m in _SWALLOW.finditer(test_text or "")]
+    if not lines:
+        return ""
+    where = ", ".join(str(n) for n in lines[:5])
+    return (f"\n\nNote: your test catches every exception and ignores it (line"
+            f"{'s' if len(lines) > 1 else ''} {where}: `except ...: pass`). Whatever fails "
+            f"inside is hidden, so the code it runs there is executed, not tested. Assert what "
+            f"that code returns, raises or does instead, or let the error fail the test.")
+
+
 def coverage_score(e: dict) -> float | None:
     cov = e.get("result") or {}
     return cov.get("percent") if cov.get("measured") else None
@@ -1115,6 +1137,13 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                              f"`coverage` again on what is on disk now."))
             elif not cov.get("measured") or not cov.get("missed"):
                 pass
+            elif back := _rewind(tool_log, "coverage", rel, coverage_score, pct, "%",
+                                 repeat=True):
+                # Below the best fail-to-pass version `coverage` measured: refused until it
+                # is back, every time, not once (user, 2026-10-16). Long coverage loops on
+                # big patches ended on worse files -- Qiskit-12825 best 15%, final 1%;
+                # Qiskit-12904 67% then 39% -- and the last file is what is scored.
+                gaps.append(("coverage", f"{score}{back}"))
             else:
                 # Open until exhausted (user, 2026-10-15): every function holding a missed
                 # line has had one targeted turn, not one attempt for the whole change. A
@@ -1123,9 +1152,7 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                 tried = coverage_tried(tool_log, rel, coverage_rounds or [])
                 target = _next_target(_coverage_groups(e), tried)
                 if target is not None:
-                    lost = (_rewind(tool_log, "coverage", rel, coverage_score, pct, "%")
-                            or _lost(tool_log, "coverage", rel, coverage_score, pct, "%")
-                            if "coverage" not in rewound else "")
+                    lost = ""         # a regression is handled above, before any target
                     left = [g for g in _coverage_groups(e)
                             if (g["path"], g["function"]) not in tried]
                     fname = target["path"].rsplit("/", 1)[-1]
