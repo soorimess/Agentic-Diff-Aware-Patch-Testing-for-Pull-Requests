@@ -72,9 +72,8 @@ class Feature:
 
     implies: tuple[str, ...] = ()
     """Add-ons this one's flag turns on as well, because it is a variant of them rather
-    than a separate component: `--add-require-tools-with-score-report` is require-tools
-    with scores. Part of what the flag means, stated here, not a repair of a missing
-    flag."""
+    than a separate component. Part of what the flag means, stated here, not a repair
+    of a missing flag."""
 
     needs: tuple[str, ...] = ()
     """Features that must be on for this one to mean anything."""
@@ -83,6 +82,15 @@ class Feature:
     """Agent tools that exist only while this feature is on. The prompt builder uses
     these to prove no piece of the finished prompt names a tool that was not
     registered."""
+
+    stage: str = ""
+    """A stage of `verify` this feature adds (`coverage`, `mutation`): reported by every
+    `verify` once the test is fail-to-pass, and a duty the stop checks hold the agent to.
+    Not a tool of its own since 2026-10-19 (user: one `verify`, the full report)."""
+
+    in_base: bool = True
+    """Part of the `base` configuration when it is an add-on. Mutation left base on
+    2026-10-19 (user)."""
 
     aliases: tuple[str, ...] = ()
     """Extra spellings of the flag. `--no-repo-facts` says what the registry does;
@@ -100,15 +108,17 @@ FEATURES: tuple[Feature, ...] = (
                            "agent can watch its test fail on this code but never watch it "
                            "pass; the harness decides the verdict either way",
             added=True, tools=("verify",)),
-    Feature("coverage-tool", "add the `coverage` tool: which changed lines the test never "
-                             "runs, with their code and the conditions above them. The "
+    Feature("coverage-tool", "add the coverage stage to `verify`: once the test is "
+                             "fail-to-pass, every `verify` reports changed-line coverage "
+                             "(target 100%) and every missed line, by function. The "
                              "harness measures changed-line coverage either way",
-            added=True, needs=("patch", "verify-tool"), tools=("coverage",)),
-    Feature("mutation-tool", "add the `mutation` tool, which runs the agent's test "
-                             "against small wrong variants of the fix and reports which "
-                             "ones it fails to notice. The harness measures a mutation "
+            added=True, needs=("patch", "verify-tool"), stage="coverage"),
+    Feature("mutation-tool", "add the mutation stage to `verify`: once the test is "
+                             "fail-to-pass, every `verify` runs it against small wrong "
+                             "variants of the fix and reports the mutation score and each "
+                             "variant it fails to notice. The harness measures a mutation "
                              "score either way, on mutants the agent was never shown",
-            added=True, needs=("patch", "verify-tool"), tools=("mutation",)),
+            added=True, needs=("patch", "verify-tool"), stage="mutation", in_base=False),
     Feature("guard", "add the guard: edits the agent makes to files that were already "
                      "here are reverted between actions. Without it the prohibition "
                      "stays in the prompt and the audit still reports a dirty tree as "
@@ -119,20 +129,14 @@ FEATURES: tuple[Feature, ...] = (
     # `verify` loop until fail-to-pass, then the coverage/mutation duties. The second
     # chance is no longer a refusal at all -- it is a restart after the run has ended
     # without a test that scores YES.
-    Feature("require-tools", "add the stop checks, as three loops: `verify` until the test "
-                             "is fail-to-pass (the harness also runs it at base: no file, "
-                             "nothing collected, passing or skipped is refused), then "
-                             "`coverage` until no changed line is missed or each function "
-                             "holding one has had a turn, and `mutation` until no variant "
-                             "survives or an honest attempt stops improving it",
+    Feature("require-tools", "add the stop checks, as loops on what `verify` reports: "
+                             "until the test is fail-to-pass (the harness also runs it at "
+                             "base: no file, nothing collected, passing or skipped is "
+                             "refused), then, with the coverage stage, until coverage is "
+                             "100% or each function holding a missed line has had a turn, "
+                             "and with the mutation stage, until no variant survives or an "
+                             "honest attempt stops improving the score",
             added=True, needs=("verify-tool",)),
-    Feature("require-tools-with-score-report",
-            "add the loops of --add-require-tools, with scores: `coverage` and `mutation` "
-            "report changed-line coverage (target 100 percent) and mutation score "
-            "(maximised), and the agent is asked to reach them. Implies "
-            "--add-require-tools",
-            added=True, needs=("verify-tool", "require-tools"),
-            implies=("require-tools",)),
     Feature("second-chance", "add a restart: when the run ends without a test that scores "
                              "fail-to-pass and actions remain, the agent starts a fresh "
                              "conversation with the task, the record of its first "
@@ -155,19 +159,10 @@ DESCRIBES_THE_BUG = ("issue", "patch")
 
 
 def instruments(features: "FeatureSet") -> tuple[str, ...]:
-    """Tools the agent holds in this configuration and is expected to have used.
-
-    Read off the registry rather than listed, so a tool added later is covered without
-    anyone remembering this function. Only tools a feature *owns* count: `run`,
-    `write_file` and `run_tests` exist in every configuration and are means rather than
-    checks, while `verify`, `coverage` and `mutation` each answer a question nothing else
-    answers, which is the whole reason they were built.
-
-    The point of the list is that a registered tool that goes uncalled is not a result
-    about the model. It is a configuration we never actually ran: the arm says `full` and
-    the behaviour is the arm without the tool.
-    """
-    return tuple(t for f in FEATURES if f.name in features for t in f.tools)
+    """The stages of `verify` this configuration has, which the stop checks hold the agent
+    to once its test is fail-to-pass: `coverage`, `mutation` (each a feature's `stage`).
+    Read off the registry, so a stage added later is covered without editing this."""
+    return tuple(f.stage for f in FEATURES if f.stage and f.name in features)
 
 
 def flag(name: str) -> str:
@@ -280,9 +275,8 @@ class FeatureSet:
         """A short name for this configuration, for labelling a series of runs.
 
         In the terms of the flags: `full` is every add-on; otherwise the add-ons present
-        (`bare` when there are none). A variant add-on (one that `implies` another, like
-        `require-tools-with-score-report`) is a suffix, not part of `full`:
-        `full+require-tools-with-score-report`. Withheld inputs follow: `full no-repo-facts`,
+        (`bare` when there are none). A variant add-on (one that `implies` another) is a
+        suffix, not part of `full`: `full+<variant>`. Withheld inputs follow: `full no-repo-facts`,
         `bare no-issue`. Before 2026-09-28 names were `no-<withheld>`, which recorded
         results still carry."""
         core = [f.name for f in FEATURES if f.added and not f.implies]

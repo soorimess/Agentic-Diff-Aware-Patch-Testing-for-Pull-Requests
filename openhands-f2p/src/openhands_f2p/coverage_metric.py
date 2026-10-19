@@ -506,8 +506,12 @@ def _by_function(box: "Sandbox", hit: list[str], missed: list[str]) -> list[dict
                 continue
             name = sp[2] if sp else "<module>"
             g = out.setdefault((path, name), {"path": path, "function": name,
-                                              "ran": 0, "missed": 0})
+                                              "ran": 0, "missed": 0, "lines": []})
             g["ran" if ran else "missed"] += 1
+            if not ran:
+                g["lines"].append(n)
+    for g in out.values():
+        g["lines"].sort()
     return sorted(out.values(), key=lambda g: (-g["missed"], g["path"], g["function"]))
 
 

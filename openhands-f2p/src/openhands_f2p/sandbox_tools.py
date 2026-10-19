@@ -547,298 +547,135 @@ class SandboxTestTool(ToolDefinition[TestAction, TestObservation]):
 
 
 
-# ------------------------------------------------------------------- coverage
-class CoverageAction(ToolArgs):
-    target: str = Field(
-        description="The test file to measure, same value you would pass to run_tests.")
-
-
-class CoverageObservation(Observation):
-    pass
-
-
-class CoverageExecutor(ToolExecutor[CoverageAction, CoverageObservation]):
-    """Which of the pull request's changed lines the test never executes.
-
-    The same lines the harness scores, shown as lines and never as a percentage. The
-    earlier output led with the figure and closed with "100% is the target", while
-    58-finish.md told the same agent "none of these figures is a target" -- and the
-    figure it was told to maximise was the one the report published as an independent
-    measure of test quality. The harness still computes the percentage; the agent is
-    shown only what it can act on. Measured with the patch applied, because the lines it
-    adds do not exist at any other moment, and always reverted afterwards.
-    """
-
-    def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
-                 require_tools: bool = False, scored: bool = False):
-        self.box = box
-        self.repo = repo
-        self.patch = patch
-        # `--add-require-tools-with-score-report`: the percentage is shown and is a target.
-        # Everywhere else it is withheld, for the reason the class docstring gives.
-        self.scored = scored
-        # Whether the run will refuse a stop that leaves this unanswered. When it will,
-        # the tool says so itself -- the rule is otherwise only in the prompt the agent
-        # read once at the start and in the refusal it gets after deciding it is done.
-        self.require_tools = require_tools
-        self.log = log if log is not None else []
-
-    def __call__(self, action: CoverageAction, conversation=None) -> CoverageObservation:
-        from openhands_f2p import verify as V
-        # Only for a test that is fail-to-pass by its own last `verify`, unchanged since,
-        # as `mutation` (user, 2026-10-12). A note on top was not enough: after it went in,
-        # SciPy 20382 still made 10 coverage calls before any flip and Qiskit 13343 made 8,
-        # reading "runs every line" as progress on a test that passed at base.
-        if not V.verify_settled(self.log, V._relative(action.target.split("::")[0])):
-            self.log.append({"tool": "coverage", "target": action.target,
-                             "error": "not fail-to-pass by its last verify"})
-            return CoverageObservation.from_text(
-                f"not run: `coverage` asks which changed lines {action.target} runs, which "
-                f"only matters once the test fails before the change and passes after. Its "
-                f"last `verify` did not say fail-to-pass for the file as it is now. Call "
-                f"`verify` and get it there first.", is_error=True)
-        state = self.box.ensure_base(self.patch)
-        if state != "base":
-            return CoverageObservation.from_text(
-                "cannot measure: the working tree is in an unexpected state "
-                f"({state}) -- some file was modified outside the test", is_error=True)
-        base = E.base_texts(self.box, self.patch)
-        self.box.apply_patch(self.patch)
-        try:
-            cov = E.changed_line_coverage(self.box, [action.target], self.patch, base)
-            import_only = _import_only(self.box, cov) if cov.get("measured") else ""
-        finally:
-            self.box.apply_patch(self.patch, revert=True)
-
-        # The whole file as measured: a later regression is answered by handing this
-        # version back (`V._rewind`), and the write log keeps only 4000 characters.
-        self.log.append({"tool": "coverage", "target": action.target, "result": cov,
-                         "measured_text": self.box.read(action.target.split("::")[0])})
-        if not cov.get("measured"):
-            # Named, not just reported: seaborn-3069 (fix check) was told four times to see
-            # the changed lines in `coverage` and got this bare sentence each time.
-            files = cov.get("changed_files") or []
-            hint = (f" This pull request changes {', '.join(f'`{f}`' for f in files[:4])}; "
-                    f"your test has to import that code and call it before any changed "
-                    f"line can run."
-                    if files and cov.get("reason") == "the changed file was never imported by this test"
-                    else "")
-            return CoverageObservation.from_text(
-                f"could not measure change coverage: {cov.get('reason')}.{hint}",
-                is_error=True)
-
-        score = (f"Changed-line coverage: {cov['percent']}% ({cov['covered']} of "
-                 f"{cov['executable_changed_lines']} executable changed lines).\n\n"
-                 if self.scored else "")
-        # The run this measured is the test with the change applied, so it already knows
-        # whether the test passes there. matplotlib-22719 (loop check) read "runs every
-        # line" eight times as a sign it was done, about a test that failed once the change
-        # was in -- and never called `verify` again, which is the check that says so.
-        failing = ("\n\nNote: with the change applied, this test run did not pass (exit "
-                   f"code {cov['test_run_returncode']}), so at least one test here fails "
-                   "once the fix is in. Which lines run says nothing about that -- the file "
-                   "is not fail-to-pass until `verify` says it is."
-                   if cov.get("test_run_returncode") not in (0, None) else "")
-        swallow = V.swallow_note(self.box.read(action.target.split("::")[0]))
-        if not cov["missed"]:
-            return CoverageObservation.from_text(
-                score + "Your test runs every executable line this pull request "
-                "changed." + import_only + swallow + failing)
-        # The import-time note went out only when nothing was missed, so astropy-13398
-        # (base, cap 125), whose 31 "covered" lines were all imports, constants and `def`
-        # lines, never saw it in four calls.
-        lines = [score + "Some lines this pull request changed never ran under your test."
-                 + _spawn_note(self.box, action.target) + import_only]
-
-        # The source and the guards, not just the numbers. "line 1631 is uncovered" is
-        # not something an agent can act on; "line 1631 is `Q *= q.p`, and it sits under
-        # `if not isinstance(q, SYMPY_INTS)`" says exactly what the input has to look
-        # like for that line to run.
-        lines += ["", "For each one you can see the code and the conditions above it -- "
-                      "those conditions are what your input has to satisfy. Line numbers "
-                      "are in the files *with* the change applied; this checkout is the code "
-                      "before it, where the same numbers can point at other lines, so find "
-                      "these lines in the diff:", ""]
-        for item in cov.get("missed_source") or []:
-            lines.append(f"  {item['ref']}")
-            for g in item["guards"]:
-                lines.append(f"      {g}")
-            ref_ln = item["ref"].rpartition(":")[2]
-            lines.append(f"    > {ref_ln}: {item['line']}")
-            lines.append("")
-        extra = len(cov["missed"]) - len(cov.get("missed_source") or [])
-        if extra > 0:
-            lines.append(f"  ... and {extra} more changed lines that never ran")
-        lines += ["Write the test so that every line the change touched runs: pick inputs "
-                  "that make those conditions true, or add a second test for a separate "
-                  "case the same change fixes. Reach each line through the behaviour you "
-                  "are asserting. Then call `coverage` again."]
-        # The rule, where the shortfall is read. Deliberately paired with the escape
-        # hatch: some changed lines cannot be reached from a test at all, and an
-        # assertion written only to execute one buys a number and costs a reviewer's
-        # trust. Saying why a line is unreachable satisfies this as fully as reaching it.
-        loop_open = V.verify_settled(self.log, action.target.split("::")[0])
-        if self.scored and loop_open:
-            lines += ["",
-                      "The target is 100%: you will be sent back while it is below, until "
-                      "it gets there or every part of the change with a missed line -- "
-                      "each function holding one -- has had one turn."]
-        elif self.require_tools and loop_open:
-            lines += ["",
-                      "You will be sent back while lines are missed, one part of the change "
-                      "at a time -- each function holding a missed line gets one turn -- "
-                      "until every changed line runs or every part has had its turn."]
-        return CoverageObservation.from_text("\n".join(lines) + swallow + failing)
-
-
-class SandboxCoverageTool(ToolDefinition[CoverageAction, CoverageObservation]):
-    name = "coverage"
-
-    @classmethod
-    def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
-               patch: str = "", log: list | None = None, require_tools: bool = False,
-               scored: bool = False, **params):
-        assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
-        return [cls(
-            name="coverage",
-            description=("List the lines this pull request changed that your test never "
-                         "runs, with the code of each and the conditions above it. Runs only "
-                         "once `verify` says the test is fail-to-pass."),
-            action_type=CoverageAction,
-            observation_type=CoverageObservation,
-            annotations=ToolAnnotations(readOnlyHint=True),
-            executor=_Shown(CoverageExecutor(box, repo, patch, log, require_tools, scored),
-                                  "coverage"),
-        )]
-
-
-# -------------------------------------------------------------------- mutation
-class MutationAction(ToolArgs):
-    target: str = Field(
-        description="The test file to try, same value you would pass to run_tests.")
-
-
-class MutationObservation(Observation):
-    pass
-
-
-class MutationExecutor(ToolExecutor[MutationAction, MutationObservation]):
-    """Small wrong variants of the fix, and which ones the test fails to notice.
-
-    The agent's instrument. The harness measures a mutation score of its own after the
-    agent has finished, and -- because this tool exists -- it measures it on the half of
-    the mutant pool this one never shows. Tuning a test until the ten mutants in front of
-    you die is easy and proves nothing; the score is taken on ten others.
-
-    `test_patch` is never applied here. The developer's test is the held-out answer, and
-    a tool that installed it during the agent's turn would put it in a tree the agent can
-    read.
-    """
-
-    def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
-                 n: int = 5, require_tools: bool = False, scored: bool = False):
-        self.box = box
-        self.repo = repo
-        self.patch = patch
-        self.log = log if log is not None else []
-        self.n = n
-        self.scored = scored
-        # See CoverageExecutor: the obligation is stated where the answer arrives.
-        self.require_tools = require_tools
-
-    def __call__(self, action: MutationAction,
-                 conversation=None) -> MutationObservation:
-        from openhands_f2p import mutants as M
-        from openhands_f2p import verify as V
-        # Only for a test that is fail-to-pass by its own last `verify`, unchanged since
-        # (user, 2026-10-04). On a test that passes before the fix too, "2 of 2 caught"
-        # is no sign of anything -- the test cannot tell the fix from no fix -- yet the
-        # nine NO runs of the base at cap 125 made 18 such calls, and pylint-6903 went on
-        # to work a survivor of a test that was never fail-to-pass.
-        if not V.verify_settled(self.log, V._relative(action.target.split("::")[0])):
-            self.log.append({"tool": "mutation", "target": action.target,
-                             "error": "not fail-to-pass by its last verify"})
-            return MutationObservation.from_text(
-                f"not run: `mutation` asks whether {action.target} tells the fix from "
-                f"wrong versions of it, which only means something once the test tells "
-                f"the fix from no fix. Its last `verify` did not say fail-to-pass for the "
-                f"file as it is now. Call `verify` and get it there first.", is_error=True)
-        r = M.probe(self.box, self.patch, action.target, self.n)
-        if not r.get("ok"):
-            self.log.append({"tool": "mutation", "target": action.target,
-                             "error": r.get("why", "")})
-            return MutationObservation.from_text(
-                f"could not run mutants: {r.get('why', 'unknown')}", is_error=True)
-        got = r.get("mutants") or []
-        if not got:
-            self.log.append({"tool": "mutation", "target": action.target,
-                             "total": 0, "why": r.get("why", "")})
-            return MutationObservation.from_text(
-                f"{r.get('why', 'no mutants available')}. Nothing to read into that -- "
-                f"it is a property of the change, not of your test.")
-        killed = [m for m in got if m.agent_kills]
-        lived = [m for m in got if not m.agent_kills]
-        self.log.append({"tool": "mutation", "target": action.target,
-                         "total": len(got), "killed": len(killed),
-                         "survived": [m.operator for m in lived],
-                         "measured_text": self.box.read(action.target.split("::")[0])})
-        lines = [f"{len(killed)} of {len(got)} wrong variants of the fix were caught by "
-                 f"{action.target}."]
-        if self.scored:
-            lines[0] = (f"Mutation score: {round(100.0 * len(killed) / len(got), 1)}% -- "
-                        + lines[0])
-        if lived:
-            lines += ["", "Not caught -- each of these is a broken version of the fix "
-                          "that your test still passes on:"]
-            lines += [f"  {m.file}:{m.line}    {m.operator}" for m in lived]
-            lines += ["",
-                      "Answer each one. Ask whether a reviewer would call the behaviour "
-                      "it breaks part of what this pull request fixes. Where the answer "
-                      "is yes, your test is missing an assertion about that behaviour: "
-                      "add one that checks what the code returns, raises or does, then "
-                      "call `verify` and `mutation` again. Where the answer is no -- the "
-                      "variant breaks something the change was never about, or nothing "
-                      "observable at all -- say so in one sentence and leave it. Never "
-                      "assert on the exact expression a variant changed just to make it "
-                      "fail."]
-            if self.scored or self.require_tools:
-                # "Leave it" above, and a loop that closes only on an attempt: requests-1142
-                # (base, cap 125) said in eight rounds that its survivor was harmless and
-                # was sent back eight times. What ends the loop is said here.
-                lines += ["",
-                          ("Maximise the score: y" if self.scored else "Y")
-                          + "ou will be sent back while variants survive: add assertions "
-                          "about the behaviour they break and call `mutation` again, until "
-                          "none survives or an honest attempt catches no more. A survivor "
-                          "you judged harmless still brings that one attempt: change the "
-                          "test to try to catch it, call `mutation`, and if it catches no "
-                          "more the loop ends."]
+# ---------------------------------------------------------- verify's stages
+def _ranges(lines: list[int]) -> str:
+    """`[3, 4, 5, 9]` as `3-5, 9`."""
+    out: list[str] = []
+    for n in lines:
+        if out and n == int(out[-1].split("-")[-1]) + 1:
+            out[-1] = f"{out[-1].split('-')[0]}-{n}"
         else:
-            lines += ["", "Every variant tried was caught."]
-        return MutationObservation.from_text("\n".join(lines))
+            out.append(str(n))
+    return ", ".join(out)
 
 
-class SandboxMutationTool(ToolDefinition[MutationAction, MutationObservation]):
-    name = "mutation"
+def _missed_by_function(cov: dict) -> list[str]:
+    """Every missed changed line, as line numbers grouped by file and the function holding
+    them -- no source (user, 2026-10-19: the agent reads the lines itself). The source and
+    guards of at most 20 lines per file, then "... and N more", hid most of a large change:
+    pylint-4492 (large set) was told 15 of its missed lines only as a count."""
+    groups = [g for g in cov.get("missed_by_function") or [] if g.get("missed")]
+    if not groups:
+        by_file: dict[str, list[int]] = {}
+        for ref in cov.get("missed") or []:
+            path, _, n = ref.rpartition(":")
+            if n.isdigit():
+                by_file.setdefault(path, []).append(int(n))
+        groups = [{"path": p, "function": "<module>", "missed": len(ns), "lines": sorted(ns)}
+                  for p, ns in by_file.items()]
+    out: list[str] = []
+    for path in dict.fromkeys(g["path"] for g in groups):
+        mine = [g for g in groups if g["path"] == path]
+        width = max(len(g["function"]) for g in mine)
+        out.append(f"  {path}")
+        for g in mine:
+            n = g["missed"]
+            nums = _ranges(g.get("lines") or [])
+            word = "lines" if ("," in nums or "-" in nums) else "line"
+            out.append(f"    {g['function']:<{width}}  {word} {nums}"
+                       f"  ({n} line{'s' if n != 1 else ''})")
+    return out
 
-    @classmethod
-    def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
-               patch: str = "", log: list | None = None, n: int = 5,
-               require_tools: bool = False, scored: bool = False, **params):
-        assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
-        return [cls(
-            name="mutation",
-            description=("Break the fix in small ways on purpose and see whether your "
-                         "test notices. Reports each variant your test still passes on, "
-                         "which is a behaviour the change makes and your test does not "
-                         "check."),
-            action_type=MutationAction,
-            observation_type=MutationObservation,
-            annotations=ToolAnnotations(readOnlyHint=True),
-            executor=_Shown(MutationExecutor(box, repo, patch, log, n=n,
-                                             require_tools=require_tools, scored=scored),
-                            "mutation"),
-        )]
+
+def coverage_report(box: Sandbox, target: str, cov: dict, require_tools: bool,
+                    import_only: str = "") -> str:
+    """The coverage stage of `verify`: the score against its target, then every changed
+    line the test never ran, by function. Only for a fail-to-pass test. `import_only` is
+    `_import_only`, worked out while the change was applied (it reads the files there)."""
+    if not cov.get("measured"):
+        files = cov.get("changed_files") or []
+        hint = (f" This pull request changes {', '.join(f'`{f}`' for f in files[:4])}; your "
+                f"test has to import that code and call it before any changed line can run."
+                if files and cov.get("reason") == "the changed file was never imported by this test"
+                else "")
+        return f"\n\n## Coverage\n\nCould not measure: {cov.get('reason')}.{hint}"
+    pct, covered, total = cov["percent"], cov["covered"], cov["executable_changed_lines"]
+    head = (f"\n\n## Coverage: {pct}% of the changed lines run ({covered} of {total}). "
+            f"The target is 100%.")
+    if not cov["missed"]:
+        return head + "\n\nYour test runs every executable line this pull request changed." + import_only
+    lines = [head]
+    # A test that flips while hardly touching the change (fix 3, 2026-10-19): Qiskit-12904
+    # (large set) imported three functions and stopped at 0%, Qiskit-12474 checked a
+    # signature at 5%, scipy-21777 caught its own TypeError at 6.5% -- each then made small
+    # additions for ten refusals. Asked for a rewrite, not another assertion.
+    groups = sorted((g for g in cov.get("missed_by_function") or [] if g.get("missed")),
+                    key=lambda g: -g["missed"])
+    if pct < 10 and groups:
+        g = groups[0]
+        call = ("the module-level code of `" + g["path"] + "`" if g["function"] == "<module>"
+                else f"`{g['function']}` in `{g['path']}`")
+        lines += ["", f"Your test hardly touches this change. A test that only imports the new "
+                      f"code, checks that a name exists, inspects a signature or catches the "
+                      f"error a call raises can flip without testing anything. Rewrite it "
+                      f"around a call to {call} ({g['missed']} missed lines), with an input "
+                      f"that goes through the changed lines, and assert on what it returns, "
+                      f"raises or does."]
+    lines += ["", "Changed lines your test never runs, by function. Line numbers are in the "
+                  "files *with* the change applied -- the `+` side of the diff -- not in this "
+                  "checkout, which is the code before it; read each one in the diff, with "
+                  "the conditions above it, which your input has to satisfy:",
+              *_missed_by_function(cov),
+              "",
+              "Make every changed line run: pick inputs that make those conditions true, or "
+              "add a second test for a separate case the same change fixes. Reach each line "
+              "through the behaviour you assert. Then call `verify` again."
+              + _spawn_note(box, target) + import_only]
+    if require_tools:
+        lines += ["", "You will be sent back while coverage is below 100%, one part of the "
+                      "change at a time -- each function holding a missed line gets one turn "
+                      "-- until it reaches 100% or every part has had its turn."]
+    return "\n".join(lines)
+
+
+def mutation_report(r: dict, target: str, require_tools: bool) -> tuple[str, dict]:
+    """The mutation stage of `verify`, from one `mutants.probe`: the score, then each wrong
+    variant of the fix the test still passes on. Returns the text and the log entry."""
+    if not r.get("ok"):
+        return (f"\n\n## Mutation\n\nCould not run the variants: {r.get('why', 'unknown')}.",
+                {"tool": "mutation", "via": "verify", "target": target,
+                 "error": r.get("why", "")})
+    got = r.get("mutants") or []
+    if not got:
+        return (f"\n\n## Mutation\n\n{r.get('why', 'no variants available')}. Nothing to "
+                f"read into that -- it is a property of the change, not of your test.",
+                {"tool": "mutation", "via": "verify", "target": target, "total": 0,
+                 "why": r.get("why", "")})
+    killed = [m for m in got if m.agent_kills]
+    lived = [m for m in got if not m.agent_kills]
+    entry = {"tool": "mutation", "via": "verify", "target": target, "total": len(got),
+             "killed": len(killed), "survived": [m.operator for m in lived]}
+    lines = [f"\n\n## Mutation: {round(100.0 * len(killed) / len(got), 1)}% of wrong variants "
+             f"caught ({len(killed)} of {len(got)}). Maximise it."]
+    if not lived:
+        return "\n".join(lines + ["", "Every variant tried was caught."]), entry
+    lines += ["", "Not caught -- each of these is a broken version of the fix that your test "
+                  "still passes on:",
+              *[f"  {m.file}:{m.line}    {m.operator}" for m in lived],
+              "",
+              "Answer each one. Ask whether a reviewer would call the behaviour it breaks "
+              "part of what this pull request fixes. Where the answer is yes, your test is "
+              "missing an assertion about that behaviour: add one that checks what the code "
+              "returns, raises or does, then call `verify` again. Where the answer is no -- "
+              "the variant breaks something the change was never about, or nothing "
+              "observable at all -- say so in one sentence and leave it. Never assert on the "
+              "exact expression a variant changed just to make it fail."]
+    if require_tools:
+        lines += ["", "You will be sent back while variants survive: add assertions about the "
+                      "behaviour they break and call `verify` again, until none survives or an "
+                      "honest attempt catches no more. A survivor you judged harmless still "
+                      "brings that one attempt."]
+    return "\n".join(lines), entry
 
 
 # --------------------------------------------------------------------- verify
@@ -866,11 +703,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
     """
 
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
-                 reveal_missed: bool = True, point_at_mutation: bool = False,
-                 require_tools: bool = False, scored_name: str = "",
-                 gated: bool = False, scored: bool = False):
+                 coverage: bool = False, mutation: bool = False, probe_mutants: int = 5,
+                 require_tools: bool = False, scored_name: str = "", gated: bool = False):
         self.box = box
-        self.scored = scored
         # Whether a stop is refused while this says not fail-to-pass -- `require-tools`'
         # stop checks. Kept apart from `require_tools` only so the two sentences can be
         # read separately; both come from the same feature.
@@ -882,21 +717,17 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         self.scored_name = scored_name
         self.repo = repo
         self.patch = patch
-        # See CoverageExecutor: the obligation is stated where the answer arrives.
+        # Whether the run refuses a stop that leaves a stage's shortfall unanswered; said
+        # where the answer arrives.
         self.require_tools = require_tools
         self.log = log if log is not None else []
-        # Whether `mutation` is registered alongside. Same reasoning as `reveal_missed`
-        # one field below, and found the same way: on the first five-instance test of the
-        # mutation tool the agent read "fail-to-pass" plus "it runs every line this pull
-        # request changed", concluded it was done, and finished -- never calling
-        # `mutation`, which is the only check nothing else answers. Verify is where the
-        # agent feels finished, so verify is where the remaining question belongs.
-        self.point_at_mutation = point_at_mutation
-        # Whether `coverage` is registered alongside. Without it there is no tool to
-        # send the agent to, and naming one it does not have is exactly the failure the
-        # prompt scan catches -- one layer later, in a tool's own output, where no scan
-        # reaches.
-        self.reveal_missed = reveal_missed
+        # The stages after fail-to-pass (user, 2026-10-19): one `verify` runs every stage
+        # its configuration has, on every call once the test flips, and reports them all.
+        # They were the `coverage` and `mutation` tools; an agent that felt done after
+        # "fail-to-pass" often never asked them.
+        self.coverage = coverage
+        self.mutation = mutation
+        self.probe_mutants = probe_mutants
 
     def __call__(self, action: VerifyAction, conversation=None) -> VerifyObservation:
         state = self.box.ensure_base(self.patch)
@@ -913,9 +744,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         before = self.box.exec(cmd, timeout=3600)
         base_out = V.own_outcomes(E.parse_output(before.output), [action.target])
         self._base = E.base_texts(self.box, self.patch)
-        self._reach_full = False
         self.box.apply_patch(self.patch)
-        missed = ""
+        cov: dict | None = None
+        import_only = ""
         try:
             after = self.box.exec(cmd, timeout=3600)
             head_out = V.own_outcomes(E.parse_output(after.output), [action.target])
@@ -932,13 +763,18 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             # a working test's feedback, attached to a NO.
             flips = ({n for n, v in base_out.items() if v in ("FAILED", "ERROR")}
                      & {n for n, v in head_out.items() if v == "PASSED"})
-            # Only when `coverage` is registered. Without it this line was the whole of
-            # the coverage feedback -- "not every changed line runs" -- and the
-            # -coverage arm lost only *which* lines (42 such lines in 18 of its runs,
-            # against 45 in 16 for base). Removing the tool now removes the feedback.
-            if (self.reveal_missed and flips
-                    and not any(v in ("FAILED", "ERROR") for v in head_out.values())):
-                missed = self._reach(action.target)
+            passes = flips and not any(v in ("FAILED", "ERROR") for v in head_out.values())
+            # The coverage stage, inside the patched window (the lines the change adds exist
+            # only now). For a fail-to-pass file; and for one that lost an earlier flip, so
+            # the hand-back can tell a test that went further from one that fell back.
+            if self.coverage and head_out and (passes or any(
+                    e.get("f2p_test") for e in self.log if e.get("tool") == "verify")):
+                try:
+                    cov = E.changed_line_coverage(self.box, [action.target], self.patch,
+                                                  self._base)
+                    import_only = _import_only(self.box, cov) if cov.get("measured") else ""
+                except Exception as exc:
+                    cov = {"measured": False, "reason": f"{type(exc).__name__}: {exc}"}
         finally:
             self.box.apply_patch(self.patch, revert=True)
 
@@ -946,11 +782,12 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         passed_after = {n for n, v in head_out.items() if v == "PASSED"}
         flipped = sorted(failed_before & passed_after)
         still_failing = [n for n, v in head_out.items() if v in ("FAILED", "ERROR")]
-        # `reach_full`: this call's own coverage said every changed line runs, which
-        # answers the coverage loop for this file (`V.duty_gap`, user 2026-10-04).
+        # `reach`: how many changed lines this version runs, read by the hand-back
+        # (`V.lost_flip`) to tell a test that went further from one that fell back.
         self.log.append({"tool": "verify", "target": action.target,
                          "before": base_out, "after": head_out, "flipped": flipped,
-                         "reach_full": self._reach_full})
+                         "reach": (cov or {}).get("covered") if (cov or {}).get("measured")
+                         else None})
 
         # `inverted` before `still_failing`. A test that passed at base and fails at head
         # is the closest possible near-miss -- it found the behaviour and asserted the
@@ -1039,38 +876,33 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                 and not (not flipped and not still_failing
                          and getattr(self.box, "_unscoreable_capped", False)) else "")
 
-        # Reported here rather than left for the agent to ask about. The `coverage` tool
-        # already offered this, and across twenty-six runs it was called twelve times --
-        # every one of them last, with nothing after it, and every one already reaching
-        # the whole change. It was a formality, never feedback, because asking was a
-        # decision the agent only made once it was confident. This removes the decision.
-        #
-        # Lines *and* the percentage. This used to withhold the figure, on the grounds
-        # that a score in front of the agent is a score to raise -- true, and the reason
-        # the guidance beside it still talks about lines and the conditions above them.
-        # But withholding it left the agent no handle on how far from done it was, and
-        # the obligation the run enforces is expressed in that number, so stating the
-        # rule while hiding the measure is the worse of the two failures.
-        #
-        # The side that holds the reason gets the room. A test that still fails, or fails
-        # only, once the change is in is explained by the run after it; every other answer
-        # (passes at base, skipped, nothing collected, fail-to-pass) by the run before.
+        # The before and after runs, the side that holds the reason getting the room. A
+        # test that still fails, or fails only, once the change is in is explained by the
+        # run after it; every other answer by the run before.
         after_matters = bool(still_failing or inverted)
         body = (f"\n\nbefore the change:\n"
                 f"{_clip(_condense(before.output), 1000 if after_matters else 2400)}"
                 f"\n\nafter the change:\n"
                 f"{_clip(_condense(after.output), 2400 if after_matters else 1000)}"
                 if base_out or head_out else "")
-        # Only when the test actually flips: asking what a test would notice about a
-        # wrong fix presumes it notices the right one, and saying this after a NOT
-        # fail-to-pass would send the agent at the wrong problem.
-        # "What it reaches" only where this answer reported it (the coverage tool's arms).
-        nxt = (("\n\nThat it flips, and what it reaches, are two of the three questions. "
-                "Whether it would notice a fix that is subtly *wrong* is the third, and "
-                "nothing above answers it -- `mutation` does." if self.reveal_missed else
-                "\n\nThat it flips is one question. Whether it would notice a fix that is "
-                "subtly *wrong* is another, and nothing above answers it -- `mutation` does.")
-               if ok and self.point_at_mutation else "")
+        # The stages, each logged as a part of this call (`via`), so the stop checks read
+        # them the way they read the old tools' answers.
+        stages = ""
+        f2p_text = self.log[-1].get("f2p_test", "")
+        if ok and self.coverage and cov is not None:
+            self.log.append({"tool": "coverage", "via": "verify", "target": action.target,
+                             "result": cov, "measured_text": f2p_text})
+            stages += coverage_report(self.box, action.target, cov, self.require_tools,
+                                      import_only)
+        if ok and self.mutation:
+            from openhands_f2p import mutants as M
+            text, entry = mutation_report(
+                M.probe(self.box, self.patch, action.target, self.probe_mutants),
+                action.target, self.require_tools)
+            if entry.get("total"):
+                entry["measured_text"] = f2p_text
+            self.log.append(entry)
+            stages += text
         # Never an error. The tool ran and answered; "no" is an answer. It was flagged
         # `is_error=not flipped`, so every negative verdict reached the model prefixed
         # "[An error occurred during execution.]" -- a median of five of them already in
@@ -1098,52 +930,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             head += V.lost_flip(self.log[:-1], action.target.split("::")[0],
                                 self.box.read(action.target.split("::")[0]))
         swallow = V.swallow_note(self.box.read(action.target.split("::")[0]))
-        return VerifyObservation.from_text(head + swallow + elsewhere + duty + missed + nxt
-                                           + body, is_error=False)
-
-    def _reach(self, target: str) -> str:
-        """How much of the change this test runs, and what to do if it is not all of it.
-
-        A pointer, not the answer. Earlier this printed the missed lines here in full,
-        which made `coverage` redundant -- the agent had everything already and never
-        called it. Naming the shortfall and naming the tool that explains it keeps both:
-        the agent cannot miss that something is unfinished, and the explaining is still
-        the other tool's job.
-
-        No percentage and no count, in either direction. "All of them" and "not all of
-        them" are facts the agent can act on; a figure is a score, and a score in front
-        of the agent is a score to raise.
-        """
-        try:
-            cov = E.changed_line_coverage(self.box, [target], self.patch,
-                                          getattr(self, "_base", None))
-        except Exception:
-            return ""
-        if not cov.get("measured"):
-            return ""
-        missed = len(cov.get("missed") or [])
-        pct = (f" Changed-line coverage: {cov['percent']}%." if self.scored else "")
-        import_only = _import_only(self.box, cov)
-        if not missed:
-            self._reach_full = True
-            return ("\n\nIt runs every line this pull request changed." + pct
-                    + import_only)
-        # Called only with `coverage` registered, so there is always a tool to point at.
-        # The duty sentence was keyed on `require_tools` alone and went out in arms with
-        # no `coverage`, where no check enforced it -- a rule nothing carried out.
-        head = ("\n\nSome lines this pull request changed never run under this test." + pct
-                + _spawn_note(self.box, target)
-                + (" You cannot finish having read that and left it alone: either make "
-                   "them run, or establish that a line cannot be reached from a test."
-                   if self.require_tools else ""))
-        where = (" Call `coverage` on this file to see which they are, the code on each "
-                 "one and the conditions above it.")
-        return (head + where +
-                " Then decide: part of the behaviour you set out to pin down and worth "
-                "another assertion, a separate case that deserves its own test "
-                "function, or genuinely outside what this test is for. If you change "
-                "the test, run `verify` again -- a new test is a new answer and the "
-                "old one no longer describes it." + import_only)
+        return VerifyObservation.from_text(head + swallow + elsewhere + duty + stages + body,
+                                           is_error=False)
 
 
 class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
@@ -1151,21 +939,27 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
 
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
-               patch: str = "", log: list | None = None, reveal_missed: bool = True,
-               point_at_mutation: bool = False, require_tools: bool = False,
-               scored_name: str = "", gated: bool = False, scored: bool = False, **params):
+               patch: str = "", log: list | None = None, coverage: bool = False,
+               mutation: bool = False, probe_mutants: int = 5, require_tools: bool = False,
+               scored_name: str = "", gated: bool = False, **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
+        stages = [s for s, on in (("which changed lines it runs (coverage, target 100%)",
+                                   coverage),
+                                  ("which wrong variants of the fix it catches (mutation "
+                                   "score)", mutation)) if on]
         return [cls(
             name="verify",
             description=("Check whether your test is fail-to-pass: run it on the code "
                          "before the change, apply the change, run it again. Reverts the "
-                         "change afterwards."),
+                         "change afterwards."
+                         + (" Once it is fail-to-pass, also reports "
+                            + " and ".join(stages) + "." if stages else "")),
             action_type=VerifyAction,
             observation_type=VerifyObservation,
             annotations=ToolAnnotations(readOnlyHint=False),
-            executor=_Shown(VerifyExecutor(box, repo, patch, log, reveal_missed,
-                                           point_at_mutation, require_tools,
-                                           scored_name, gated, scored), "verify"),
+            executor=_Shown(VerifyExecutor(box, repo, patch, log, coverage, mutation,
+                                           probe_mutants, require_tools, scored_name, gated),
+                            "verify"),
         )]
 
 
@@ -1180,8 +974,8 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     version of them, so the difference between two configurations is the component
     itself and not the same component answering worse.
 
-    `verify` and `coverage` both need the patch: without it there is no second state to
-    run a test against, and nothing to measure coverage of.
+    `verify` needs the patch: without it there is no second state to run a test against,
+    and nothing to measure coverage of or mutate.
     """
     features = features if features is not None else FeatureSet.full()
     # One process handles one instance under --parallel, but a serial run reuses this
@@ -1190,7 +984,6 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     briefed = "repo-facts" in features
     guard = "guard" in features
     require_tools = "require-tools" in features
-    scored = "require-tools-with-score-report" in features
     made = {"run": SandboxRunTool.create(box=box, log=log, guard=guard)[0],
             "write_file": SandboxWriteTool.create(box=box, log=log, guard=guard)[0],
             "run_tests": SandboxTestTool.create(box=box, repo=repo, log=log,
@@ -1206,28 +999,12 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     if "verify-tool" in features:
         made["verify"] = SandboxVerifyTool.create(
             box=box, repo=repo, patch=patch, log=log,
-            reveal_missed=("coverage-tool" in features),
-            point_at_mutation=("mutation-tool" in features),
-            require_tools=require_tools,
+            coverage=("coverage-tool" in features), mutation=("mutation-tool" in features),
+            probe_mutants=probe_mutants, require_tools=require_tools,
             scored_name=Path(gen_path).name if gen_path else "",
-            gated="require-tools" in features, scored=scored)[0]
+            gated="require-tools" in features)[0]
         register_tool("verify", made["verify"])
         names.append("verify")
-        if "coverage-tool" in features:
-            made["coverage"] = SandboxCoverageTool.create(
-                box=box, repo=repo, patch=patch, log=log,
-                require_tools=require_tools, scored=scored)[0]
-            register_tool("coverage", made["coverage"])
-            names.append("coverage")
-        # Beside `coverage` and for the same reason: it reports on the lines the change
-        # touched, so it needs the change. It also needs the test to already pass on the
-        # fixed code, which is what `verify` establishes.
-        if "mutation-tool" in features:
-            made["mutation"] = SandboxMutationTool.create(
-                box=box, repo=repo, patch=patch, log=log, n=probe_mutants,
-                require_tools=require_tools, scored=scored)[0]
-            register_tool("mutation", made["mutation"])
-            names.append("mutation")
     _check_no_leak(made, box, features)
     return names
 

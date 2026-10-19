@@ -24,50 +24,46 @@ job: The stop condition, on its own so that changing when the agent stops does n
   `mutation`, stop -- and two rewrites of the surrounding prose telling it to iterate
   changed nothing: same one call each, same survivor left alive. Prose does not compete
   with a numbered list. A step does.
+
+  Since 2026-10-19 (user) coverage and mutation are reports of `verify`, and the score
+  text is the default (the score-report flag is gone).
 ---
 A check that tells you something and gets no response was not worth running. If one shows
 a failure, fix the test and run it again.
 {?coverage-tool}
-If one shows lines of the change your test never reached, decide what they are -- part of
-the behaviour you set out to pin down and so worth another assertion, a separate case that
-deserves its own test, or genuinely outside what this test is for -- and act on
-that decision.
+If `verify` shows lines of the change your test never reached, decide what they are -- part
+of the behaviour you set out to pin down and so worth another assertion, a separate case
+that deserves its own test, or genuinely outside what this test is for -- and act on that
+decision.
 {/coverage-tool}
 {?mutation-tool}
-If one shows a wrong version of the fix your test did not object to, decide whether that
-behaviour is part of what the change fixes -- and if it is, assert it. If it is not, that
-survivor is an answer, not an outstanding item.
+If `verify` shows a wrong version of the fix your test did not object to, decide whether
+that behaviour is part of what the change fixes -- and if it is, assert it. If it is not,
+that survivor is an answer, not an outstanding item.
 {/mutation-tool}
+{?verify-tool}
+**Your test is scored on whether it is fail-to-pass{?coverage-tool}, on its changed-line
+coverage{/coverage-tool}{?mutation-tool}, and on its mutation score{/mutation-tool}, and `verify`
+shows you {?coverage-tool}each{/coverage-tool}{?!coverage-tool}{?mutation-tool}each{/mutation-tool}{?!mutation-tool}it{/!mutation-tool}{/!coverage-tool}.**
 {?coverage-tool}
-{?!require-tools-with-score-report}
-None of these is a score to push up. They are the same question asked from different
-angles — is the behaviour I asserted really the behaviour this pull request changed — and
-each answer is only worth what the test behind it is worth. Adding a call with no assertion
-behind it answers nothing.
-{/!require-tools-with-score-report}
-{/coverage-tool}
-{?require-tools-with-score-report}
-**In this run your test is scored, and you are shown the score:**
-{?coverage-tool}
-- changed-line coverage, the share of the lines this pull request changed that your test
-  runs, reported by `coverage`. **Its target is 100%**: raise it until every changed line
-  runs, or until the lines left cannot be reached from a test;
+- Changed-line coverage, the share of the lines this pull request changed that your test
+  runs. **Its target is 100%**: raise it until every changed line runs, or until the lines
+  left cannot be reached from a test.
 {/coverage-tool}
 {?mutation-tool}
-- mutation score, the share of wrong versions of the fix your test catches, reported by
-  `mutation`. **Maximise it**: catch every survivor that breaks behaviour a test can
-  observe; the ones that break nothing observable are what is left when an honest attempt
-  catches no more.
+- Mutation score, the share of wrong versions of the fix your test catches. **Maximise
+  it**: catch every survivor that breaks behaviour a test can observe; the ones that break
+  nothing observable are what is left when an honest attempt catches no more.
 {/mutation-tool}
 
 Raise a score the way a better test raises it: an input that takes the test somewhere it
 did not go, an assertion about behaviour a wrong fix would break. A call with no assertion
 behind it, or an assertion on an exact expression written only to move the number, is not
 a better test.
-{/require-tools-with-score-report}
+{/verify-tool}
 
-**Then: did you change the test after any check?** If you did, {?verify-tool}the checks above describe{/verify-tool}{?!verify-tool}the check above describes{/!verify-tool}
-a file that no longer exists. Run {?verify-tool}them{/verify-tool}{?!verify-tool}it{/!verify-tool} again on what is actually on disk — that is the
+**Then: did you change the test after any check?** If you did, {?verify-tool}the answers above describe{/verify-tool}{?!verify-tool}the check above describes{/!verify-tool}
+a file that no longer exists. Run {?verify-tool}`verify`{/verify-tool}{?!verify-tool}it{/!verify-tool} again on what is actually on disk — that is the
 loop, not a formality.
 {?verify-tool}
 The last thing you run before finishing should be `verify`: an assertion added to close
@@ -84,37 +80,35 @@ checked by its answer, not by whether you called it; a stop before it says fail-
 is sent back with the reason.
 {/verify-tool}
 
-**Once `verify` says fail-to-pass, the checks after it are checked by their answers, in
-this order.** Each is a question about a test that already flips, so work them in
-sequence:
 {?coverage-tool}
-{?!require-tools-with-score-report}
-- `coverage`, as a loop: while it lists lines your test never runs, change the test and
-  call it again, until every changed line runs or every part of the change (each function
-  holding a missed line) has had one turn. An
-  assertion added only to execute a line does not count;
-{/!require-tools-with-score-report}
-{?require-tools-with-score-report}
-- `coverage`, as a loop with a score: your changed-line coverage must reach 100%. While it
-  is below, change the test and call it again, until it does or every part of the change
-  (each function holding a missed line) has had one turn;
-{/require-tools-with-score-report}
-{/coverage-tool}
+**Once `verify` says fail-to-pass, what it reports after that is checked too, in this
+order:**
+- coverage, as a loop with a score: your changed-line coverage must reach 100%. While it
+  is below, change the test and call `verify` again, until it does or every part of the
+  change (each function holding a missed line) has had one turn;
 {?mutation-tool}
-{?!require-tools-with-score-report}
-- `mutation`, as a loop: while variants survive, add assertions about the behaviour they
-  break and call it again, until none survives or an honest attempt catches no more.
-{/!require-tools-with-score-report}
-{?require-tools-with-score-report}
-- `mutation`, as a loop with a score: maximise your mutation score. While variants
-  survive, add assertions about the behaviour they break and call it again, until none
+- mutation, as a loop with a score: maximise your mutation score. While variants survive,
+  add assertions about the behaviour they break and call `verify` again, until none
   survives or an honest attempt catches no more.
-{/require-tools-with-score-report}
 {/mutation-tool}
 
-Calling a tool once and stopping on an answer you did nothing with does not satisfy this.
+Reading a report and stopping on an answer you did nothing with does not satisfy this.
 While any of these loops is open you will be sent back with the reason, so working it now
 is the shorter path.
+{/coverage-tool}
+{?!coverage-tool}
+{?mutation-tool}
+**Once `verify` says fail-to-pass, what it reports after that is checked too, in this
+order:**
+- mutation, as a loop with a score: maximise your mutation score. While variants survive,
+  add assertions about the behaviour they break and call `verify` again, until none
+  survives or an honest attempt catches no more.
+
+Reading a report and stopping on an answer you did nothing with does not satisfy this.
+While any of these loops is open you will be sent back with the reason, so working it now
+is the shorter path.
+{/mutation-tool}
+{/!coverage-tool}
 {/require-tools}
 
 You are finished when {?verify-tool}the checks above have{/verify-tool}{?!verify-tool}the check above has{/!verify-tool} been run against the test as it now stands

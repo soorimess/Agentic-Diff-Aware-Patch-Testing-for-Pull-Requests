@@ -79,11 +79,10 @@ MODEL = "openrouter/qwen/qwen3-coder-30b-a3b-instruct"
 MUTANTS = "20"
 # The action cap for every run (user, 2026-10-04: 125, up from 100).
 MAX_ITERATIONS = "125"
-# The base configuration: every add-on added, except variants of another add-on
-# (`require-tools-with-score-report` is require-tools with scores, an experiment of its
-# own). Read off the registry, so an add-on added later is in base without anyone
-# editing this list.
-BASE_FLAGS = [flag(f.name) for f in FEATURES if f.added and not f.implies]
+# The base configuration: every add-on added, except variants of another add-on and the
+# ones kept out of base (`in_base`: the mutation stage since 2026-10-19, user). Read off
+# the registry, so an add-on added later is in base without anyone editing this list.
+BASE_FLAGS = [flag(f.name) for f in FEATURES if f.added and not f.implies and f.in_base]
 
 # Reasons the harness writes when a run never finished for reasons outside it.
 OUTSIDE = ("cut off after", "the agent run failed before a test was written",

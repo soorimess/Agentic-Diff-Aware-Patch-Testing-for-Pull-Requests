@@ -44,6 +44,11 @@ does change -- a result for some input, an error raised or no longer raised, a n
 argument or name that now works. A test that only checks that a private name exists
 tests the code's spelling, not its behaviour.
 
+Write the first test around a call to the changed code. A test that only imports the new
+code, checks that a name exists, inspects a signature, or catches the error a call raises
+can flip from failing to passing without testing anything. Call the code with an input that
+goes through what the change does, and assert on what it returns, raises or does.
+
 Some changes are about a situation this container does not have: an optional package
 that is missing, another version of a library, another platform. Then create that
 situation inside the test -- for example with pytest's `monkeypatch`, by hiding a module

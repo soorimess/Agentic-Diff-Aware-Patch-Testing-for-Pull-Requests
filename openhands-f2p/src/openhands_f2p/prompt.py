@@ -156,10 +156,14 @@ def _resolve_blocks(body: str, features: FeatureSet) -> str:
         body = resolved
 
 
+# Tools that no longer exist in any configuration: coverage and mutation are reports of
+# `verify` since 2026-10-19 (user), and a piece naming them as tools sends the agent to
+# call something it does not have.
+RETIRED_TOOLS = {"coverage", "mutation"}
+
+
 def _check_no_absent_tools(text: str, features: FeatureSet) -> None:
-    absent = set(features.absent_tools)
-    if not absent:
-        return
+    absent = set(features.absent_tools) | RETIRED_TOOLS
     named = sorted(absent & set(TOOL_REF.findall(text)))
     if named:
         raise AssertionError(

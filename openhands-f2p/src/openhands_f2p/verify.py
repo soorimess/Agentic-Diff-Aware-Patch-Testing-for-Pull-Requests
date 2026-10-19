@@ -344,7 +344,7 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
         where = (f" It never imports {', '.join(f'`{f}`' for f in files[:4])}, which the "
                  f"change modifies: call code from there."
                  if not cov.get("measured") and files else
-                 " `coverage` shows which they are and the conditions above each.")
+                 " Read the changed lines in the diff, with the conditions above each.")
         return ("\n\n**It does not reach the change.** Running it executes none of the "
                 "lines this pull request changes, so whatever it asserts is about code the "
                 "fix does not touch. Keep the idea and move the input: call the code the "
@@ -369,7 +369,7 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
                 "that execute when the module is imported, whatever the test does. These "
                 f"never run: {shown_missed}. Call the code that contains them, with an "
                 "input that sends execution through them, and assert on what it returns "
-                "or does. `coverage` shows each one and the conditions above it.")
+                "or does. Read each one in the diff, with the conditions above it.")
     if at_import and len(at_import) == len(cov.get("hit") or []):
         shown = ", ".join(f"`{h}`" for h in at_import[:4])
         return ("\n\n**It only imports the change.** The changed lines it runs are "
@@ -390,9 +390,9 @@ def reach_diagnosis(box: Sandbox, instance: dict[str, Any], rel: str) -> str:
                 f"assertion checks something true on both sides of the change, or the "
                 f"difference lies on a line the input never reaches. Work out what the "
                 f"changed lines compute differently, assert that, and check it with `verify` "
-                f"-- the flip comes first. (`coverage` shows those lines and the conditions "
-                f"above each, numbered as in the files *with* the change applied, so look "
-                f"them up in the diff rather than by line number in this checkout.)")
+                f"-- the flip comes first. (Those lines are numbered as in the files *with* "
+                f"the change applied, so look them up in the diff rather than by line number "
+                f"in this checkout.)")
     # "So the input is aimed at the right code ... Keep the input" claimed more than a
     # line count shows. Running a changed line is not taking the path the fix changes:
     # django-16333's form had no many-to-many field, sympy-21612's base was a `Mul` where
@@ -693,12 +693,8 @@ def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, st
                    f"test since, so nothing has checked the file on disk now.{quoted}"
                    f"Call `verify` with `target` set to `{rel}`, and keep going until it "
                    f"says fail-to-pass. "
-                   # `coverage` named only where the arm has it (no-coverage audit: the
-                   # sentence was ungated, though it never fired there).
-                   + ("`run_tests` and `coverage` do not answer this: each runs the test on "
-                      "one side of the change only." if coverage else
-                      "`run_tests` does not answer this: it runs the test on one side of the "
-                      "change only."))
+                   + "`run_tests` does not answer this: it runs the test on one side of the "
+                     "change only.")
         elif not flipped or still:
             if flipped and still:
                 said = (f"{len(flipped)} test(s) already fail before the change and pass "
@@ -740,11 +736,39 @@ def lost_flip(tool_log: list, rel: str, current: str | None) -> str:
     i, text = shots[-1]
     if text.strip() == (current or "").strip():
         return ""
+    # A version that reaches more of the change is not sent back (fix 2, 2026-10-19).
+    # Qiskit-12904 (large set) rewrote its import-only test to call the new functions,
+    # lost the flip on that first try, and was handed the import-only version with "write
+    # that version back" three times, until the refusal cap. `reach` is what `verify`
+    # measured for each version.
+    then, now = _reach_after(tool_log, i), _reach_now(tool_log, rel)
+    if then is not None and now is not None and now > then:
+        return (f"\n\nThis version runs more of the change than the last one `verify` called "
+                f"fail-to-pass ({now} changed lines against {then}). Keep the new calls and "
+                f"make the tests that fail pass for the right reason -- the output says "
+                f"which, and on which side of the change. The earlier fail-to-pass version, "
+                f"for reference only (tool call {i + 1}):\n\n```python\n{text.rstrip()}\n```")
     # Whole, never cut: the model is told to write it back, and a cut copy cannot be
     # (pylint-5136, large set 2026-10-16, was handed 3000 characters and lost its flip).
     return (f"\n\nEarlier, `verify` called this file fail-to-pass (tool call {i + 1}). Your "
             f"edits since have lost that. If they have not got closer, write that version "
             f"back and build from it:\n\n```python\n{text.rstrip()}\n```")
+
+
+def _reach_after(tool_log: list, i: int) -> int | None:
+    """Changed lines the version `verify` checked at `i` ran, from the coverage stage of
+    that same call (logged right after it), or from its own `reach`."""
+    for e in tool_log[i + 1:i + 3]:
+        if e.get("tool") == "coverage" and e.get("via") == "verify":
+            r = e.get("result") or {}
+            return r.get("covered") if r.get("measured") else None
+    return tool_log[i].get("reach")
+
+
+def _reach_now(tool_log: list, rel: str) -> int | None:
+    """Changed lines the file's last `verify` measured, when it measured them."""
+    last = _last(tool_log, "verify", rel)
+    return last[1].get("reach") if last else None
 
 
 def _says_f2p(e: dict) -> bool:
@@ -884,7 +908,7 @@ def _best_call(tool_log: list, tool: str, rel: str, score) -> tuple[int, dict] |
 def rewind_said(duty: str) -> str:
     """How a refusal that hands back the better version starts, per duty -- what the
     agent loop looks for to offer it only once."""
-    return f"**Your test was better before (`{duty}`).**"
+    return f"**Your test was better before ({duty}).**"
 
 
 def _rewind(tool_log: list, tool: str, rel: str, score, now: float | None,
@@ -915,11 +939,12 @@ def _rewind(tool_log: list, tool: str, rel: str, score, now: float | None,
         what = (f"it ran {cov.get('covered')} of {cov.get('executable_changed_lines')} "
                 f"changed lines" + (", including these, which no longer run: "
                                     + ", ".join(f"`{g}`" for g in gone[:6]) if gone else ""))
-    return (f"{rewind_said(tool)} Earlier, `{tool}` reported {score(best)}{unit} "
+    label = "mutation score" if tool == "mutation" else "changed-line coverage"
+    return (f"{rewind_said(tool)} Earlier, `verify` reported a {label} of {score(best)}{unit} "
             f"for it -- {what} -- and your edits since lowered it to {now}{unit}. This is "
-            f"that version, exactly as `{tool}` measured it:\n\n```python\n"
+            f"that version, exactly as `verify` measured it:\n\n```python\n"
             f"{text.rstrip()}\n```\n\nWrite it back with `write_file` -- keep a newer "
-            f"assertion only if it loses nothing -- then call `verify` and `{tool}`. "
+            f"assertion only if it loses nothing -- then call `verify`. "
             + (f"You will be sent back while your test runs fewer changed lines than this "
                f"version did.\n\n" if repeat else
                f"It is offered once: after it, a lower score counts like any attempt that "
@@ -957,8 +982,8 @@ def _never_entered(cov: dict) -> str:
     # the change first -- through the code that uses them.
     added = sorted({g["path"] for g in cold} & set(cov.get("new_files") or []))
     new = (f" {', '.join(f'`{a}`' for a in added)} {'is a file' if len(added) == 1 else 'are files'} "
-           f"this change adds: absent before the fix, as expected -- `coverage` and `mutation` "
-           f"apply the change before they measure, so those lines can run. Reach them through "
+           f"this change adds: absent before the fix, as expected -- `verify` applies the "
+           f"change before it measures, so those lines can run. Reach them through "
            f"the public code that uses them, the behaviour the issue describes."
            if added else "")
     in_cold = sum(g["missed"] for g in cold)
@@ -1051,16 +1076,18 @@ def mutation_score(e: dict) -> float | None:
 
 
 def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
-             scored: bool = False,
+             scored: bool = True,
              refused: dict[str, int] | None = None,
              last_refused: dict[str, int] | None = None,
              rewound: set[str] | None = None,
              coverage_rounds: list[int] | None = None) -> tuple[str, str] | None:
     """The coverage and mutation loops, once the test flips. `require-tools`.
 
-    Two loops (user, 2026-09-29), each on the tool's answer about the scored file:
+    Two loops (user, 2026-09-29), each on `verify`'s report about the scored file -- its
+    coverage and mutation stages (one tool since 2026-10-19; logged as `coverage` and
+    `mutation` entries with `via: verify`):
 
-    `coverage` until no changed line is missed; `mutation` until no variant survives.
+    coverage until no changed line is missed; mutation until no variant survives.
 
     Each is open while its last answer falls short, and when the test was written after
     that answer (the answer describes a file that no longer exists -- call the tool
@@ -1071,10 +1098,9 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
     does not exist yet (the qwen run made eight such calls before `verify` had flipped,
     and `mutation` answered one with "your test does not pass on the fixed code yet").
 
-    `scored` (`--add-require-tools-with-score-report`): the same loops, with the scores
-    named -- changed-line coverage and mutation score -- and the agent asked to reach
-    100% and maximise. Before 2026-09-29 the plain duty was one reminder, and in score mode
-    mutation had no loop; both loop now.
+    `scored`: the scores named -- changed-line coverage and mutation score -- and the agent
+    asked to reach 100% and maximise. The default since 2026-10-19 (user): the
+    `require-tools-with-score-report` flag became the system.
 
     `refused` maps each duty to the tool-log position of the first refusal that named
     it; an attempt only ends a loop short of its goal when it came after that (see
@@ -1107,15 +1133,13 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
     # nothing changed since), the coverage question is answered; asking for `coverage`
     # again cost five refusals in the base run at cap 125 (user, 2026-10-04: only at
     # 100% -- a shortfall still needs the tool, which names the lines).
-    v = _last(tool_log, "verify", rel)
-    full_by_verify = bool(v and v[1].get("reach_full"))
-    if "coverage" in instruments and not full_by_verify:
+    if "coverage" in instruments:
         got = _last(tool_log, "coverage", rel)
         if got is None:
             gaps.append(("coverage",
-                         "Your test is fail-to-pass. Now call `coverage`: how much of the "
-                         "change it reaches is the next question, and it is currently "
-                         "unknown."))
+                         "Your test is fail-to-pass. Call `verify` on it again: its coverage "
+                         "report, how much of the change the test runs, is the next "
+                         "question."))
         else:
             i, e = got
             cov = e.get("result") or {}
@@ -1129,9 +1153,9 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
             # always been re-asked after an edit; the duties now are too.
             if cov.get("measured") and wrote_test_after(tool_log, i, rel):
                 gaps.append(("coverage",
-                             f"{score}You changed the test after the last `coverage`, so "
-                             f"its answer describes a file that no longer exists. Call "
-                             f"`coverage` again on what is on disk now."))
+                             f"{score}You changed the test after the last `verify`, so its "
+                             f"coverage report describes a file that no longer exists. Call "
+                             f"`verify` again on what is on disk now."))
             elif not cov.get("measured") or not cov.get("missed"):
                 pass
             elif back := _rewind(tool_log, "coverage", rel, coverage_score, pct, "%",
@@ -1159,16 +1183,16 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                              if target["function"] == "<module>" else
                              f"`{target['function']}` in `{fname}`")
                     new = (f" `{target['path']}` is a file this change adds: absent before "
-                           f"the fix, as expected -- `coverage` applies the change before it "
+                           f"the fix, as expected -- `verify` applies the change before it "
                            f"measures." if target["path"] in (cov.get("new_files") or []) else "")
                     gaps.append(("coverage",
-                                 f"{score}{unchanged_since_refusal('coverage')}{lost}`coverage` last listed {len(cov['missed'])} changed "
+                                 f"{score}{unchanged_since_refusal('coverage')}{lost}`verify` last listed {len(cov['missed'])} changed "
                                  f"line(s) your test never runs, in {len(left)} part(s) of the "
                                  f"change it has not tried yet.\n\n{COVERAGE_TARGET_SAID} "
                                  f"{where} ({target['missed']} missed line"
                                  f"{'s' if target['missed'] != 1 else ''}).{new} Change the test "
                                  f"so it goes through that code, asserting on what it returns, "
-                                 f"raises or does there -- then call `verify`, then `coverage`. "
+                                 f"raises or does there -- then call `verify` again. "
                                  f"Each part of the change gets one such turn; this ends when "
                                  f"every part has had its turn or every line runs. A call with no "
                                  f"assertion behind it does not count."))
@@ -1176,9 +1200,9 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
         got = _last(tool_log, "mutation", rel)
         if got is None:
             gaps.append(("mutation",
-                         "You never called `mutation`. Call it and work the survivors: each "
-                         "is a wrong version of this change your test cannot tell from the "
-                         "right one."))
+                         "Your test is fail-to-pass. Call `verify` on it again and work the "
+                         "survivors its mutation report lists: each is a wrong version of "
+                         "this change your test cannot tell from the right one."))
         else:
             i, e = got
             ms = mutation_score(e)
@@ -1186,9 +1210,9 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                      f"caught); maximise it. " if scored and ms is not None else "")
             if e.get("total") and wrote_test_after(tool_log, i, rel):
                 gaps.append(("mutation",
-                             f"{score}You changed the test after the last `mutation`, so "
-                             f"its answer describes a file that no longer exists. Call "
-                             f"`mutation` again on what is on disk now."))
+                             f"{score}You changed the test after the last `verify`, so its "
+                             f"mutation report describes a file that no longer exists. Call "
+                             f"`verify` again on what is on disk now."))
             elif not e.get("survived"):
                 pass
             elif not _no_better(tool_log, "mutation", rel, mutation_score,
@@ -1200,15 +1224,15 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                         or _lost(tool_log, "mutation", rel, mutation_score, ms, "%")
                         if "mutation" not in rewound else "")
                 gaps.append(("mutation",
-                             f"{score}{unchanged_since_refusal('mutation')}{lost}`mutation` last reported {len(e['survived'])} wrong "
+                             f"{score}{unchanged_since_refusal('mutation')}{lost}`verify` last reported {len(e['survived'])} wrong "
                              f"version(s) of the fix your test does not notice. Keep going: "
                              f"for each, work out the behaviour it breaks, add an assertion "
                              f"about that behaviour -- what the code returns, raises or does "
-                             f"-- call `verify`, then `mutation` again. Never assert on the "
+                             f"-- then call `verify` again. Never assert on the "
                              f"exact expression a variant changed just to make it fail. If "
                              f"an honest attempt catches no more of them, that ends this: "
                              f"what is left breaks nothing a test here can observe. An "
-                             f"attempt is a changed test followed by `mutation`; arguing "
+                             f"attempt is a changed test followed by `verify`; arguing "
                              f"that a variant is harmless is not one."))
     if not gaps:
         return None

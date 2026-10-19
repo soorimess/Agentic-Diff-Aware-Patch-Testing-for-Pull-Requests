@@ -10,10 +10,13 @@ Work through these checks in order. Each one answers a question the previous lea
 and each catches a mistake the others do not.
 
 They are not all the same kind of thing. The first two are gates: the file runs, and the
-test flips. The ones after them are instruments you work with — call one, change the test
-in the light of what it says, call it again, as many times as it takes. Nothing here is a
-one-shot formality, and none of these tools costs anything but time; each puts the tree
-back exactly as it found it, so you can call any of them whenever you want. When you are
+test flips.{?coverage-tool} The ones after them are what `verify` reports once the test
+flips, and they are instruments you work with — read the report, change the test in the
+light of it, call `verify` again, as many times as it takes.{/coverage-tool}{?!coverage-tool}{?mutation-tool} The one after them is what `verify` reports once the test
+flips, and it is an instrument you work with — read the report, change the test in the
+light of it, call `verify` again, as many times as it takes.{/mutation-tool}{/!coverage-tool} Nothing here is a
+one-shot formality, and none of it costs anything but time; `verify` puts the tree back
+exactly as it found it, so you can call it whenever you want. When you are
 done changing the test, run `verify` once more: an assertion added for any other reason
 can quietly stop the test failing on the old code, and then it is no longer the test you
 set out to write.

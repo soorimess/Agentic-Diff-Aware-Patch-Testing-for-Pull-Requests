@@ -219,7 +219,8 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
         or (r.get("event") == "stop check" and str(r.get("detail", "")).startswith("round")))]
     # Placed by time only when both line up with what they time; a run recorded before
     # these rows existed keeps the order it is built in.
-    timed = (len(offsets) == sum(1 for e in tool_log if e.get("tool") != "guard")
+    timed = (len(offsets) == sum(1 for e in tool_log
+                                 if e.get("tool") != "guard" and not e.get("via"))
              and len(sent) == len(injected))
     events: list[dict[str, Any]] = []
     n = 0
@@ -281,6 +282,10 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
             if msg.get("at_tool") == i:
                 say(msg, offset)
         tool = entry.get("tool")
+        # A stage of the `verify` call before it (coverage, mutation): part of that call's
+        # answer, which `shown` already holds, not a call of its own.
+        if entry.get("via"):
+            continue
         if tool == "guard":
             # The harness undoing an edit to a file that existed at base -- ours, not a
             # call the agent made, so it is not drawn as one.

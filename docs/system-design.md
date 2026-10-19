@@ -665,13 +665,13 @@ pair on 36 should be read as direction, not effect.
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1479 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1485 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 167 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 293 | How does the generated test compare with the developer's, on concept, issue coverage and readability? |
-| `coverage_metric.py` | 601 | Of the lines this pull request changed, how many did the test execute? |
+| `coverage_metric.py` | 608 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 13 | One instance, from whichever dataset this run is over. |
 | `docs.py` | 168 | Refresh the generated blocks in `docs/system-design.md`. |
-| `features.py` | 343 | What the agent is given, as one registry that everything else reads. |
+| `features.py` | 337 | What the agent is given, as one registry that everything else reads. |
 | `flow.py` | 114 | One chronological record of everything that happens to one PR. |
 | `image_build.py` | 125 | Images no registry has: built here, from the Dockerfile a dataset's adapter wrote. |
 | `image_cache.py` | 313 | Instance images kept on the host disk, so each one is pulled from the registry once. |
@@ -683,22 +683,22 @@ pair on 36 should be read as direction, not effect.
 | `mutants.py` | 710 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
 | `parallel.py` | 262 | Running several pull requests at once, as separate processes. |
-| `prompt.py` | 342 | Assemble the agent's prompt from the pieces in prompts/. |
+| `prompt.py` | 346 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 354 | The instances we develop against: twenty-six, spanning every repository and a decade. |
-| `runners.py` | 597 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 626 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
+| `runners.py` | 611 | Three test-runner conventions, and how to read what they print. |
+| `runs.py` | 653 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 369 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 1213 | OpenHands tools whose executors run inside the SWE-bench container. |
-| `sources/__init__.py` | 113 | Where instances come from: one adapter per dataset, one standard row for the harness. |
+| `sandbox_tools.py` | 1031 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sources/__init__.py` | 119 | Where instances come from: one adapter per dataset, one standard row for the harness. |
 | `sources/__main__.py` | 162 | The datasets, and getting one ready to run. |
-| `sources/chaco.py` | 958 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
-| `sources/swebench.py` | 94 | SWE-bench Verified: the dataset the harness was built on, read as it always was. |
-| `sources/watch.py` | 149 | Scan finished runs for every failure signature found so far, so none repeats unseen. |
+| `sources/chaco.py` | 972 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
+| `sources/swebench.py` | 97 | SWE-bench Verified: the dataset the harness was built on, read as it always was. |
+| `sources/watch.py` | 163 | Scan finished runs for every failure signature found so far, so none repeats unseen. |
 | `statements.py` | 111 | Which statement a line belongs to. |
-| `swebench_env.py` | 93 | The SWE-bench environment, as one import. |
+| `swebench_env.py` | 94 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
-| `trajectory.py` | 425 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 1340 | The F2P decision. One implementation, used by every arm. |
+| `trajectory.py` | 437 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
+| `verify.py` | 1479 | The F2P decision. One implementation, used by every arm. |
 | `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
 <!-- /generated:modules -->
 
@@ -708,10 +708,43 @@ pair on 36 should be read as direction, not effect.
 - `run`
 - `write_file`
 - `run_tests`
-- `coverage`
-- `mutation`
 - `verify`
 <!-- /generated:tools -->
+
+### One `verify`, with stages (2026-10-19, user)
+
+`coverage` and `mutation` are no longer tools. `verify` runs, in order: the fail-to-pass
+check; then, once the test is fail-to-pass and only if the configuration has them, the
+**coverage stage** (`--add-coverage-tool`) and the **mutation stage**
+(`--add-mutation-tool`) -- on every call. One report: the verdict, then
+`## Coverage: N% ... The target is 100%.` with every missed changed line as line numbers
+grouped by file and function (no source: the agent reads them in the diff), then
+`## Mutation: N% ... Maximise it.` with every surviving variant, then the runner output.
+Each stage is also logged as its own entry (`tool: coverage|mutation`, `via: verify`)
+right after the `verify` entry, so the stop checks (`duty_gap`, the exhaustion rule, the
+regression rewind) read them as they read the old tools; the trajectory export skips
+`via` entries (the call's `shown` text already holds them).
+
+- The scores are always shown and are targets: `require-tools-with-score-report` is gone
+  and its text is the default (`duty_gap(scored=True)`).
+- `base` no longer has the mutation stage (`Feature.in_base=False`); `base-coverage` is
+  base without the coverage stage. `Feature.stage` replaces `tools` for the two;
+  `instruments()` lists stages. `prompt.RETIRED_TOOLS` refuses a prompt that names
+  `coverage` or `mutation` as a tool.
+- **Full missed-line report.** The old tool printed source and guards for at most 20
+  lines per file and then "... and N more" (pylint-4492: 15 lines only as a count).
+  `coverage_metric._by_function` now keeps each function's missed `lines`.
+- **Fix 1, first test around a call** (`20-goal.md`): an import, `hasattr`, signature
+  check or caught error flips without testing anything.
+- **Fix 2, the hand-back does not pull back** (`lost_flip`): `verify` records `reach`
+  (changed lines run) on each entry, measuring a non-fail-to-pass version too once an
+  earlier one flipped. When the current version runs more than the last fail-to-pass one,
+  the old version is offered for reference only and the agent is told to keep its new
+  calls (Qiskit-12904: sent back to an import-only test three times).
+- **Fix 3, low-start alarm** (`coverage_report`): under 10% coverage, a rewrite around
+  the largest missed function is asked for, not another assertion.
+- **Fix 4, refusal count**: only rounds the agent acted in count towards `MAX_REFUSALS`
+  (Qiskit-12474: three of ten spent on back-to-back stops).
 
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
@@ -1225,11 +1258,10 @@ uv run openhands-f2p --out-root out/nocov --add-verify-tool --add-mutation-tool 
 | flag | what it does |
 |---|---|
 | `--add-verify-tool` | add the `verify` tool, which runs the agent's test before and after the fix and says whether it flips. Without it the agent can watch its test fail on this code but never watch it pass; the harness decides the verdict either way |
-| `--add-coverage-tool` | add the `coverage` tool: which changed lines the test never runs, with their code and the conditions above them. The harness measures changed-line coverage either way |
-| `--add-mutation-tool` | add the `mutation` tool, which runs the agent's test against small wrong variants of the fix and reports which ones it fails to notice. The harness measures a mutation score either way, on mutants the agent was never shown |
+| `--add-coverage-tool` | add the coverage stage to `verify`: once the test is fail-to-pass, every `verify` reports changed-line coverage (target 100%) and every missed line, by function. The harness measures changed-line coverage either way |
+| `--add-mutation-tool` | add the mutation stage to `verify`: once the test is fail-to-pass, every `verify` runs it against small wrong variants of the fix and reports the mutation score and each variant it fails to notice. The harness measures a mutation score either way, on mutants the agent was never shown |
 | `--add-guard` | add the guard: edits the agent makes to files that were already here are reverted between actions. Without it the prohibition stays in the prompt and the audit still reports a dirty tree as BROKEN, but an agent that applies the fix to the library keeps it |
-| `--add-require-tools` | add the stop checks, as three loops: `verify` until the test is fail-to-pass (the harness also runs it at base: no file, nothing collected, passing or skipped is refused), then `coverage` until no changed line is missed and `mutation` until no variant survives -- each ending early when an honest attempt stops improving it |
-| `--add-require-tools-with-score-report` | add the loops of --add-require-tools, with scores: `coverage` and `mutation` report changed-line coverage (target 100 percent) and mutation score (maximised), and the agent is asked to reach them. Implies --add-require-tools |
+| `--add-require-tools` | add the stop checks, as loops on what `verify` reports: until the test is fail-to-pass (the harness also runs it at base: no file, nothing collected, passing or skipped is refused), then, with the coverage stage, until coverage is 100% or each function holding a missed line has had a turn, and with the mutation stage, until no variant survives or an honest attempt stops improving the score |
 | `--add-second-chance` | add a restart: when the run ends without a test that scores fail-to-pass and actions remain, the agent starts a fresh conversation with the task, the record of its first attempt, the test it left (unless the run was BROKEN) and the rest of its budget. The run is scored again at the end |
 
 **which model answers**

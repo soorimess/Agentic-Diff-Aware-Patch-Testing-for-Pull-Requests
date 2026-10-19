@@ -326,7 +326,7 @@ def _f2p_history(tool_log: list, final_code: str, final_f2p: str, d: Path,
 
 # How a refusal for each duty reads when it is about a shortfall -- lines missed,
 # variants surviving -- rather than a stale or a missing answer.
-SHORTFALL_SAID = {"coverage": "`coverage` last listed", "mutation": "`mutation` last reported"}
+SHORTFALL_SAID = {"coverage": "`verify` last listed", "mutation": "`verify` last reported"}
 
 
 def _first_refusals(injected: list[dict]) -> dict[str, int]:
@@ -540,7 +540,6 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     # (coverage and mutation answers once it flips). All of them say only base-observable
     # facts and return None when there is nothing to say. The second chance is not here:
     # it is a restart after the run is scored, in `do_pr`.
-    scored = "require-tools-with-score-report" in features
     retry: dict | None = None
     # The cap is a fact about the first stop. Counting the continuation's actions into it
     # would report a run as capped because the two stretches together passed the limit,
@@ -566,7 +565,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 # judge's `meaningful` label instead.
                 found = (V.shortfall(box, instance, rel)
                          or V.verify_gap(tool_log, rel, coverage="coverage-tool" in features)
-                         or V.duty_gap(tool_log, instruments(features), rel, scored=scored,
+                         or V.duty_gap(tool_log, instruments(features), rel,
                                        refused=_first_refusals(injected),
                                        last_refused=_last_refusals(injected),
                                        coverage_rounds=[m.get("at_tool", 0) for m in injected
@@ -611,7 +610,11 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                             "not needed" if not rounds else
                             f"gap closed after {len(rounds)} refusal(s)")
                 break
-            if len(rounds) >= MAX_REFUSALS:
+            # Only rounds the agent acted in count towards the cap (fix 4, 2026-10-19): a stop
+            # sent straight back after a refusal is not an attempt, and Qiskit-12474 (large
+            # set) spent three of its ten that way, ending at action 52 of 125. Two such
+            # rounds in a row end the loop below.
+            if sum(1 for r in rounds if r["actions"] > 1) >= MAX_REFUSALS:
                 flow.record(flow.AGENT, "stop check",
                             f"stopped refusing after {MAX_REFUSALS} rounds; gap still open")
                 break
