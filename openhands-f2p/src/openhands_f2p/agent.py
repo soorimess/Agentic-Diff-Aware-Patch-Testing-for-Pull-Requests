@@ -90,7 +90,10 @@ def _recap(counts: dict[str, int], tool_log: list) -> str:
     # `guard` entries are the harness putting a file back, not a tool the agent called.
     reverted = sum(1 for e in tool_log if e.get("tool") == "guard")
     for e in tool_log:
-        if e.get("tool") == "guard":
+        # Nor are `verify`'s stages (`via`): part of that call's answer. Counted as tools,
+        # the recap told pylint-4492 (merged-verify trial) it had called `coverage` four
+        # times -- a tool it does not have.
+        if e.get("tool") == "guard" or e.get("via"):
             continue
         used[e.get("tool") or "?"] = used.get(e.get("tool") or "?", 0) + 1
     if used:

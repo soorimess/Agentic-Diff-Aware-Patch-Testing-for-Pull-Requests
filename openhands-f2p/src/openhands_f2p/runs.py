@@ -109,6 +109,9 @@ def _tools(d: Path) -> str:
         if name == "guard":
             reverted += len(e.get("reverted") or []) or 1
             continue
+        # A stage of the `verify` call before it, not a call of its own.
+        if e.get("via"):
+            continue
         counts[name] = counts.get(name, 0) + 1
     body = ", ".join(f"`{k}` x{v}" for k, v in
                      sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))) or "none"

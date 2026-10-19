@@ -742,15 +742,17 @@ def lost_flip(tool_log: list, rel: str, current: str | None) -> str:
     # that version back" three times, until the refusal cap. `reach` is what `verify`
     # measured for each version.
     then, now = _reach_after(tool_log, i), _reach_now(tool_log, rel)
+    # The agent's own count of calls: neither a guard revert nor a stage of a `verify`.
+    n = sum(1 for e in tool_log[:i + 1] if e.get("tool") != "guard" and not e.get("via"))
     if then is not None and now is not None and now > then:
         return (f"\n\nThis version runs more of the change than the last one `verify` called "
                 f"fail-to-pass ({now} changed lines against {then}). Keep the new calls and "
                 f"make the tests that fail pass for the right reason -- the output says "
                 f"which, and on which side of the change. The earlier fail-to-pass version, "
-                f"for reference only (tool call {i + 1}):\n\n```python\n{text.rstrip()}\n```")
+                f"for reference only (tool call {n}):\n\n```python\n{text.rstrip()}\n```")
     # Whole, never cut: the model is told to write it back, and a cut copy cannot be
     # (pylint-5136, large set 2026-10-16, was handed 3000 characters and lost its flip).
-    return (f"\n\nEarlier, `verify` called this file fail-to-pass (tool call {i + 1}). Your "
+    return (f"\n\nEarlier, `verify` called this file fail-to-pass (tool call {n}). Your "
             f"edits since have lost that. If they have not got closer, write that version "
             f"back and build from it:\n\n```python\n{text.rstrip()}\n```")
 
