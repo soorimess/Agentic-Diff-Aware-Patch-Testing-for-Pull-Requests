@@ -216,6 +216,11 @@ applies to SWE-bench as well:
   (silently), while both tell the model to write that version back. Large-set base: 11 runs
   got a cut copy; pylint-5136 lost its flip and ended NO, matplotlib-24013 and sphinx-7380
   ended below their best.
+- **`trajectory.json` leaves out the harness's plumbing** (2026-10-19, user). The patch
+  applied and reverted around every check, each scored mutant and each stop-check probe
+  are not written as environment events (pylint-4492: 103 of 116); setup, the final scoring
+  and the audit stay. The steps remain in `flow.log`, `tool_log.json` and `result.json`;
+  the audits (`sources/watch.py`, `datasets/large/summarize_runs.py`) never read them.
 - **Tests go into mirrored test trees** (`pandas/tests/arrays` for `pandas/core/arrays`),
   and the example tests offered are named after the changed modules.
 - **The goal prompt says not every PR fixes a bug**, and that a check that a private name

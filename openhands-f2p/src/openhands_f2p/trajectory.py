@@ -96,6 +96,8 @@ def _as_markdown(task: str) -> str:
 # The flow row each tool call leaves, one per call (`on_event` in `agent.run_agent`).
 _TOOL_EVENTS = {"RunAction", "WriteAction", "TestAction", "VerifyAction", "CoverageAction",
                 "MutationAction"}
+# Harness steps inside every check, left out of the trajectory (see the verification block).
+_PLUMBING = {"apply patch", "revert patch", "mutant", "stop-check probe"}
 
 _CALL_NAMES = {"sandbox_run": "run", "sandbox_write": "write_file",
                "sandbox_test": "run_tests", "sandbox_verify": "verify",
@@ -360,9 +362,14 @@ def build(out_dir: Path) -> list[dict[str, Any]]:
             say(msg, float(len(tool_log)))
 
     # --- verification, which is the harness and not the agent ----------------
+    # Without the harness's own plumbing: the patch applied and reverted around every
+    # check, each scored mutant, each stop-check probe. pylint-4492 (large set) had 103 of
+    # them among 116 harness events, between the agent's steps. They stay in flow.log,
+    # tool_log.json and result.json; the trajectory keeps the setup, the final scoring
+    # and the audit.
     last = flow_rows[-1]["t"] if flow_rows else float(len(tool_log))
     for row in flow_rows:
-        if row["phase"] not in ("verify", "audit"):
+        if row["phase"] not in ("verify", "audit") or row["event"] in _PLUMBING:
             continue
         add({"source": "environment", "key": f"{row['phase']}: {row['event']}",
              "value": row["detail"], "message": row["detail"]}, row["t"])
