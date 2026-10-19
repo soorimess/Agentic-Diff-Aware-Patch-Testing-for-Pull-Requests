@@ -1,0 +1,254 @@
+diff --git a/scipy/optimize/_differentiable_functions.py b/scipy/optimize/_differentiable_functions.py
+index 46d38254a0d16ea4346d64b6c400d4da97e49263..e990dae1ef15dde84ee06bf70d358dcd8331f97e 100644
+--- a/scipy/optimize/_differentiable_functions.py
++++ b/scipy/optimize/_differentiable_functions.py
+@@ -1,4 +1,6 @@
+ from collections import namedtuple
++from functools import partial
++
+ import numpy as np
+ import scipy.sparse as sps
+ from ._numdiff import approx_derivative, group_columns
+@@ -12,7 +14,7 @@ from scipy._lib._util import _ScalarFunctionWrapper
+ FD_METHODS = ('2-point', '3-point', 'cs')
+ 
+ 
+-class _GradWrapper:
++class _ScalarGradWrapper:
+     """
+     Wrapper class for gradient calculation
+     """
+@@ -49,7 +51,7 @@ class _GradWrapper:
+         return g
+ 
+ 
+-class _HessWrapper:
++class _ScalarHessWrapper:
+     """
+     Wrapper class for hess calculation via finite differences
+     """
+@@ -205,8 +207,8 @@ class ScalarFunction:
+            will be set. However, a subsequent call with a different argument
+            of *any* of the methods may overwrite the attribute.
+     """
+-    def __init__(self, fun, x0, args, grad, hess, finite_diff_rel_step,
+-                 finite_diff_bounds, epsilon=None, workers=None):
++    def __init__(self, fun, x0, args, grad, hess, finite_diff_rel_step=None,
++                 finite_diff_bounds=(-np.inf, np.inf), epsilon=None, workers=None):
+ 
+         if not callable(grad) and grad not in FD_METHODS:
+             raise ValueError(
+@@ -273,7 +275,7 @@ class ScalarFunction:
+         self._update_fun()
+ 
+         # Initial gradient evaluation
+-        self._wrapped_grad = _GradWrapper(
++        self._wrapped_grad = _ScalarGradWrapper(
+             grad,
+             fun=self._wrapped_fun,
+             args=args,
+@@ -292,7 +294,7 @@ class ScalarFunction:
+             self._wrapped_hess = _FakeCounter(ngev=0, nhev=0)
+         else:
+             if callable(hess):
+-                self._wrapped_hess = _HessWrapper(
++                self._wrapped_hess = _ScalarHessWrapper(
+                     hess,
+                     x0=x0,
+                     args=args,
+@@ -301,7 +303,7 @@ class ScalarFunction:
+                 self.H = self._wrapped_hess.H
+                 self.H_updated = True
+             elif hess in FD_METHODS:
+-                self._wrapped_hess = _HessWrapper(
++                self._wrapped_hess = _ScalarHessWrapper(
+                     hess,
+                     x0=x0,
+                     args=args,
+@@ -404,6 +406,10 @@ class ScalarFunction:
+         return self.f, self.g
+ 
+ 
++def _VectorFunWrapper(fun, x):
++    return np.atleast_1d(fun(x))
++
++
+ class VectorFunction:
+     """Vector function and its derivatives.
+ 
+@@ -422,8 +428,8 @@ class VectorFunction:
+            of *any* of the methods may overwrite the attribute.
+     """
+     def __init__(self, fun, x0, jac, hess,
+-                 finite_diff_rel_step, finite_diff_jac_sparsity,
+-                 finite_diff_bounds, sparse_jacobian):
++                 finite_diff_rel_step=None, finite_diff_jac_sparsity=None,
++                 finite_diff_bounds=None, sparse_jacobian=None, workers=None):
+         if not callable(jac) and jac not in FD_METHODS:
+             raise ValueError(f"`jac` must be either callable or one of {FD_METHODS}.")
+ 
+@@ -456,6 +462,9 @@ class VectorFunction:
+         self.J_updated = False
+         self.H_updated = False
+ 
++        # normalize workers
++        workers = workers or map
++
+         finite_diff_options = {}
+         if jac in FD_METHODS:
+             finite_diff_options["method"] = jac
+@@ -465,11 +474,17 @@ class VectorFunction:
+                 finite_diff_options["sparsity"] = (finite_diff_jac_sparsity,
+                                                    sparsity_groups)
+             finite_diff_options["bounds"] = finite_diff_bounds
++            finite_diff_options["workers"] = workers
++            finite_diff_options["full_output"] = True
+             self.x_diff = np.copy(self.x)
+         if hess in FD_METHODS:
+             finite_diff_options["method"] = hess
+             finite_diff_options["rel_step"] = finite_diff_rel_step
+             finite_diff_options["as_linear_operator"] = True
++            # workers is not useful for evaluation of the LinearOperator
++            # produced by approx_derivative. Only two/three function
++            # evaluations are used, and the LinearOperator may persist
++            # outside the scope that workers is valid in.
+             self.x_diff = np.copy(self.x)
+         if jac in FD_METHODS and hess in FD_METHODS:
+             raise ValueError("Whenever the Jacobian is estimated via "
+@@ -477,12 +492,10 @@ class VectorFunction:
+                              "be estimated using one of the quasi-Newton "
+                              "strategies.")
+ 
+-        # Function evaluation
+-        def fun_wrapped(x):
+-            self.nfev += 1
+-            return np.atleast_1d(fun(x))
++        fun_wrapped = partial(_VectorFunWrapper, fun)
+ 
+         def update_fun():
++            self.nfev += 1
+             self.f = fun_wrapped(self.x)
+ 
+         self._update_fun_impl = update_fun
+@@ -523,34 +536,38 @@ class VectorFunction:
+                 self.J = jac_wrapped(self.x)
+ 
+         elif jac in FD_METHODS:
+-            self.J = approx_derivative(fun_wrapped, self.x, f0=self.f,
+-                                       **finite_diff_options)
++            self.J, dct = approx_derivative(fun_wrapped, self.x, f0=self.f,
++                                            **finite_diff_options)
+             self.J_updated = True
++            self.nfev += dct['nfev']
+ 
+             if (sparse_jacobian or
+                     sparse_jacobian is None and sps.issparse(self.J)):
+                 def update_jac():
+                     self._update_fun()
+-                    self.J = sps.csr_array(
++                    self.J, dct = sps.csr_array(
+                         approx_derivative(fun_wrapped, self.x, f0=self.f,
+                                           **finite_diff_options))
++                    self.nfev += dct['nfev']
+                 self.J = sps.csr_array(self.J)
+                 self.sparse_jacobian = True
+ 
+             elif sps.issparse(self.J):
+                 def update_jac():
+                     self._update_fun()
+-                    self.J = approx_derivative(fun_wrapped, self.x, f0=self.f,
+-                                               **finite_diff_options).toarray()
++                    self.J, dct = approx_derivative(fun_wrapped, self.x, f0=self.f,
++                                                    **finite_diff_options).toarray()
++                    self.nfev += dct['nfev']
+                 self.J = self.J.toarray()
+                 self.sparse_jacobian = False
+ 
+             else:
+                 def update_jac():
+                     self._update_fun()
+-                    self.J = np.atleast_2d(
+-                        approx_derivative(fun_wrapped, self.x, f0=self.f,
+-                                          **finite_diff_options))
++                    J, dct = approx_derivative(fun_wrapped, self.x, f0=self.f,
++                                               **finite_diff_options)
++                    self.J = np.atleast_2d(J)
++                    self.nfev += dct['nfev']
+                 self.J = np.atleast_2d(self.J)
+                 self.sparse_jacobian = False
+ 
+@@ -591,6 +608,7 @@ class VectorFunction:
+                                            f0=self.J.T.dot(self.v),
+                                            args=(self.v,),
+                                            **finite_diff_options)
++
+             update_hess()
+             self.H_updated = True
+         elif isinstance(hess, HessianUpdateStrategy):
+diff --git a/scipy/optimize/_numdiff.py b/scipy/optimize/_numdiff.py
+index fe28b9a83800180aa4a69abdacfadc181e4162a7..98b137ed151a480128874bf662a6e4ec05c044f2 100644
+--- a/scipy/optimize/_numdiff.py
++++ b/scipy/optimize/_numdiff.py
+@@ -390,7 +390,10 @@ def approx_derivative(fun, x0, method='3-point', rel_step=None, abs_step=None,
+         Dictionary containing extra information about the calculation. The
+         keys include:
+ 
+-        - `nfev`, number of function evaluations.
++        - `nfev`, number of function evaluations. If `as_linear_operator` is True
++           then `fun` is expected to track the number of evaluations itself.
++           This is because multiple calls may be made to the linear operator which
++           are not trackable here.
+ 
+     See Also
+     --------
+@@ -555,8 +558,8 @@ def approx_derivative(fun, x0, method='3-point', rel_step=None, abs_step=None,
+         if rel_step is None:
+             rel_step = _eps_for_method(x0.dtype, f0.dtype, method)
+ 
+-        J, _nfev = _linear_operator_difference(fun_wrapped, x0,
+-                                               f0, rel_step, method)
++        J, _ = _linear_operator_difference(fun_wrapped, x0,
++                                           f0, rel_step, method)
+     else:
+         # by default we use rel_step
+         if abs_step is None:
+@@ -619,7 +622,7 @@ def _linear_operator_difference(fun, x0, f0, h, method):
+     n = x0.size
+ 
+     if method == '2-point':
+-        nfev = 1
++        # nfev = 1
+         def matvec(p):
+             if np.array_equal(p, np.zeros_like(p)):
+                 return np.zeros(m)
+@@ -629,7 +632,7 @@ def _linear_operator_difference(fun, x0, f0, h, method):
+             return df / dx
+ 
+     elif method == '3-point':
+-        nfev = 2
++        # nfev = 2
+         def matvec(p):
+             if np.array_equal(p, np.zeros_like(p)):
+                 return np.zeros(m)
+@@ -642,7 +645,7 @@ def _linear_operator_difference(fun, x0, f0, h, method):
+             return df / dx
+ 
+     elif method == 'cs':
+-        nfev = 1
++        # nfev = 1
+         def matvec(p):
+             if np.array_equal(p, np.zeros_like(p)):
+                 return np.zeros(m)
+@@ -651,11 +654,10 @@ def _linear_operator_difference(fun, x0, f0, h, method):
+             f1 = fun(x)
+             df = f1.imag
+             return df / dx
+-
+     else:
+         raise RuntimeError("Never be here.")
+ 
+-    return LinearOperator((m, n), matvec), nfev
++    return LinearOperator((m, n), matvec), 0
+ 
+ 
+ def _dense_difference(fun, x0, f0, h, use_one_sided, method, workers):
