@@ -41,6 +41,11 @@ names of your own rather than an existing fixture's. A file that did not exist b
 present when the test runs against the old code and against the fixed code alike, so it
 cannot make a test appear to flip. A file you edited can, which is the whole difference.
 
+Using what is already here is not editing it. Your test may import the repository's test
+helpers, use its pytest fixtures and `conftest.py`, and build or load its existing test
+projects and data -- the repository's own tests do exactly that, and the same setup works
+in your test.
+
 **Test what the code does, not what it says.** Do not read the project's source as text —
 no `inspect.getsource`, no opening a `.py` file — and assert on its contents. Such a test
 passes on this fix's exact wording and fails on an equivalent fix written differently. Call the changed code and assert on what it returns,

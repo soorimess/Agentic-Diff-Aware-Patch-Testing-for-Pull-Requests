@@ -806,6 +806,17 @@ test file it was pointed to. Round 3:
   sphinx-10807, `test_process_doc` with `@pytest.mark.sphinx(testroot=...)` and
   `app.build()`.
 
+Round 3 result (base-it3): sphinx-10807 16.6% (best so far, from calling the new methods
+directly), xarray-7444 94.1% (its extra actions came before fail-to-pass -- a backwards
+assertion, a restart -- not from the coverage stage). The sphinx model saw the example in
+18 reports and read the file, then wrote "this is a very constrained environment ... I
+can't easily create a full Sphinx build". Round 4:
+- **The example is run once** (`related_run`, pytest only, cached per file) and the
+  report says it passes in this container, so its fixtures and test data work here.
+- **Prompt (`50-rules.md`)**: using the repository's test helpers, pytest fixtures,
+  `conftest.py` and existing test projects is not editing them; the same setup works in
+  the agent's test. "Do not modify ... an existing fixture" read as "do not use one".
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

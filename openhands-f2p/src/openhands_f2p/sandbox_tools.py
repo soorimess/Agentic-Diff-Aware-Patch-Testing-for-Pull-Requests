@@ -645,7 +645,7 @@ def related_tests(box: Sandbox, paths: list[str], own: str, per_path: int = 3) -
     return out
 
 
-def related_example(text: str, names: list[str], max_lines: int = 18) -> str:
+def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[str, str]:
     """One test function from a repository test file, decorators included, cut at
     `max_lines`: the first that mentions one of `names` (the missed functions' short
     names), else the first. sphinx-10807 (round 2, 2026-10-20) was pointed at
@@ -654,7 +654,7 @@ def related_example(text: str, names: list[str], max_lines: int = 18) -> str:
     lines = text.splitlines()
     starts = [i for i, ln in enumerate(lines) if re.match(r"\s*(async\s+)?def test_\w*\(", ln)]
     if not starts:
-        return ""
+        return "", ""
     spans = []
     for i in starts:
         indent = len(lines[i]) - len(lines[i].lstrip())
@@ -673,7 +673,29 @@ def related_example(text: str, names: list[str], max_lines: int = 18) -> str:
                 spans[0])
     a, b = pick
     body = lines[a:min(b, a + max_lines)]
-    return "\n".join(body) + ("\n    ..." if b > a + max_lines else "")
+    # Its pytest node name, `Class::test` for a method: what `related_run` runs.
+    d = next(i for i in range(a, b) if re.match(r"\s*(async\s+)?def test_", lines[i]))
+    name = re.match(r"\s*(?:async\s+)?def (test_\w*)", lines[d]).group(1)
+    indent = len(lines[d]) - len(lines[d].lstrip())
+    owner = next((m.group(1) for ln in reversed(lines[:a]) if indent and
+                  (m := re.match(r"class (\w+)", ln))), "")
+    node = f"{owner}::{name}" if owner else name
+    return "\n".join(body) + ("\n    ..." if b > a + max_lines else ""), node
+
+
+def related_run(box: Sandbox, path: str, node: str) -> dict:
+    """Run one repository test once, on the code as it is, to say whether its setup works
+    here. Only under pytest, which takes a node id; the other runners take a module."""
+    from openhands_f2p import runners
+    if runners.runner_for(box)["args"] != "nodes":
+        return {}
+    import time
+    t0 = time.time()
+    r = box.exec(runners.test_command(box, [f"{path}::{node}"]), timeout=300)
+    secs = round(time.time() - t0)
+    got = runners.parse_output(r.output)
+    passed = bool(got) and all(v == "PASSED" for v in got.values())
+    return {"passed": passed, "secs": secs}
 
 
 def related_note(cov: dict) -> str:
@@ -683,7 +705,13 @@ def related_note(cov: dict) -> str:
         return ""
     rows = [f"  {p}: {', '.join(fs)}" for p, fs in rel.items()]
     ex = cov.get("related_example") or {}
-    shown = (f"\n\nFor example, from `{ex['file']}`:\n\n```python\n{ex['text']}\n```"
+    # Whether it runs here, said when it was run (`related_run`): sphinx-10807 (round 3,
+    # 2026-10-20) read this very example and decided "this is a very constrained
+    # environment" where it "can't easily create a full Sphinx build".
+    ran = (f" It passes in this container ({ex['secs']}s), so the setup it uses -- its "
+           f"fixtures, decorators and test data -- works here too; use the same setup in "
+           f"your test." if ex.get("passed") else "")
+    shown = (f"\n\nFor example, from `{ex['file']}`:{ran}\n\n```python\n{ex['text']}\n```"
              if ex.get("text") else "")
     return ("\n\nTests already in the repository that use this code -- read how one of them "
             "sets it up and calls it (fixtures, sample inputs, a small project it builds) "
@@ -863,9 +891,11 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             if ("example", f) not in cache:
                 names = [g["function"].rsplit(".", 1)[-1] for g in groups
                          if g["path"] == top and g["function"] != "<module>"]
-                cache[("example", f)] = related_example(self.box.read(f) or "", names)
-            if cache[("example", f)]:
-                cov["related_example"] = {"file": f, "text": cache[("example", f)]}
+                text, node = related_example(self.box.read(f) or "", names)
+                cache[("example", f)] = {"file": f, "text": text,
+                                         **(related_run(self.box, f, node) if text else {})}
+            if cache[("example", f)]["text"]:
+                cov["related_example"] = cache[("example", f)]
         return {p: cache[p] for p in paths if cache.get(p)}
 
     def __call__(self, action: VerifyAction, conversation=None) -> VerifyObservation:
