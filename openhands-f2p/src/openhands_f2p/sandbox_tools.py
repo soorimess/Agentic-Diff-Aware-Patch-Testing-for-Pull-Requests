@@ -478,8 +478,10 @@ class TestObservation(Observation):
 
 class TestExecutor(ToolExecutor[TestAction, TestObservation]):
     def __init__(self, box: Sandbox, repo: str, log: list | None = None,
-                 reveal_runner: bool = True):
+                 reveal_runner: bool = True, verify_named: bool = False):
         self.box = box
+        # Whether `verify` exists, so the answer can point to it (2026-10-21).
+        self.verify_named = verify_named
         self.repo = repo
         self.log = log if log is not None else []
         self.reveal_runner = reveal_runner
@@ -508,8 +510,22 @@ class TestExecutor(ToolExecutor[TestAction, TestObservation]):
                             for k, v in list(own.items())[:12]) or "no tests ran"
         head = f"$ {command}" if self.reveal_runner else f"ran {action.target}"
         dropped = _ignored(action, "run_tests")
+        # Which side of the change this was. xarray-7444 (round 5, 2026-10-21) ran
+        # `run_tests` nineteen times and `verify` never: every run passed on the code before
+        # the change, it rewrote the test blind each time, and it never saw what the same
+        # tests do once the change is in -- what found the flip in rounds 1-3.
+        side = ""
+        if self.verify_named and own:
+            passed = all(v == "PASSED" for v in own.values())
+            side = ("\n\nThis ran on the code as it is -- before the change -- only. "
+                    + ("Every test passes here, and a fail-to-pass test must fail on this "
+                       "code. `verify` runs the same tests on both sides of the change and "
+                       "says which ones flip: call it to see what the change does to them."
+                       if passed else
+                       "Whether these tests pass once the change is applied is what `verify` "
+                       "answers: call it."))
         return TestObservation.from_text(
-            f"{head}\nexit code {r.returncode}\n{summary}\n\n{_clip(_condense(r.output))}{dropped}",
+            f"{head}\nexit code {r.returncode}\n{summary}{side}\n\n{_clip(_condense(r.output))}{dropped}",
             is_error=not outcomes or bool(dropped))
 
 
@@ -518,7 +534,8 @@ class SandboxTestTool(ToolDefinition[TestAction, TestObservation]):
 
     @classmethod
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
-               log: list | None = None, reveal_runner: bool = True, **params):
+               log: list | None = None, reveal_runner: bool = True,
+               verify_named: bool = False, **params):
         assert box is not None and repo, "SandboxTestTool needs a Sandbox and a repo"
         # The tool schema reaches the model before it takes a single action, and it used
         # to carry `runner_for(box)["cmd"]` verbatim -- django's
@@ -542,7 +559,8 @@ class SandboxTestTool(ToolDefinition[TestAction, TestObservation]):
             action_type=TestAction,
             observation_type=TestObservation,
             annotations=ToolAnnotations(readOnlyHint=True),
-            executor=_Shown(TestExecutor(box, repo, log, reveal_runner=reveal_runner),
+            executor=_Shown(TestExecutor(box, repo, log, reveal_runner=reveal_runner,
+                                         verify_named=verify_named),
                                   "run_tests"),
         )]
 
@@ -1222,7 +1240,8 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     made = {"run": SandboxRunTool.create(box=box, log=log, guard=guard)[0],
             "write_file": SandboxWriteTool.create(box=box, log=log, guard=guard)[0],
             "run_tests": SandboxTestTool.create(box=box, repo=repo, log=log,
-                                                reveal_runner=briefed)[0]}
+                                                reveal_runner=briefed,
+                                                verify_named="verify-tool" in features)[0]}
     for n, tool in made.items():
         register_tool(n, tool)
     names = ["run", "write_file", "run_tests"]

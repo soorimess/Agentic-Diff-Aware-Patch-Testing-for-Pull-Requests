@@ -843,6 +843,16 @@ know what it was restored and how to continue"):
   the missed code (round 4 showed xarray `test_consolidate_slices`). The round-4 "it passes
   in this container" run is gone; the reach is the evidence.
 
+Round 5 result (base-it5): **sphinx-10807 65.4%** (from 11.5% before the loop): its first
+test already built the repository's `ext-autodoc` test project (the round-4 rules
+sentence), and it added `domain-js` -- the file the reach map named -- and `domain-py`; one
+in-run restore. xarray-7444 NO: it called `run_tests` nineteen times and `verify` never,
+rewriting blind each time a test passed on the old code; with no fail-to-pass version
+there was nothing to restore. Round 6:
+- **`run_tests` says which side it ran** when `verify` exists: the code before the change
+  only; when every test passes there, that a fail-to-pass test must fail on this code and
+  that `verify` shows what the same tests do once the change is in.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of
