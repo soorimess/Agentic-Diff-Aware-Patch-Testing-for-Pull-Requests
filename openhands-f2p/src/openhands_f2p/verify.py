@@ -1044,15 +1044,30 @@ def _next_target(groups: list[dict], tried: list[tuple[str, str]]) -> dict | Non
     return next((g for g in groups if (g["path"], g["function"]) not in tried), None)
 
 
-def coverage_tried(tool_log: list, rel: str, rounds: list[int]) -> list[tuple[str, str]]:
-    """Parts of the change -- functions with missed lines -- the agent has had its turn at.
+# Turns a part of the change gets while a turn runs none of its missed lines.
+TARGET_TURNS = 2
+
+
+def _missed_in(e: dict, key: tuple[str, str]) -> int:
+    """Missed lines one measured coverage entry lists in the part `key`; 0 when none."""
+    return next((g["missed"] for g in _coverage_groups(e) if (g["path"], g["function"]) == key), 0)
+
+
+def coverage_turns(tool_log: list, rel: str,
+                   rounds: list[int]) -> tuple[list[tuple[str, str]], dict[tuple[str, str], int]]:
+    """Parts of the change -- functions with missed lines -- the agent has had its turn at,
+    and for each part still open, how many turns ran none of its lines.
 
     The coverage loop's exhaustion point (user, 2026-10-15). Each coverage refusal names
-    one target: the biggest missed function not yet tried. It is tried once the test was
-    changed after that refusal and `coverage` measured it again, covered or not. Replayed
-    from the record, so the loop keeps no state of its own. `rounds` are the tool-log
-    positions of the coverage refusals that named a target."""
+    one target: the biggest missed function not yet tried. A turn is a changed test that
+    `verify` measured again. A part is tried once a turn runs at least one more of its
+    lines, or after TARGET_TURNS turns that ran none (2026-10-20). Counted on any turn
+    before that, sphinx-10807 spent seven targets adding `hasattr(Class, 'method')`, one
+    per target, at 10.2% flat, and every target counted as tried. Replayed from the record,
+    so the loop keeps no state of its own. `rounds` are the tool-log positions of the
+    coverage refusals that named a target."""
     tried: list[tuple[str, str]] = []
+    blank: dict[tuple[str, str], int] = {}
     for k, r in enumerate(rounds):
         before = _measured_coverage(tool_log, rel, r)
         if not before:
@@ -1060,18 +1075,36 @@ def coverage_tried(tool_log: list, rel: str, rounds: list[int]) -> list[tuple[st
         target = _next_target(_coverage_groups(before[-1][1]), tried)
         if target is None:
             continue
+        key = (target["path"], target["function"])
         end = rounds[k + 1] if k + 1 < len(rounds) else len(tool_log)
         writes = [j for j in test_writes(tool_log, rel) if r <= j < end]
-        if writes and any(writes[0] < i < end for i, _ in _measured_coverage(tool_log, rel)):
-            tried.append((target["path"], target["function"]))
-    return tried
+        after = [e for i, e in _measured_coverage(tool_log, rel)
+                 if writes and writes[0] < i < end]
+        if not after:
+            continue
+        if _missed_in(after[-1], key) < target["missed"]:
+            tried.append(key)
+            blank.pop(key, None)
+        else:
+            blank[key] = blank.get(key, 0) + 1
+            if blank[key] >= TARGET_TURNS:
+                tried.append(key)
+                blank.pop(key)
+    return tried, blank
+
+
+def coverage_tried(tool_log: list, rel: str, rounds: list[int]) -> list[tuple[str, str]]:
+    """The parts of the change that have had their turn (`coverage_turns`)."""
+    return coverage_turns(tool_log, rel, rounds)[0]
 
 
 # A handler that catches every exception and drops it. Warned about, not refused (user,
 # 2026-10-16): under the longer coverage loop 6 of 20 fail-to-pass tests in the large sets
 # wrapped calls this way (0 of 9 before), running changed lines without testing them.
-_SWALLOW = re.compile(r"^[ \t]*except(?:[ \t]+(?:Exception|BaseException)(?:[ \t]+as[ \t]+\w+)?)?"
-                      r"[ \t]*:[ \t]*(?:#[^\n]*)?\n(?:[ \t]*#[^\n]*\n)*[ \t]*pass\b", re.M)
+# Any exception class since 2026-10-20: sphinx-10807 hid a missing function behind
+# `except ImportError: pass`.
+_SWALLOW = re.compile(r"^[ \t]*except\b[^:\n]*:[ \t]*(?:#[^\n]*)?\n(?:[ \t]*#[^\n]*\n)*[ \t]*pass\b",
+                      re.M)
 
 
 def swallow_note(test_text: str | None) -> str:
@@ -1081,7 +1114,7 @@ def swallow_note(test_text: str | None) -> str:
     if not lines:
         return ""
     where = ", ".join(str(n) for n in lines[:5])
-    return (f"\n\nNote: your test catches every exception and ignores it (line"
+    return (f"\n\nNote: your test catches an exception and ignores it (line"
             f"{'s' if len(lines) > 1 else ''} {where}: `except ...: pass`). Whatever fails "
             f"inside is hidden, so the code it runs there is executed, not tested. Assert what "
             f"that code returns, raises or does instead, or let the error fail the test.")
@@ -1192,18 +1225,30 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                 # line has had one targeted turn, not one attempt for the whole change. A
                 # single non-improving attempt closed the loop before, and Qiskit-12825
                 # (large set) stopped at 17% of 307 lines with 93 actions unused.
-                tried = coverage_tried(tool_log, rel, coverage_rounds or [])
+                tried, blank = coverage_turns(tool_log, rel, coverage_rounds or [])
                 target = _next_target(_coverage_groups(e), tried)
                 if target is not None:
                     lost = ""         # a regression is handled above, before any target
                     left = [g for g in _coverage_groups(e)
                             if (g["path"], g["function"]) not in tried]
-                    fname = target["path"].rsplit("/", 1)[-1]
+                    from openhands_f2p.sandbox_tools import where_to_call
                     where = (f"the module-level lines of `{target['path']}` (imports, "
                              f"constants, class bodies) -- they run when the module is "
                              f"imported, so import it and use it"
-                             if target["function"] == "<module>" else
-                             f"`{target['function']}` in `{fname}`")
+                             if target["function"] == "<module>" else where_to_call(target))
+                    key = (target["path"], target["function"])
+                    # The part again, after a turn that ran none of its lines (2026-10-20).
+                    again = (f"Your last turn at this part ran none of its "
+                             f"{target['missed']} missed lines, so it gets one more. Checking "
+                             f"that a name exists, reading a value from a table or a class "
+                             f"attribute, or building a mock that never reaches the body runs "
+                             f"none of them: call the code with a real input. "
+                             if blank.get(key) else "")
+                    near = (cov.get("related_tests") or {}).get(target["path"]) or []
+                    shown = (f" Tests already in the repository that use "
+                             f"`{target['path'].rsplit('/', 1)[-1]}`: "
+                             f"{', '.join(f'`{f}`' for f in near)} -- read how they set it up "
+                             f"and call it, and do the same." if near else "")
                     new = (f" `{target['path']}` is a file this change adds: absent before "
                            f"the fix, as expected -- `verify` applies the change before it "
                            f"measures." if target["path"] in (cov.get("new_files") or []) else "")
@@ -1212,10 +1257,11 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                                  f"line(s) your test never runs, in {len(left)} part(s) of the "
                                  f"change it has not tried yet.\n\n{COVERAGE_TARGET_SAID} "
                                  f"{where} ({target['missed']} missed line"
-                                 f"{'s' if target['missed'] != 1 else ''}).{new} Change the test "
+                                 f"{'s' if target['missed'] != 1 else ''}).{new}{shown} {again}Change the test "
                                  f"so it goes through that code, asserting on what it returns, "
                                  f"raises or does there -- then call `verify` again. "
-                                 f"Each part of the change gets one such turn; this ends when "
+                                 f"Each part of the change gets one such turn -- two when the first runs "
+                                 f"none of its lines; this ends when "
                                  f"every part has had its turn or every line runs. A call with no "
                                  f"assertion behind it does not count."))
     if "mutation" in instruments:

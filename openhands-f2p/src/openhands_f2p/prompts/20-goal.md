@@ -49,6 +49,12 @@ code, checks that a name exists, inspects a signature, or catches the error a ca
 can flip from failing to passing without testing anything. Call the code with an input that
 goes through what the change does, and assert on what it returns, raises or does.
 
+When a test that calls the changed code fails for a reason in its own setup -- an import
+error, a missing argument, a mock that does not behave like the real object -- fix that
+setup. Do not swap the test for a shallower one that passes: the deeper test is the one
+worth having. The repository's own tests show how this code is set up and called; read
+one before you build the setup yourself.
+
 Some changes are about a situation this container does not have: an optional package
 that is missing, another version of a library, another platform. Then create that
 situation inside the test -- for example with pytest's `monkeypatch`, by hiding a module

@@ -485,17 +485,21 @@ def _by_function(box: "Sandbox", hit: list[str], missed: list[str]) -> list[dict
             tree = ast.parse(source or "")
         except SyntaxError:
             continue
-        spans: list[tuple[int, int, str, int]] = []
+        spans: list[tuple[int, int, str, int, str]] = []
 
-        def walk(node, prefix=""):
+        # `outer`: the outermost function a nested one is defined in -- the one a test can
+        # call. sphinx-10807 (2026-10-20) was told to call `TocTreeCollector.process_doc.
+        # build_toc`, which exists only while `process_doc` runs, and called it "complex".
+        def walk(node, prefix="", outer=""):
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     name = f"{prefix}{child.name}"
-                    if not isinstance(child, ast.ClassDef):
+                    is_func = not isinstance(child, ast.ClassDef)
+                    if is_func:
                         first = min([child.lineno] + [d.lineno for d in child.decorator_list])
                         spans.append((first, child.end_lineno or child.lineno, name,
-                                      child.body[0].lineno))
-                    walk(child, name + ".")
+                                      child.body[0].lineno, outer))
+                    walk(child, name + ".", outer or (name if is_func else ""))
         walk(tree)
         for n, ran in lines:
             inner = [sp for sp in spans if sp[0] <= n <= sp[1]]
@@ -506,6 +510,7 @@ def _by_function(box: "Sandbox", hit: list[str], missed: list[str]) -> list[dict
                 continue
             name = sp[2] if sp else "<module>"
             g = out.setdefault((path, name), {"path": path, "function": name,
+                                              "outer": sp[4] if sp else "",
                                               "ran": 0, "missed": 0, "lines": []})
             g["ran" if ran else "missed"] += 1
             if not ran:

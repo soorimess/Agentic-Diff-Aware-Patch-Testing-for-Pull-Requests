@@ -751,6 +751,37 @@ regression rewind) read them as they read the old tools; the trajectory export s
   sphinx-10807 (best 1.3%) got six rewinds and no target, sklearn-24145 six rewinds over
   one line.
 
+**Iteration on a hard and a healthy PR** (2026-10-20, user). Each change is run on
+sphinx-10807, a hard case where the change runs only inside a Sphinx build (the measure),
+and xarray-7444, a run that already reached 92% with real calls (the guard against making
+things worse). Round 1, from sphinx-10807's base-rule2 trajectory (11.5%, all of it
+import-time, sixteen `hasattr`/config checks):
+- **A target needs progress.** A part counts as tried once a turn runs at least one more
+  of its missed lines, or after `TARGET_TURNS` (2) turns that ran none (`coverage_turns`).
+  The second turn says the first ran none of its lines and that checking a name, reading a
+  table or building a mock that never reaches the body runs none of them. Before, any
+  measured change counted: seven targets went by at 10.2% flat, one `hasattr` each, and
+  the cap ended the loop with 59 actions unused.
+- **Keep the new calls, really.** `verify` passed `lost_flip` the log without its own
+  entry, so `_reach_now` read the previous version's reach and fix 2 never fired from
+  `verify`. The model tried a deeper test three times (a hand-built Sphinx app, a
+  directive built with missing arguments, a Mock); each lost the flip on a setup error,
+  and each time it was told "write that version back" and did.
+- **Tests already in the repository** (`related_tests`): for the files holding missed
+  lines, up to three test files that name the module or carry the file's name (a
+  package's `__init__.py` goes by the package). Shown in the coverage report and with the
+  target. One `grep`/`find`, ~0.5 s, looked up once per file. For sphinx-10807:
+  `tests/test_environment_toctree.py`, which builds a small project with the `app` fixture.
+- **Nested functions** name the function to call: `missed_by_function` groups carry
+  `outer`, and the target or alarm says a function defined inside `X` runs only while `X`
+  runs (`where_to_call`). `TocTreeCollector.process_doc.build_toc` was called "complex".
+- **The low-start alarm also fires when every line the test runs is import-time**, not
+  only below 10%.
+- **Prompt (`20-goal.md`)**: a deeper test that fails on its own setup gets its setup
+  fixed, not swapped for a shallower one; read one of the repository's tests first.
+- **Swallow note** covers `except <any class>: pass` (`except ImportError: pass` hid a
+  missing function).
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

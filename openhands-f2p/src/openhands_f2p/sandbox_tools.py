@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shlex
 from pathlib import Path
 
 from pydantic import ConfigDict, Field
@@ -587,6 +588,85 @@ def _missed_by_function(cov: dict) -> list[str]:
     return out
 
 
+# File stems too common to say which tests are about a file (`utils.py` -> every
+# `test_utils.py` in the repository).
+_GENERIC_STEMS = {"__init__", "utils", "util", "core", "base", "common", "main", "helpers",
+                  "types", "compat", "misc", "api", "tools", "_base", "_utils"}
+
+
+def related_tests(box: Sandbox, paths: list[str], own: str, per_path: int = 3) -> dict[str, list[str]]:
+    """For each changed file, test files already in the repository that use it: they name
+    its module, or carry its name. Read from the checkout, no model.
+
+    sphinx-10807 (2026-10-20) reached 11.5% with `hasattr` checks: its change runs only
+    inside a Sphinx build, which the repository's own `tests/test_environment_toctree.py`
+    sets up with a fixture and a small project. The model wrote one build by hand, hit an
+    import error in its own setup, and never found that pattern."""
+    out: dict[str, list[str]] = {}
+    script = []
+    for k, p in enumerate(paths):
+        mod = p[:-3] if p.endswith(".py") else p
+        mod = re.sub(r"/__init__$", "", mod)
+        mod = re.sub(r"^(src|lib)/", "", mod).replace("/", ".")
+        # A package's `__init__.py` goes by the package's name.
+        stem = Path(p).parent.name if Path(p).stem == "__init__" else Path(p).stem
+        script.append(f"echo '@@I {k}'; grep -rlF --include='test_*.py' --include='*_test.py' "
+                      f"--include='tests.py' -e {shlex.quote(mod)} . 2>/dev/null | head -40")
+        if len(stem) >= 4 and stem not in _GENERIC_STEMS:
+            script.append(f"echo '@@N {k}'; find . -path ./.git -prune -o -type f \\( -name "
+                          f"{shlex.quote(f'test_*{stem}*.py')} -o -name "
+                          f"{shlex.quote(f'*{stem}*_test.py')} \\) -print 2>/dev/null | head -40")
+    if not script:
+        return out
+    r = box.exec("; ".join(script), timeout=120)
+    found: dict[int, dict[str, set[str]]] = {}
+    kind, k = "", -1
+    for line in (r.output or "").splitlines():
+        m = re.match(r"^@@([IN]) (\d+)$", line.strip())
+        if m:
+            kind, k = m.group(1), int(m.group(2))
+            continue
+        f = line.strip()
+        if k < 0 or not f.endswith(".py"):
+            continue
+        f = f[2:] if f.startswith("./") else f
+        if f == own or "test_f2p_" in Path(f).name:
+            continue
+        found.setdefault(k, {"I": set(), "N": set()})[kind].add(f)
+    for k, p in enumerate(paths):
+        got = found.get(k)
+        if not got:
+            continue
+        both = sorted(got["I"] & got["N"])
+        rest = sorted(got["N"] - got["I"]) + sorted(got["I"] - got["N"], key=lambda f: (len(f), f))
+        picked = (both + rest)[:per_path]
+        if picked:
+            out[p] = picked
+    return out
+
+
+def related_note(cov: dict) -> str:
+    """The `related_tests` of a coverage measurement, as one paragraph; "" without any."""
+    rel = cov.get("related_tests") or {}
+    if not rel:
+        return ""
+    rows = [f"  {p}: {', '.join(fs)}" for p, fs in rel.items()]
+    return ("\n\nTests already in the repository that use this code -- read how one of them "
+            "sets it up and calls it (fixtures, sample inputs, a small project it builds) "
+            "and do the same in your test:\n" + "\n".join(rows))
+
+
+def where_to_call(g: dict) -> str:
+    """How to name one missed-lines group as something a test can call."""
+    if g["function"] == "<module>":
+        return f"the module-level code of `{g['path']}`"
+    fname = g["path"].rsplit("/", 1)[-1]
+    if g.get("outer") and g["outer"] != g["function"]:
+        return (f"`{g['function']}` in `{fname}` -- it is defined inside `{g['outer']}` and "
+                f"runs only while that runs, so call `{g['outer']}`, or the code that calls it")
+    return f"`{g['function']}` in `{fname}`"
+
+
 def coverage_report(box: Sandbox, target: str, cov: dict, require_tools: bool,
                     import_only: str = "") -> str:
     """The coverage stage of `verify`: the score against its target, then every changed
@@ -611,16 +691,17 @@ def coverage_report(box: Sandbox, target: str, cov: dict, require_tools: bool,
     # additions for ten refusals. Asked for a rewrite, not another assertion.
     groups = sorted((g for g in cov.get("missed_by_function") or [] if g.get("missed")),
                     key=lambda g: -g["missed"])
-    if pct < 10 and groups:
+    # Also when every line it runs is one that runs on import (`import_only`): sphinx-10807
+    # (2026-10-20) sat at 11.5% -- all of it import-time -- with `hasattr` checks, above the
+    # 10% bar, so the alarm never fired after the first versions.
+    if (pct < 10 or import_only) and groups:
         g = groups[0]
-        call = ("the module-level code of `" + g["path"] + "`" if g["function"] == "<module>"
-                else f"`{g['function']}` in `{g['path']}`")
         lines += ["", f"Your test hardly touches this change. A test that only imports the new "
                       f"code, checks that a name exists, inspects a signature or catches the "
                       f"error a call raises can flip without testing anything. Rewrite it "
-                      f"around a call to {call} ({g['missed']} missed lines), with an input "
-                      f"that goes through the changed lines, and assert on what it returns, "
-                      f"raises or does."]
+                      f"around a call to {where_to_call(g)} ({g['missed']} missed lines), with "
+                      f"an input that goes through the changed lines, and assert on what it "
+                      f"returns, raises or does."]
     lines += ["", "Changed lines your test never runs, by function. Line numbers are in the "
                   "files *with* the change applied -- the `+` side of the diff -- not in this "
                   "checkout, which is the code before it; read each one in the diff, with "
@@ -630,11 +711,12 @@ def coverage_report(box: Sandbox, target: str, cov: dict, require_tools: bool,
               "Make every changed line run: pick inputs that make those conditions true, or "
               "add a second test for a separate case the same change fixes. Reach each line "
               "through the behaviour you assert. Then call `verify` again."
-              + _spawn_note(box, target) + import_only]
+              + related_note(cov) + _spawn_note(box, target) + import_only]
     if require_tools:
         lines += ["", "You will be sent back while coverage is below 100%, one part of the "
-                      "change at a time -- each function holding a missed line gets one turn "
-                      "-- until it reaches 100% or every part has had its turn."]
+                      "change at a time -- each function holding a missed line gets one turn, "
+                      "two when the first runs none of its lines -- until it reaches 100% or "
+                      "every part has had its turn."]
     return "\n".join(lines)
 
 
@@ -729,6 +811,19 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         self.mutation = mutation
         self.probe_mutants = probe_mutants
 
+    def _related(self, cov: dict, target: str) -> dict[str, list[str]]:
+        """`related_tests` for the files holding missed lines, biggest first; looked up once
+        per file -- the repository's own tests do not change during a run."""
+        cache = self.__dict__.setdefault("_related_cache", {})
+        groups = sorted((g for g in cov.get("missed_by_function") or [] if g.get("missed")),
+                        key=lambda g: -g["missed"])
+        paths = list(dict.fromkeys(g["path"] for g in groups))[:4]
+        todo = [p for p in paths if p not in cache]
+        if todo:
+            cache.update({p: [] for p in todo})
+            cache.update(related_tests(self.box, todo, target.split("::")[0]))
+        return {p: cache[p] for p in paths if cache.get(p)}
+
     def __call__(self, action: VerifyAction, conversation=None) -> VerifyObservation:
         state = self.box.ensure_base(self.patch)
         if state != "base":
@@ -773,6 +868,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     cov = E.changed_line_coverage(self.box, [action.target], self.patch,
                                                   self._base)
                     import_only = _import_only(self.box, cov) if cov.get("measured") else ""
+                    if cov.get("measured") and cov.get("missed"):
+                        cov["related_tests"] = self._related(cov, action.target)
                 except Exception as exc:
                     cov = {"measured": False, "reason": f"{type(exc).__name__}: {exc}"}
         finally:
@@ -927,7 +1024,11 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # The version that flipped, when this one does not.
         if not ok:
             from openhands_f2p import verify as V
-            head += V.lost_flip(self.log[:-1], action.target.split("::")[0],
+            # The whole log, this call's entry included: with `self.log[:-1]`, `_reach_now`
+            # read the previous version's reach, so "keep the new calls" (fix 2) never
+            # fired from here -- sphinx-10807 (2026-10-20) reached 7 lines against 5 and
+            # was told to write the 5-line version back, and did.
+            head += V.lost_flip(self.log, action.target.split("::")[0],
                                 self.box.read(action.target.split("::")[0]))
         swallow = V.swallow_note(self.box.read(action.target.split("::")[0]))
         return VerifyObservation.from_text(head + swallow + elsewhere + duty + stages + body,
