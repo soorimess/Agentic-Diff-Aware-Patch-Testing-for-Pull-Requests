@@ -588,6 +588,10 @@ def _missed_by_function(cov: dict) -> list[str]:
     return out
 
 
+# Repository test files longer than this are not run for `_reach_of`: too slow to run
+# whole under coverage inside a `verify` call.
+RELATED_RUN_MAX_LINES = 2500
+
 # File stems too common to say which tests are about a file (`utils.py` -> every
 # `test_utils.py` in the repository).
 _GENERIC_STEMS = {"__init__", "utils", "util", "core", "base", "common", "main", "helpers",
@@ -673,7 +677,7 @@ def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[s
                 spans[0])
     a, b = pick
     body = lines[a:min(b, a + max_lines)]
-    # Its pytest node name, `Class::test` for a method: what `related_run` runs.
+    # Its pytest node name, `Class::test` for a method.
     d = next(i for i in range(a, b) if re.match(r"\s*(async\s+)?def test_", lines[i]))
     name = re.match(r"\s*(?:async\s+)?def (test_\w*)", lines[d]).group(1)
     indent = len(lines[d]) - len(lines[d].lstrip())
@@ -683,39 +687,28 @@ def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[s
     return "\n".join(body) + ("\n    ..." if b > a + max_lines else ""), node
 
 
-def related_run(box: Sandbox, path: str, node: str) -> dict:
-    """Run one repository test once, on the code as it is, to say whether its setup works
-    here. Only under pytest, which takes a node id; the other runners take a module."""
-    from openhands_f2p import runners
-    if runners.runner_for(box)["args"] != "nodes":
-        return {}
-    import time
-    t0 = time.time()
-    r = box.exec(runners.test_command(box, [f"{path}::{node}"]), timeout=300)
-    secs = round(time.time() - t0)
-    got = runners.parse_output(r.output)
-    passed = bool(got) and all(v == "PASSED" for v in got.values())
-    return {"passed": passed, "secs": secs}
-
-
 def related_note(cov: dict) -> str:
     """The `related_tests` of a coverage measurement, as one paragraph; "" without any."""
     rel = cov.get("related_tests") or {}
     if not rel:
         return ""
     rows = [f"  {p}: {', '.join(fs)}" for p, fs in rel.items()]
-    ex = cov.get("related_example") or {}
-    # Whether it runs here, said when it was run (`related_run`): sphinx-10807 (round 3,
-    # 2026-10-20) read this very example and decided "this is a very constrained
-    # environment" where it "can't easily create a full Sphinx build".
-    ran = (f" It passes in this container ({ex['secs']}s), so the setup it uses -- its "
-           f"fixtures, decorators and test data -- works here too; use the same setup in "
-           f"your test." if ex.get("passed") else "")
-    shown = (f"\n\nFor example, from `{ex['file']}`:{ran}\n\n```python\n{ex['text']}\n```"
-             if ex.get("text") else "")
-    return ("\n\nTests already in the repository that use this code -- read how one of them "
-            "sets it up and calls it (fixtures, sample inputs, a small project it builds) "
-            "and do the same in your test:\n" + "\n".join(rows) + shown)
+    out = ("\n\nTests already in the repository that use this code -- read how one of them "
+           "sets it up and calls it (fixtures, sample inputs, a small project it builds) "
+           "and do the same in your test:\n" + "\n".join(rows))
+    reach = cov.get("related_reach") or {}
+    if reach:
+        parts = ", ".join(f"`{x['function']}` {x['reached']} of {x['missed']}"
+                          for x in reach["parts"])
+        ex = cov.get("related_example") or {}
+        out += (f"\n\n**`{reach['file']}` reaches the code your test misses.** Run here with "
+                f"the change applied, it runs {reach['lines']} of the {reach['of']} changed "
+                f"lines your test never runs ({parts}). So its setup works in this container "
+                f"and goes through this change: build your test the same way -- the same "
+                f"fixtures, the same kind of input -- with assertions about what this change "
+                f"does."
+                + (f" One of its tests:\n\n```python\n{ex['text']}\n```" if ex.get("text") else ""))
+    return out
 
 
 def where_to_call(g: dict) -> str:
@@ -884,19 +877,55 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         if todo:
             cache.update({p: [] for p in todo})
             cache.update(related_tests(self.box, todo, target.split("::")[0]))
-        # One example test, from the first file found for the biggest missed part.
-        top = next((p for p in paths if cache.get(p)), None)
-        if top:
-            f = cache[top][0]
-            if ("example", f) not in cache:
-                names = [g["function"].rsplit(".", 1)[-1] for g in groups
-                         if g["path"] == top and g["function"] != "<module>"]
-                text, node = related_example(self.box.read(f) or "", names)
-                cache[("example", f)] = {"file": f, "text": text,
-                                         **(related_run(self.box, f, node) if text else {})}
-            if cache[("example", f)]["text"]:
-                cov["related_example"] = cache[("example", f)]
+        # What the repository's own tests reach (2026-10-21): the first file found for each
+        # of the two biggest missed files, run once under coverage with the change applied
+        # -- this is called inside the patched window. sphinx-10807 was shown a file, an
+        # example and "it passes here" for three rounds and still wrote "this is a very
+        # constrained environment ... I can't easily create a full Sphinx build"; the lines
+        # that setup runs are evidence, not advice.
+        missed = set(cov.get("missed") or [])
+        reach = None
+        for f in list(dict.fromkeys(cache[p][0] for p in paths if cache.get(p)))[:2]:
+            hits = self._reach_of(f)
+            gain = (hits or set()) & missed
+            if gain and (reach is None or len(gain) > len(reach[1])):
+                reach = (f, gain)
+        if reach:
+            f, gain = reach
+            parts = [{"path": g["path"], "function": g["function"], "missed": g["missed"],
+                      "reached": sum(1 for n in g.get("lines") or [] if f"{g['path']}:{n}" in gain)}
+                     for g in groups]
+            parts = [x for x in parts if x["reached"]]
+            cov["related_reach"] = {"file": f, "lines": len(gain), "of": len(missed),
+                                    "parts": parts[:6]}
+            # One of its tests as the example: one that names a reached function, else
+            # its first. Shown only for a file that reaches the missed code -- round 4 showed
+            # xarray-7444 `test_consolidate_slices`, which has nothing to do with it.
+            key = ("example", f, tuple(x["function"] for x in parts))
+            if key not in cache:
+                names = [x["function"].rsplit(".", 1)[-1] for x in parts
+                         if x["function"] != "<module>"]
+                cache[key] = related_example(self.box.read(f) or "", names)[0]
+            if cache[key]:
+                cov["related_example"] = {"file": f, "text": cache[key]}
         return {p: cache[p] for p in paths if cache.get(p)}
+
+    def _reach_of(self, test_file: str) -> set[str] | None:
+        """The changed lines one repository test file runs, with the change applied; once
+        per file. None when it is too big to run here or could not be measured."""
+        cache = self.__dict__.setdefault("_related_cache", {})
+        key = ("reach", test_file)
+        if key not in cache:
+            text = self.box.read(test_file) or ""
+            if not text or text.count("\n") > RELATED_RUN_MAX_LINES:
+                cache[key] = None
+            else:
+                try:
+                    got = E.changed_line_coverage(self.box, [test_file], self.patch, self._base)
+                    cache[key] = set(got.get("hit") or []) if got.get("measured") else None
+                except Exception:
+                    cache[key] = None
+        return cache[key]
 
     def __call__(self, action: VerifyAction, conversation=None) -> VerifyObservation:
         state = self.box.ensure_base(self.patch)
@@ -1096,9 +1125,32 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                      f"they do not test the change. Make each one fail on the old code for "
                      f"the right reason: drop the skip and let the missing behaviour fail "
                      f"the test there. Remove one only if it does not test the change.")
+        from openhands_f2p import verify as V
+        rel = action.target.split("::")[0]
+        current = self.box.read(rel)
+        swallow = V.swallow_note(current)
+        # The best fail-to-pass version, put back by the harness itself when this one lost
+        # the flip or a real share of the coverage (`V.restore_reason`, user 2026-10-21).
+        # The agent is told what was restored and why, and goes on from there.
+        got = V.restore_reason(self.log, rel, ok, cov, current)
+        if got is not None:
+            (i, text, then), why = got
+            self.box.write(rel, text)
+            self.log.append({"tool": "restore", "via": "verify", "path": rel, "target": rel,
+                             "content": text, "from_call": V.call_number(self.log, i),
+                             "why": why})
+            covered = f", running {then} changed lines" if then is not None else ""
+            head += (f"\n\n## Restored\n\nThe version you just checked is worse than your best "
+                     f"one: {why}. So the harness has put the best fail-to-pass version back in "
+                     f"`{rel}` -- the one `verify` checked at tool call "
+                     f"{V.call_number(self.log, i)}{covered}. That is the file on disk now; "
+                     f"you do not need to write it back. Everything below is about the version "
+                     f"you wrote, so you can see what went wrong in it. To improve on the "
+                     f"restored file, change it in small steps -- keep its tests and add to "
+                     f"them, one new test at a time -- and call `verify` after each step.")
+            duty = ""
         # The version that flipped, when this one does not.
-        if not ok:
-            from openhands_f2p import verify as V
+        elif not ok:
             # The whole log, this call's entry included: with `self.log[:-1]`, `_reach_now`
             # read the previous version's reach, so "keep the new calls" (fix 2) never
             # fired from here -- sphinx-10807 (2026-10-20) reached 7 lines against 5 and
@@ -1113,7 +1165,6 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                                     "more of the change than the version that flipped, so do not "
                                     "delete them.")
             head += back_to
-        swallow = V.swallow_note(self.box.read(action.target.split("::")[0]))
         return VerifyObservation.from_text(head + swallow + elsewhere + duty + stages + body,
                                            is_error=False)
 

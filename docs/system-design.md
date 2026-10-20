@@ -817,6 +817,32 @@ can't easily create a full Sphinx build". Round 4:
   `conftest.py` and existing test projects is not editing them; the same setup works in
   the agent's test. "Do not modify ... an existing fixture" read as "do not use one".
 
+Round 4 result (base-it4): sphinx-10807 12.8%, xarray-7444 **NO** -- fail-to-pass at 80%,
+then the model misread its own failure on the old code as a bug in the test, rewrote it and
+never got back in sixty actions, though the hand-back pasted the working version. The
+sphinx model decided "we can't easily test this without a full Sphinx setup" at step 30,
+before any report, and held to it through eleven reports. Round 5 (user, 2026-10-21: raise
+the low ones, never lower the good ones; "restore it and explain it to agent ... agent must
+know what it was restored and how to continue"):
+- **The harness keeps the best version.** This reverses "the agent's last file is its
+  answer" (2026-09-30). During the run, `verify` puts the best fail-to-pass version
+  (`best_f2p`: most changed lines run, latest among equals) back on disk when the version
+  just checked is not fail-to-pass and does not run more of the change, or is a real
+  coverage regression (`restore_reason`). The answer gains a `## Restored` section: what
+  was put back, from which call, why, that the report below is about the version the agent
+  wrote, and to improve on the restored file in small steps with `verify` after each. Logged
+  as a `restore` entry (`via: verify`, so no counter takes it for a call; `test_writes`
+  counts it as a write). At the end, when the last file scores worse than the best one --
+  not YES, or fewer changed lines -- the harness scores the best one too and hands in
+  whichever is better (`restored` in result.json; the last file kept as `last_<name>`).
+- **What the repository's tests reach, measured** (`_reach_of`, `related_reach`): the first
+  related test file of each of the two biggest missed files (at most 2500 lines) is run once
+  under coverage, with the change applied, inside the `verify` call. The report says which
+  of the agent's missed lines it runs, per function, and that its setup therefore works here,
+  with one of its tests as the example. No example is shown for a file that reaches none of
+  the missed code (round 4 showed xarray `test_consolidate_slices`). The round-4 "it passes
+  in this container" run is gone; the reach is the evidence.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

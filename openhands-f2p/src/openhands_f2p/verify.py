@@ -589,7 +589,8 @@ def test_writes(tool_log: list, rel: str | None) -> list[int]:
     last: dict[str, str | None] = {}
     out: list[int] = []
     for j, e in enumerate(tool_log):
-        if e.get("tool") != "write_file" or "error" in e:
+        # `restore`: the harness writing the best fail-to-pass version back (2026-10-21).
+        if e.get("tool") not in ("write_file", "restore") or "error" in e:
             continue
         path = e.get("path", "")
         if rel is not None and not wrote_to(path, rel):
@@ -746,8 +747,7 @@ def lost_flip(tool_log: list, rel: str, current: str | None) -> str:
     # that version back" three times, until the refusal cap. `reach` is what `verify`
     # measured for each version.
     then, now = _reach_after(tool_log, i), _reach_now(tool_log, rel)
-    # The agent's own count of calls: neither a guard revert nor a stage of a `verify`.
-    n = sum(1 for e in tool_log[:i + 1] if e.get("tool") != "guard" and not e.get("via"))
+    n = call_number(tool_log, i)
     if then is not None and now is not None and now > then:
         return (f"\n\nThis version runs more of the change than the last one `verify` called "
                 f"fail-to-pass ({now} changed lines against {then}). {KEEP_NEW_SAID} and "
@@ -759,6 +759,52 @@ def lost_flip(tool_log: list, rel: str, current: str | None) -> str:
     return (f"\n\nEarlier, `verify` called this file fail-to-pass (tool call {n}). Your "
             f"edits since have lost that. If they have not got closer, write that version "
             f"back and build from it:\n\n```python\n{text.rstrip()}\n```")
+
+
+def best_f2p(tool_log: list, rel: str) -> tuple[int, str, int | None] | None:
+    """The best version of `rel` that `verify` called fail-to-pass: the one that ran the
+    most changed lines, the latest among equals. `(log position, text, lines run)`."""
+    shots = [(i, e["f2p_test"], _reach_after(tool_log, i)) for i, e in enumerate(tool_log)
+             if e.get("tool") == "verify" and e.get("f2p_test")
+             and names_test(tool_log, e.get("target", ""), rel)]
+    if not shots:
+        return None
+    return max(shots, key=lambda s: (-1 if s[2] is None else s[2], s[0]))
+
+
+def call_number(tool_log: list, i: int) -> int:
+    """The agent's own count of calls up to `i`: neither a guard revert nor a part of a
+    `verify` call (its stages, a restore)."""
+    return sum(1 for e in tool_log[:i + 1] if e.get("tool") != "guard" and not e.get("via"))
+
+
+def restore_reason(tool_log: list, rel: str, ok: bool, cov: dict | None,
+                   current: str | None) -> tuple[tuple[int, str, int | None], str] | None:
+    """Whether `verify` puts the best fail-to-pass version back (user, 2026-10-21: "restore
+    it and explain it to agent ... agent must know what was restored and how to continue").
+
+    xarray-7444 (round 4) was fail-to-pass at 80%, misread its own failure on the old code
+    as a bug in the test, rewrote it, and spent sixty actions without getting back -- told
+    "write that version back" and never quite doing it. Now the harness does it when the
+    version just checked:
+      * is not fail-to-pass and does not run more of the change than the best one (a
+        version that runs more is being worked on: "keep the new calls"); or
+      * is fail-to-pass but a real regression on the best (`_real_regression`).
+    Returns `(best, why)` or None. `tool_log` holds this call's entries."""
+    best = best_f2p(tool_log, rel)
+    if best is None or current is None or best[1].strip() == current.strip():
+        return None
+    _, _, then = best
+    last = _last(tool_log, "verify", rel)
+    now = last[1].get("reach") if last else None
+    if not ok:
+        if then is not None and now is not None and now > then:
+            return None
+        return best, "it is not fail-to-pass"
+    if cov and cov.get("measured") and _real_regression(tool_log, rel, cov):
+        return best, (f"it runs {cov.get('covered')} changed lines, {then - cov.get('covered')} "
+                      f"fewer than the best fail-to-pass version ({then})")
+    return None
 
 
 def _reach_after(tool_log: list, i: int) -> int | None:

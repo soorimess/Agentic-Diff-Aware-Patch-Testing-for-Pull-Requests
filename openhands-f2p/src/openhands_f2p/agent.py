@@ -987,6 +987,36 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                 field("test", f"{code.count(chr(10)) + 1} lines written")
                 verdict = V.verify(inst, box, generated_test=code, quiet=True,
                                    test_path=test_file)
+                # The best fail-to-pass version is handed in when the last file scores
+                # worse -- not YES, or fewer changed lines run (user, 2026-10-21: an already
+                # good result must not be lost). `verify` restores during the run too
+                # (`V.restore_reason`); this covers a run that ends on a worse file, at the
+                # cap or after a stop. Kept only if it scores better; recorded either way.
+                best = V.best_f2p(run["tool_log"], test_file)
+                final_cov = verdict.changed_line_coverage or {}
+                if best is not None and best[1].strip() != code.strip() and (
+                        verdict.f2p != "YES"
+                        or (best[2] is not None and final_cov.get("measured")
+                            and final_cov["covered"] < best[2])):
+                    box.write(test_file, best[1])
+                    again = V.verify(inst, box, generated_test=best[1], quiet=True,
+                                     test_path=test_file)
+                    again_cov = again.changed_line_coverage or {}
+                    better = again.f2p == "YES" and (
+                        verdict.f2p != "YES"
+                        or (again_cov.get("covered") or 0) > (final_cov.get("covered") or 0))
+                    run["restored"] = {
+                        "from_call": V.call_number(run["tool_log"], best[0]),
+                        "last_file": {"f2p": verdict.f2p, "covered": final_cov.get("covered")},
+                        "best_file": {"f2p": again.f2p, "covered": again_cov.get("covered")},
+                        "handed_in": "best" if better else "last"}
+                    flow.record(flow.AGENT, "restored at end", json.dumps(run["restored"]))
+                    if better:
+                        (d / f"last_{Path(test_file).name}").write_text(code)
+                        code, verdict = best[1], again
+                        (d / Path(test_file).name).write_text(code)
+                    else:
+                        box.write(test_file, code)
                 # Cut off by something outside the agent -- the gateway ran out of credit,
                 # a rate limit, a 5xx, a dropped connection. The test on disk is whatever
                 # the agent had when the call failed, and the stop was never checked, so
@@ -1150,6 +1180,9 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               # The tests the agent's own `verify` called fail-to-pass, and whether the
               # final one is still such a test -- record only; see `_f2p_history`.
               "f2p_history": _f2p_history(run["tool_log"], code or "", verdict.f2p, d, test_file),
+              # The best fail-to-pass version, when the last file scored worse and the
+              # harness checked it again; `handed_in` says which one was scored.
+              "restored": run.get("restored"),
               # Edits to files that existed at base -- the guard's subject. Scratch
               # files the agent created for itself are listed separately.
               "files_edited_outside_test": checks["preexisting_written"],
