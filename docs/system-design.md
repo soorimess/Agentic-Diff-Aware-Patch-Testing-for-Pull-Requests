@@ -745,6 +745,11 @@ regression rewind) read them as they read the old tools; the trajectory export s
   the largest missed function is asked for, not another assertion.
 - **Fix 4, refusal count**: only rounds the agent acted in count towards `MAX_REFUSALS`
   (Qiskit-12474: three of ten spent on back-to-back stops).
+- **A coverage regression is refused only when real** (2026-10-20, user): the best
+  fail-to-pass version ran at least 10% of the change and the file now runs at least 3
+  fewer changed lines (`_real_regression`); otherwise the next target is named. Trial:
+  sphinx-10807 (best 1.3%) got six rewinds and no target, sklearn-24145 six rewinds over
+  one line.
 
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target

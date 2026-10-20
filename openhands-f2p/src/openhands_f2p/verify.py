@@ -953,6 +953,25 @@ def _rewind(tool_log: list, tool: str, rel: str, score, now: float | None,
                f"did not improve.\n\n"))
 
 
+# A coverage regression is refused only when it is real (user, 2026-10-20): the best
+# fail-to-pass version ran at least this share of the change, and the file now runs at
+# least this many fewer changed lines. In the merged-verify trial sphinx-10807's best was
+# 1.3% (2 of 157 lines) and every later 0% version was sent back six times, never once
+# given a part of the change to reach; sklearn-24145 flapped between 25.4% and 23.8% --
+# one line -- for six rewinds and one target.
+REGRESSION_MIN_BEST_PCT = 10.0
+REGRESSION_MIN_LINES = 3
+
+
+def _real_regression(tool_log: list, rel: str, cov: dict) -> bool:
+    got = _best_call(tool_log, "coverage", rel, coverage_score)
+    if got is None:
+        return False
+    best = got[1].get("result") or {}
+    return ((best.get("percent") or 0) >= REGRESSION_MIN_BEST_PCT
+            and (best.get("covered") or 0) - (cov.get("covered") or 0) >= REGRESSION_MIN_LINES)
+
+
 def _lost(tool_log: list, tool: str, rel: str, score, now: float | None, unit: str) -> str:
     best = _best_before(tool_log, tool, rel, score)
     return (f"It reached {best}{unit} earlier and your last change lowered it -- get that "
@@ -1160,8 +1179,9 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                              f"`verify` again on what is on disk now."))
             elif not cov.get("measured") or not cov.get("missed"):
                 pass
-            elif back := _rewind(tool_log, "coverage", rel, coverage_score, pct, "%",
-                                 repeat=True):
+            elif _real_regression(tool_log, rel, cov) and (
+                    back := _rewind(tool_log, "coverage", rel, coverage_score, pct, "%",
+                                    repeat=True)):
                 # Below the best fail-to-pass version `coverage` measured: refused until it
                 # is back, every time, not once (user, 2026-10-16). Long coverage loops on
                 # big patches ended on worse files -- Qiskit-12825 best 15%, final 1%;
