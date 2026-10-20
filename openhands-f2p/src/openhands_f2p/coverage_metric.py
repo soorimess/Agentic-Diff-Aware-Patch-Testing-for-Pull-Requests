@@ -84,6 +84,11 @@ COV_DATA = "/tmp/f2p.coverage"
 #                really does execute the patch reports 0%.
 #   data_file -- moves the file out from under us for the same effect as `parallel`.
 #
+# `ignore_errors` (2026-10-20): a test that runs a file and deletes it -- sphinx-10807
+# built a project in a temporary directory, `conf.py` included -- made `coverage json`
+# stop at "No source for code" and report nothing, twice, on the only two versions that
+# ran the change. Files without source are skipped; changed files always have one.
+#
 # `source` and `include` are deliberately left unset: we want everything the test
 # imports, and the narrowing to the patch's own lines happens afterwards in
 # `changed_line_coverage`.
@@ -92,6 +97,9 @@ branch = True
 parallel = False
 data_file = {COV_DATA}
 disable_warnings = no-data-collected, module-not-imported
+
+[report]
+ignore_errors = True
 """
 
 

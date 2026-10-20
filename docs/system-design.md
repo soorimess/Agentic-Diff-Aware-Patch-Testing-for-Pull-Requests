@@ -782,6 +782,17 @@ import-time, sixteen `hasattr`/config checks):
 - **Swallow note** covers `except <any class>: pass` (`except ImportError: pass` hid a
   missing function).
 
+Round 1 result (base-it1): xarray-7444 94.1% (guard holds); sphinx-10807 9.6%. Its
+trajectory showed a measurement bug: twice the model built a Sphinx project in a
+temporary directory -- the right test -- and `coverage json` stopped at "No source for
+code: /tmp/.../conf.py" (the test had deleted it), so `verify` said "Could not measure"
+and the model gave the test up. Round 2:
+- **`ignore_errors = True`** in our coverage rcfile: files without source are skipped.
+  The same test then measures 46.2% (72 of 156).
+- **A test skipped before the change** is told to drop the skip and fail there; "remove
+  it" only when it does not test the change. The model's build test skipped itself on the
+  old code, was told "... or remove it", and was removed.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

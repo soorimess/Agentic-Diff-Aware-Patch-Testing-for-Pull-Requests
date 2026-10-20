@@ -1020,7 +1020,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             head += (f" But {len(skipped_base)} test(s) are skipped on the code before the "
                      f"change ({skipped_base[:3]}): they never ran against the old code, so "
                      f"they do not test the change. Make each one fail on the old code for "
-                     f"the right reason, or remove it.")
+                     f"the right reason: drop the skip and let the missing behaviour fail "
+                     f"the test there. Remove one only if it does not test the change.")
         # The version that flipped, when this one does not.
         if not ok:
             from openhands_f2p import verify as V
