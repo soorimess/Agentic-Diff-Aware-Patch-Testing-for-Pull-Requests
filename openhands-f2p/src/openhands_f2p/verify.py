@@ -722,6 +722,10 @@ def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, st
                            f"* {say}")
 
 
+# How the hand-back says a version that runs more is to be kept (read by `verify`).
+KEEP_NEW_SAID = "Keep the new calls"
+
+
 def lost_flip(tool_log: list, rel: str, current: str | None) -> str:
     """An offer of the last version of `rel` that `verify` called fail-to-pass, when the
     file on disk is no longer that version. Coverage had a rewind ("your test was better
@@ -746,7 +750,7 @@ def lost_flip(tool_log: list, rel: str, current: str | None) -> str:
     n = sum(1 for e in tool_log[:i + 1] if e.get("tool") != "guard" and not e.get("via"))
     if then is not None and now is not None and now > then:
         return (f"\n\nThis version runs more of the change than the last one `verify` called "
-                f"fail-to-pass ({now} changed lines against {then}). Keep the new calls and "
+                f"fail-to-pass ({now} changed lines against {then}). {KEEP_NEW_SAID} and "
                 f"make the tests that fail pass for the right reason -- the output says "
                 f"which, and on which side of the change. The earlier fail-to-pass version, "
                 f"for reference only (tool call {n}):\n\n```python\n{text.rstrip()}\n```")

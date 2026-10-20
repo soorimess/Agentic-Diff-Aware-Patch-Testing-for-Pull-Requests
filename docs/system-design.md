@@ -793,6 +793,19 @@ and the model gave the test up. Round 2:
   it" only when it does not test the change. The model's build test skipped itself on the
   old code, was told "... or remove it", and was removed.
 
+Round 2 result (base-it2): see RUNS. Its sphinx-10807 trajectory: the hand-back did say
+"keep the new calls" (13 lines against 10), but the headline above it still said "fix
+them or delete them", and twice the model deleted. Its deeper tests guessed at APIs
+(`docutils.nodes.signature`) and it read only the first 30 lines -- the imports -- of the
+test file it was pointed to. Round 3:
+- **No "or delete them" beside "keep the new calls"** (`KEEP_NEW_SAID`): the headline says
+  to fix those tests, which run more of the change than the version that flipped.
+- **One example test from the repository** in the coverage report (`related_example`): the
+  first test function of the first file found for the biggest missed part, decorators
+  included, at most 18 lines -- preferring one that names a missed function. For
+  sphinx-10807, `test_process_doc` with `@pytest.mark.sphinx(testroot=...)` and
+  `app.build()`.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

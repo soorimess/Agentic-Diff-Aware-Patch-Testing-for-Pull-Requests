@@ -645,15 +645,49 @@ def related_tests(box: Sandbox, paths: list[str], own: str, per_path: int = 3) -
     return out
 
 
+def related_example(text: str, names: list[str], max_lines: int = 18) -> str:
+    """One test function from a repository test file, decorators included, cut at
+    `max_lines`: the first that mentions one of `names` (the missed functions' short
+    names), else the first. sphinx-10807 (round 2, 2026-10-20) was pointed at
+    `tests/test_environment_toctree.py`, read only its first 30 lines -- the imports --
+    and never saw the `@pytest.mark.sphinx(testroot=...)` and `app.build()` below them."""
+    lines = text.splitlines()
+    starts = [i for i, ln in enumerate(lines) if re.match(r"\s*(async\s+)?def test_\w*\(", ln)]
+    if not starts:
+        return ""
+    spans = []
+    for i in starts:
+        indent = len(lines[i]) - len(lines[i].lstrip())
+        top = i
+        while top > 0 and lines[top - 1].strip().startswith("@"):
+            top -= 1
+        end = i + 1
+        while end < len(lines) and (not lines[end].strip()
+                                    or len(lines[end]) - len(lines[end].lstrip()) > indent):
+            end += 1
+        while end > i + 1 and not lines[end - 1].strip():
+            end -= 1
+        spans.append((top, end))
+    pick = next(((a, b) for a, b in spans
+                 if any(re.search(rf"\b{re.escape(n)}\b", "\n".join(lines[a:b])) for n in names)),
+                spans[0])
+    a, b = pick
+    body = lines[a:min(b, a + max_lines)]
+    return "\n".join(body) + ("\n    ..." if b > a + max_lines else "")
+
+
 def related_note(cov: dict) -> str:
     """The `related_tests` of a coverage measurement, as one paragraph; "" without any."""
     rel = cov.get("related_tests") or {}
     if not rel:
         return ""
     rows = [f"  {p}: {', '.join(fs)}" for p, fs in rel.items()]
+    ex = cov.get("related_example") or {}
+    shown = (f"\n\nFor example, from `{ex['file']}`:\n\n```python\n{ex['text']}\n```"
+             if ex.get("text") else "")
     return ("\n\nTests already in the repository that use this code -- read how one of them "
             "sets it up and calls it (fixtures, sample inputs, a small project it builds) "
-            "and do the same in your test:\n" + "\n".join(rows))
+            "and do the same in your test:\n" + "\n".join(rows) + shown)
 
 
 def where_to_call(g: dict) -> str:
@@ -822,6 +856,16 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         if todo:
             cache.update({p: [] for p in todo})
             cache.update(related_tests(self.box, todo, target.split("::")[0]))
+        # One example test, from the first file found for the biggest missed part.
+        top = next((p for p in paths if cache.get(p)), None)
+        if top:
+            f = cache[top][0]
+            if ("example", f) not in cache:
+                names = [g["function"].rsplit(".", 1)[-1] for g in groups
+                         if g["path"] == top and g["function"] != "<module>"]
+                cache[("example", f)] = related_example(self.box.read(f) or "", names)
+            if cache[("example", f)]:
+                cov["related_example"] = {"file": f, "text": cache[("example", f)]}
         return {p: cache[p] for p in paths if cache.get(p)}
 
     def __call__(self, action: VerifyAction, conversation=None) -> VerifyObservation:
@@ -1029,8 +1073,16 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             # read the previous version's reach, so "keep the new calls" (fix 2) never
             # fired from here -- sphinx-10807 (2026-10-20) reached 7 lines against 5 and
             # was told to write the 5-line version back, and did.
-            head += V.lost_flip(self.log, action.target.split("::")[0],
-                                self.box.read(action.target.split("::")[0]))
+            back_to = V.lost_flip(self.log, action.target.split("::")[0],
+                                  self.box.read(action.target.split("::")[0]))
+            # No "or delete them" beside "keep the new calls": sphinx-10807 (round 2,
+            # 2026-10-20) was told both, twice, and deleted the tests that ran more.
+            if V.KEEP_NEW_SAID in back_to:
+                head = head.replace(" still fail after the change is applied: fix them or delete them.",
+                                    " still fail after the change is applied: fix them -- they run "
+                                    "more of the change than the version that flipped, so do not "
+                                    "delete them.")
+            head += back_to
         swallow = V.swallow_note(self.box.read(action.target.split("::")[0]))
         return VerifyObservation.from_text(head + swallow + elsewhere + duty + stages + body,
                                            is_error=False)
