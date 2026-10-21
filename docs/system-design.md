@@ -853,6 +853,16 @@ there was nothing to restore. Round 6:
   only; when every test passes there, that a fail-to-pass test must fail on this code and
   that `verify` shows what the same tests do once the change is in.
 
+Round 6 result (base-it6): **sphinx-10807 70.5%** (second run above 60%), xarray-7444 YES
+80.4% -- handed in by the end-of-run restore (its last file was NO), three in-run restores.
+Each time `verify` said fail-to-pass, the model read its `pytest.raises(match=...)` failing
+on the old code's message as "the error message matching is too strict", loosened it,
+passed on the old code and was restored; it never reached the coverage loop that took it to
+94% in rounds 1-3. Round 7:
+- **A fail-to-pass answer names the catch**: for each flipping test, its first error on the
+  old code, and that this failure is the test catching what the change fixes -- keep those
+  assertions; loosening one undoes the flip.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

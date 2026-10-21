@@ -1067,6 +1067,18 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     "does not test what this pull request changes.")
         else:
             head = f"Fail-to-pass: {len(flipped)} test(s) fail before and pass after."
+            # Which old-code failure is the catch, said so it is kept (2026-10-21).
+            # xarray-7444 (round 6) read its own `pytest.raises(match=...)` failing on the
+            # old code's message as "the error message matching is too strict", loosened
+            # it, passed on the old code and was restored -- three times, never reaching
+            # the coverage loop that took it to 94% in rounds 1-3.
+            caught = [(n.split("::")[-1], _first_error(before.output, n)) for n in flipped[:3]]
+            caught = [(n, e) for n, e in caught if e]
+            if caught:
+                head += (" " + " ".join(f"`{n}` fails on the old code with `{e}`." for n, e in caught)
+                         + " That failure is your test catching what this change fixes: it is "
+                           "meant to fail there. Keep those assertions as they are -- loosening "
+                           "one so it passes on the old code undoes the flip.")
         # The harness's rule, in one place, for everything below the headline. The
         # headline was always right, but the duty line, the coverage pointer, the mutation
         # pointer and the error flag all asked `flipped` -- "did anything flip" -- which is
