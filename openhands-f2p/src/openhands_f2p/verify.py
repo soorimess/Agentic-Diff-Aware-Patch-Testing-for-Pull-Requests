@@ -774,6 +774,19 @@ def best_f2p(tool_log: list, rel: str) -> tuple[int, str, int | None] | None:
     return max(shots, key=lambda s: (-1 if s[2] is None else s[2], s[0]))
 
 
+def with_seeds(text: str, tool_log: list, rel: str) -> str:
+    """`text` with every seeded repository test (option 1) it lacks appended again. A seed
+    passes on both sides of the change, so adding it back cannot break a flip; a restore
+    to a version from before the seed used to drop it (sphinx-10807 and xarray-7444,
+    base-it13: three seeds lost that way, xarray 80.4% where version + seed ran 94.1%)."""
+    for e in tool_log:
+        if (e.get("tool") == "seed" and "error" not in e and wrote_to(e.get("path", ""), rel)
+                and not re.search(rf"\bdef {re.escape(e['name'])}\(", text)):
+            text = (text.rstrip() + f"\n\n\n# Copied unchanged by the harness from {e['from']}, "
+                    f"a test in this repository before this change.\n" + e["block"])
+    return text
+
+
 def call_number(tool_log: list, i: int) -> int:
     """The agent's own count of calls up to `i`: neither a guard revert nor a part of a
     `verify` call (its stages, a restore)."""

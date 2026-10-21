@@ -469,6 +469,19 @@ class WriteExecutor(ToolExecutor[WriteAction, WriteObservation]):
                         f"`{e['from']}` the harness added: it runs code this change touches. "
                         f"Put it back unless you replace it with a test that runs the same code."
                         for e in gone) if gone else "")
+        # ... or keeps it with fewer assertions: sphinx-10807 (base-it12, -it13) cut a seeded
+        # test from 24 assertions to 3 while rewriting its file.
+        for e in self.log:
+            if (e.get("tool") != "seed" or "error" in e or e["name"] in seen
+                    or not V.wrote_to(action.path, e.get("path", ""))):
+                continue
+            seen.add(e["name"])
+            now, was = _function_text(action.content, e["name"]), _function_text(e["block"], e["name"])
+            n_now, n_was = (len(re.findall(r"\bassert\w*\b", t)) for t in (now, was))
+            if now and n_now < n_was:
+                lost += (f"\n\n[harness] `{e['name']}` now has {n_now} of the {n_was} assertions "
+                         f"it was copied with. Keep them: each checks behaviour that runs through "
+                         f"the change. Add your own beside them.")
         undone = _undo_edits(self.box, self.log, self.guard)
         dropped = _ignored(action, "write_file")
         return WriteObservation.from_text(
@@ -699,6 +712,20 @@ def related_tests(box: Sandbox, paths: list[str], own: str, per_path: int = 3) -
 
 
 SEED_PREFIX = "test_seeded_"
+
+
+def _function_text(text: str, name: str) -> str:
+    """The source of the module-level function `name` in `text`, decorators included."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ""
+    lines = text.splitlines()
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name:
+            first = min([n.lineno] + [d.lineno for d in n.decorator_list])
+            return "\n".join(lines[first - 1:n.end_lineno])
+    return ""
 
 
 def seed_block(text: str, names: list[str], taken: set[str]) -> tuple[str, str, str] | None:
@@ -1348,6 +1375,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         got = V.restore_reason(self.log, rel, ok, cov, current)
         if got is not None:
             (i, text, then), why = got
+            seeded = V.with_seeds(text, self.log, rel)
+            seeds_back = seeded != text
+            text = seeded
             self.box.write(rel, text)
             self.log.append({"tool": "restore", "via": "verify", "path": rel, "target": rel,
                              "content": text, "from_call": V.call_number(self.log, i),
@@ -1356,7 +1386,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             head += (f"\n\n## Restored\n\nThe version you just checked is worse than your best "
                      f"one: {why}. So the harness has put the best fail-to-pass version back in "
                      f"`{rel}` -- the one `verify` checked at tool call "
-                     f"{V.call_number(self.log, i)}{covered}. That is the file on disk now; "
+                     f"{V.call_number(self.log, i)}{covered}"
+                     + (", with the repository tests the harness copied in added back"
+                        if seeds_back else "") + ". That is the file on disk now; "
                      f"you do not need to write it back. Everything below is about the version "
                      f"you wrote, so you can see what went wrong in it. To improve on the "
                      f"restored file, change it in small steps -- keep its tests and add to "

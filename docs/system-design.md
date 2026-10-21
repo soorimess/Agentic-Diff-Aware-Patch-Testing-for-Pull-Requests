@@ -964,6 +964,27 @@ fail-to-pass version while the model kept adding tests that fail after the chang
   xarray (round 12's test) 80.4% -> 94.1% with one seed (`test_cftimeindex_resample.py::
   test_resample`, which now collects); both still fail-to-pass.
 
+Option 1 run 2 (base-it13): sphinx-10807 62.2% with seeds, **49.4% from the agent's own
+tests** (29 lines before the first seed, 77 after it: the seed taught it the build setup);
+xarray-7444 80.4%. Three seeds were lost: an edit after the seed broke the flip and the
+restore put back the best version from before the seed (sphinx twice; xarray at the end,
+where best version + seed runs 94.1%). The same repository test was seeded for two parts,
+and the JS seed was cut from 24 assertions to 3. Fixes:
+- **A restore keeps the seeds** (`with_seeds`): in-run and at the end, the best version gets
+  every seed it lacks appended (a seed passes on both sides, so it cannot break the flip);
+  the end-of-run check also tries the last file plus the seeds it dropped.
+- **One seed per repository test.**
+- **`write_file` says when a seeded test keeps fewer assertions** than it was copied with.
+
+Option 1 run 3 (base-it14): **sphinx-10807 80.8%** (126 of 156 lines; the ceiling of every
+known test together is 85.3%), **66.0% from the agent's own tests** -- both the highest of
+any run. The JS seed was weakened from 24 assertions to 12 (to 3 before the warning); the
+agent removed the rst seed twice, warned both times. xarray-7444 NO: twelve `verify` calls,
+every version passed on the old code -- it asserted that a `ValueError` is raised, not
+which message, and the flip is the message (pandas' wording becomes xarray's). That is
+before fail-to-pass, where seeding and restores do not act; xarray failed the same way in
+rounds 4 and 5.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

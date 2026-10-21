@@ -471,6 +471,11 @@ def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list, patch: str) 
     made = S.seed_block(box.read(hit["file"]) or "", [target["function"].rsplit(".", 1)[-1]], taken)
     if made is None:
         return ""
+    # One seed per repository test (base-it13 seeded `test_rst_directive` twice, for two
+    # parts of `rst.py`).
+    if any(e.get("tool") == "seed" and "error" not in e
+           and e.get("from") == f"{hit['file']}::{made[1]}" for e in tool_log):
+        return ""
     block, original, seeded = made
     source = f"{hit['file']}::{original}"
     new = (current.rstrip() + f"\n\n\n# Copied unchanged by the harness from {source}, a test in "
@@ -1121,10 +1126,18 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                 # cap or after a stop. Kept only if it scores better; recorded either way.
                 best = V.best_f2p(run["tool_log"], test_file)
                 final_cov = verdict.changed_line_coverage or {}
+                # Seeds the last file dropped go back too (they pass on both sides).
+                seeded_last = V.with_seeds(code, run["tool_log"], test_file)
                 if best is not None and best[1].strip() != code.strip() and (
                         verdict.f2p != "YES"
                         or (best[2] is not None and final_cov.get("measured")
                             and final_cov["covered"] < best[2])):
+                    best = (best[0], V.with_seeds(best[1], run["tool_log"], test_file), best[2])
+                elif seeded_last.strip() != code.strip():
+                    best = (len(run["tool_log"]) - 1, seeded_last, None)
+                else:
+                    best = None
+                if best is not None:
                     box.write(test_file, best[1])
                     again = V.verify(inst, box, generated_test=best[1], quiet=True,
                                      test_path=test_file)
