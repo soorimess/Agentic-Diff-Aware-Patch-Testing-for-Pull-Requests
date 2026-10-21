@@ -357,10 +357,12 @@ class RunObservation(Observation):
 
 
 class RunExecutor(ToolExecutor[RunAction, RunObservation]):
-    def __init__(self, box: Sandbox, log: list | None = None, guard: bool = True):
+    def __init__(self, box: Sandbox, log: list | None = None, guard: bool = True,
+                 verify_named: bool = False):
         self.box = box
         self.log = log if log is not None else []
         self.guard = guard
+        self.verify_named = verify_named
 
     def __call__(self, action: RunAction, conversation=None) -> RunObservation:
         # 120s, not 900. `run` is for reading and searching; nothing legitimate there
@@ -378,6 +380,19 @@ class RunExecutor(ToolExecutor[RunAction, RunObservation]):
             body += (f"\n\n[harness] `{typed.group(1)}` is not a shell command: it is one of "
                      f"your tools. Call the `{typed.group(1)}` tool itself, with `target` set "
                      f"to your test file.")
+        # An attempt to apply the change by hand. sphinx-10807 (round 8, 2026-10-21) said
+        # "let me run verify to see what happens when I apply the change", ran `git status`,
+        # read "not a git repository", decided it "cannot apply the changes" and "does not
+        # have the verify command", and never called the tool in 48 actions.
+        elif self.verify_named and (
+                "not a git repository" in (r.output or "")
+                or re.search(r"(^|[;&|]\s*)(git\s+(apply|am|stash|checkout|diff)|patch\s+-p)\b",
+                             action.command or "")):
+            body += ("\n\n[harness] There is no git here, and you do not need it or any other "
+                     "way to apply the change. `verify` is one of your tools, like `run_tests`: "
+                     "it runs your test on this code, applies the change itself, runs the test "
+                     "again and puts the code back. Call the `verify` tool with `target` set to "
+                     "your test file.")
         undone = _undo_edits(self.box, self.log, self.guard)
         dropped = _ignored(action, "run")
         return RunObservation.from_text(
@@ -407,7 +422,8 @@ class SandboxRunTool(ToolDefinition[RunAction, RunObservation]):
             action_type=RunAction,
             observation_type=RunObservation,
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
-            executor=_Shown(RunExecutor(box, log, params.get("guard", True)), "run"),
+            executor=_Shown(RunExecutor(box, log, params.get("guard", True),
+                                        params.get("verify_named", False)), "run"),
         )]
 
 
@@ -1249,7 +1265,8 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     briefed = "repo-facts" in features
     guard = "guard" in features
     require_tools = "require-tools" in features
-    made = {"run": SandboxRunTool.create(box=box, log=log, guard=guard)[0],
+    made = {"run": SandboxRunTool.create(box=box, log=log, guard=guard,
+                                         verify_named="verify-tool" in features)[0],
             "write_file": SandboxWriteTool.create(box=box, log=log, guard=guard)[0],
             "run_tests": SandboxTestTool.create(box=box, repo=repo, log=log,
                                                 reveal_runner=briefed,

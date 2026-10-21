@@ -872,6 +872,24 @@ Round 8:
   one of its tests, and says to start from it -- copy its decorators, fixtures and setup --
   and change the input and assertions to check what the change does.
 
+Round 8 result (base-it8): xarray-7444 90.2% (the reach refusals pointed at
+`test_cftimeindex_resample.py`, which runs those lines; coverage rose 78.4 -> 90.2 under
+them). sphinx-10807 3.2%: it never called `verify` -- "let me run verify to see what happens
+when I apply the change" became `git status`, "not a git repository", then "I don't have the
+actual verify command available", and the refusal cap ended the run at 48 of 125 actions
+(xarray round 5 failed the same way). The agent still calls `verify` itself (user,
+2026-10-04: never auto-run). Round 9:
+- **`run` catches an attempt to apply the change by hand**: a "not a git repository" answer,
+  or `git apply/am/stash/checkout/diff` or `patch -p`, gets a note that no git is needed and
+  that `verify` is one of its tools, like `run_tests`, which applies the change itself.
+- **"You never called `verify`"** now also says it is a tool, not a shell command, and that
+  no git is needed.
+
+Round 9 result (base-it9): **sphinx-10807 62.2%**, xarray-7444 92.2% (its level before the
+loop). The `run` note fired three times and sphinx called `verify` nineteen times; it sat at
+3-7% until the refusal naming `build_toc` said `tests/test_domain_js.py` runs 32 of its 35
+missed lines and showed that test's setup -- the next versions ran 49.4% and 62.2%.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

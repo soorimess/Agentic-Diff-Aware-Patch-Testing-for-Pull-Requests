@@ -671,7 +671,8 @@ def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, st
         # believed it "cannot apply the change in this environment" -- and took all ten
         # refusals without one call. It never has to apply anything: `verify` does.
         say = (f"You never called `verify`, so nothing has established the one property "
-               f"the test must have. `verify` works here and does the applying itself: it "
+               f"the test must have. `verify` is one of your tools, like `run_tests` -- call "
+               f"it as a tool, not in the shell; no git is needed. It does the applying itself: it "
                f"runs your test on this code, applies the change, runs it again and puts "
                f"the code back -- you apply nothing. Call it now with `target` set to "
                f"`{rel}`, and keep going until it says fail-to-pass.")
