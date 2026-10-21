@@ -945,6 +945,25 @@ is scored as it is. No-model check on round 9's sphinx test: one seed
 (`test_domain_rst.py::test_rst_directive` for `ReSTMarkup._toc_entry_name`) took it from
 62.2% to 75.6%, still fail-to-pass.
 
+Option 1 first run (base-it12): sphinx-10807 62.2% -- it sat at 10-13 lines (7%) before the
+first seed and reached 77 lines after the JS seed and 97 after the Python one, so the seeds
+carried a run that had not found the build setup (rounds 7-8 ended at 3-8% that way). But
+the agent "changed" both seeds by deleting most of their assertions -- the JS copy failed
+once the change was in (the seed was checked on the old code only) and the agent "fixed" it
+-- and its next write dropped the third seed. xarray-7444 80.4%: its seed did not collect
+(module-level constants were not copied), and eight in-run restores held its first
+fail-to-pass version while the model kept adding tests that fail after the change. Fixes:
+- **A seed must pass on both sides of the change** (checked with the change applied too),
+  so it never breaks the flip; the message says to keep its assertions and add to them.
+- **`seed_block` copies module-level constants** the test or its helpers read.
+- **`write_file` says when a write leaves out a seeded test.**
+- **The record counts assertions**: each seed is `unchanged`, `weakened` (fewer assertions
+  than the copy), `extended` or `missing`; coverage "without" drops unchanged and weakened
+  copies.
+  No-model check after the fixes: sphinx (round 9's test) 62.2% -> 75.6% with one seed;
+  xarray (round 12's test) 80.4% -> 94.1% with one seed (`test_cftimeindex_resample.py::
+  test_resample`, which now collects); both still fail-to-pass.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

@@ -457,10 +457,22 @@ class WriteExecutor(ToolExecutor[WriteAction, WriteObservation]):
         self.log.append({"tool": "write_file", "path": action.path,
                          "lines": lines, "content": action.content[:4000],
                          "sha": hashlib.sha1(action.content.encode()).hexdigest()})
+        # A seeded repository test the write leaves out (option 1, 2026-10-21): sphinx-10807
+        # rewrote its file right after `test_seeded_rst_directive` was added, without it.
+        from openhands_f2p import verify as V
+        gone = [e for e in self.log if e.get("tool") == "seed" and "error" not in e
+                and V.wrote_to(action.path, e.get("path", ""))
+                and not re.search(rf"\bdef {re.escape(e['name'])}\(", action.content)]
+        seen: set[str] = set()
+        gone = [e for e in gone if not (e["name"] in seen or seen.add(e["name"]))]
+        lost = ("".join(f"\n\n[harness] This write leaves out `{e['name']}`, the copy of "
+                        f"`{e['from']}` the harness added: it runs code this change touches. "
+                        f"Put it back unless you replace it with a test that runs the same code."
+                        for e in gone) if gone else "")
         undone = _undo_edits(self.box, self.log, self.guard)
         dropped = _ignored(action, "write_file")
         return WriteObservation.from_text(
-            f"wrote {action.path} ({lines} lines){undone}{dropped}",
+            f"wrote {action.path} ({lines} lines){lost}{undone}{dropped}",
             is_error=bool(undone) or bool(dropped))
 
 
@@ -704,6 +716,14 @@ def seed_block(text: str, names: list[str], taken: set[str]) -> tuple[str, str, 
     lines = text.splitlines()
     defs = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
     tests = [n for n in defs.values() if n.name.startswith("test_")]
+    # Module-level constants too -- a parametrized test reads its cases from one
+    # (xarray-7444's seed of `test_cftimeindex_resample.py::test_resample` did not collect).
+    for n in tree.body:
+        targets = (n.targets if isinstance(n, ast.Assign)
+                   else [n.target] if isinstance(n, ast.AnnAssign) else [])
+        for t in targets:
+            if isinstance(t, ast.Name) and t.id not in defs:
+                defs[t.id] = n
     if not tests:
         return None
 
@@ -715,7 +735,7 @@ def seed_block(text: str, names: list[str], taken: set[str]) -> tuple[str, str, 
         got = {x.id for x in ast.walk(n) if isinstance(x, ast.Name)}
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
             got |= {a.arg for a in n.args.args}
-        return got
+        return got - {getattr(n, "name", None)}
 
     def names_any(n) -> bool:
         body = src(n)
@@ -726,7 +746,8 @@ def seed_block(text: str, names: list[str], taken: set[str]) -> tuple[str, str, 
     helpers: list = []
     want = used(pick)
     for _ in range(2):
-        more = [defs[w] for w in want if w in defs and defs[w] is not pick and defs[w] not in helpers]
+        more = [defs[w] for w in sorted(want) if w in defs and defs[w] is not pick
+                and defs[w] not in helpers]
         helpers += more
         want = set().union(*[used(h) for h in more]) if more else set()
     need = used(pick).union(*[used(h) for h in helpers]) if helpers else used(pick)
@@ -744,7 +765,8 @@ def seed_block(text: str, names: list[str], taken: set[str]) -> tuple[str, str, 
     while seeded in taken:
         seeded, k = f"{SEED_PREFIX}{pick.name[len('test_'):]}_{k}", k + 1
     body = re.sub(rf"\bdef {re.escape(pick.name)}\(", f"def {seeded}(", src(pick), count=1)
-    code = [src(h) for h in helpers if h.name not in taken] + [body]
+    helpers.sort(key=lambda h: h.lineno)
+    code = [src(h) for h in helpers if getattr(h, "name", None) not in taken] + [body]
     return ("\n".join(imports) + "\n\n\n" + "\n\n\n".join(code)).strip() + "\n", pick.name, seeded
 
 

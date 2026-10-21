@@ -400,14 +400,29 @@ def _seed_account(inst: dict, box: E.Sandbox, test_file: str, code: str, verdict
         first = min([n.lineno] + [d.lineno for d in n.decorator_list])
         return "\n".join(lines[first - 1:n.end_lineno]).strip()
 
+    def asserts(text: str) -> int:
+        return len(re.findall(r"\bassert\w*\b", text))
+
     rows, drop = [], []
     for e in seeds:
         n = funcs.get(e["name"])
-        orig = re.search(rf"(?ms)^(@[^\n]*\n)*(async\s+)?def {re.escape(e['name'])}\(.*", e["block"])
-        same = bool(n) and bool(orig) and body_of(n) == orig.group(0).strip()
-        rows.append({"name": e["name"], "from": e["from"], "part": e["part"],
-                     "kept": bool(n), "changed": bool(n) and not same})
-        if n and same:
+        # The copy as added, read the same way as the final file (decorators may span lines).
+        try:
+            btree, blines = ast.parse(e["block"]), e["block"].splitlines()
+            bn = next((x for x in btree.body if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef))
+                       and x.name == e["name"]), None)
+        except SyntaxError:
+            bn = None
+        was = ("\n".join(blines[min([bn.lineno] + [d.lineno for d in bn.decorator_list]) - 1:
+                                 bn.end_lineno]).strip() if bn else "")
+        now = body_of(n) if n else ""
+        # unchanged, weakened (fewer assertions than the copy), or extended.
+        state = ("missing" if not n else "unchanged" if now == was
+                 else "weakened" if asserts(now) < asserts(was) else "extended")
+        rows.append({"name": e["name"], "from": e["from"], "part": e["part"], "state": state,
+                     "asserts_copied": asserts(was), "asserts_final": asserts(now) if n else 0})
+        # Without the copies the agent did not add to: what its own work reaches.
+        if state in ("unchanged", "weakened"):
             drop.append(n)
     cov = verdict.changed_line_coverage or {}
     out = {"seeds": rows, "with_seeds": {"f2p": verdict.f2p, "covered": cov.get("covered"),
@@ -418,6 +433,7 @@ def _seed_account(inst: dict, box: E.Sandbox, test_file: str, code: str, verdict
             first = min([n.lineno] + [d.lineno for d in n.decorator_list])
             cut |= set(range(first, n.end_lineno + 1))
         variant = "\n".join(ln for i, ln in enumerate(lines, 1) if i not in cut) + "\n"
+        out["dropped"] = [n.name for n in drop]
         box.write(test_file, variant)
         try:
             v = V.verify(inst, box, generated_test=variant, quiet=True, test_path=test_file)
@@ -431,7 +447,7 @@ def _seed_account(inst: dict, box: E.Sandbox, test_file: str, code: str, verdict
     return out
 
 
-def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list) -> str:
+def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list, patch: str) -> str:
     """Option 1 (user, 2026-10-21): when a target part's first turn ran none of its lines
     and a repository test file was measured to run at least half of them, the harness
     copies one of that file's tests into the agent's file, unchanged, renamed
@@ -460,13 +476,21 @@ def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list) -> str:
     new = (current.rstrip() + f"\n\n\n# Copied unchanged by the harness from {source}, a test in "
            f"this repository before this change.\n" + block)
     box.write(rel, new)
-    run = box.exec(E.test_command(box, [f"{rel}::{seeded}"]), timeout=600)
-    outcome = V.own_outcomes(E.parse_output(run.output), [rel])
-    if not outcome or any(v != "PASSED" for v in outcome.values()):
+    # On both sides of the change: a copy that fails once the change is in breaks the
+    # flip, and sphinx-10807 (base-it12) "fixed" one by deleting its assertions.
+    cmd = E.test_command(box, [f"{rel}::{seeded}"])
+    sides = {}
+    sides["before"] = V.own_outcomes(E.parse_output(box.exec(cmd, timeout=600).output), [rel])
+    box.apply_patch(patch)
+    try:
+        sides["after"] = V.own_outcomes(E.parse_output(box.exec(cmd, timeout=600).output), [rel])
+    finally:
+        box.apply_patch(patch, revert=True)
+    if any(not o or any(v != "PASSED" for v in o.values()) for o in sides.values()):
         box.write(rel, current)
         tool_log.append({"tool": "seed", "via": "harness", "path": rel, "part": key,
-                         "from": source, "error": f"did not pass here: {outcome}"})
-        flow.record(flow.AGENT, "seed", f"{source} did not pass here; not added")
+                         "from": source, "error": f"does not pass on both sides: {sides}"})
+        flow.record(flow.AGENT, "seed", f"{source} does not pass on both sides; not added")
         return ""
     tool_log.append({"tool": "seed", "via": "harness", "path": rel, "target": rel,
                      "content": new, "part": key, "from": source, "name": seeded,
@@ -475,10 +499,12 @@ def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list) -> str:
     return (f"\n\n## Seeded\n\nThe harness has added `{seeded}` to the end of `{rel}`: a copy, "
             f"unchanged, of `{source}`, a test that exists in this repository before this change "
             f"and runs {hit['reached']} of this part's {hit['missed']} missed lines. It passes on "
-            f"the code as it is, with its imports and helpers. As it stands it passes on both "
+            f"both sides of the change, with its imports and helpers. As it stands it passes on both "
             f"sides of the change, so it tests nothing about it, and a copy left unchanged is not "
-            f"counted as your test. Keep it, and change its input and its assertions so they check "
-            f"what this change does -- then call `verify`.")
+            f"counted as your test. Keep it and its assertions, and add to it: an input or a "
+            f"configuration value that goes through the changed lines, and assertions about what "
+            f"this change does -- then call `verify`. Removing its assertions makes it test less, "
+            f"not more.")
 
 
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
@@ -765,7 +791,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
             if "passes_at_base" in reason or "verify_open" in reason:
                 say += V.lost_flip(tool_log, rel, box.read(rel))
             if "duties_open[coverage]" in reason and "coverage-tool" in features:
-                say += _seed(box, tool_log, rel, injected)
+                say += _seed(box, tool_log, rel, injected, instance["patch"])
             if stuck(reason) and streak + 1 >= MAX_PASSES_AT_BASE_ROUNDS:
                 box._unscoreable_capped = True
             nudge = prompt.followup("second-chance", shortfall=say,
