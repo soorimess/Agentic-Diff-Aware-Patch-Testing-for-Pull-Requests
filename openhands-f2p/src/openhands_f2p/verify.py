@@ -1299,6 +1299,25 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                              f"`{target['path'].rsplit('/', 1)[-1]}`: "
                              f"{', '.join(f'`{f}`' for f in near)} -- read how they set it up "
                              f"and call it, and do the same." if near else "")
+                    # When a repository test file is measured to reach this very part
+                    # (`related_reach`), the refusal says so and shows its setup (2026-10-21):
+                    # sphinx-10807 (round 7) had the reach in twelve `verify` reports and
+                    # never built a project; the refusal is the message it acts on.
+                    reach = cov.get("related_reach") or {}
+                    hit = next((x for x in reach.get("parts") or []
+                                if (x["path"], x["function"]) == key
+                                and 2 * x["reached"] >= x["missed"]), None)
+                    if hit:
+                        ex = (cov.get("related_example") or {}).get("text")
+                        shown = (f"\n\n**`{reach['file']}`, a test file already in this "
+                                 f"repository, runs {hit['reached']} of this part's "
+                                 f"{hit['missed']} missed lines** when run with the change "
+                                 f"applied, so its setup reaches this code in this container. "
+                                 f"Start from it: copy one of its tests into your file -- its "
+                                 f"decorators, fixtures and setup as they are -- then change the "
+                                 f"input and the assertions so they check what this change does."
+                                 + (f" One of its tests:\n\n```python\n{ex}\n```\n" if ex else "")
+                                 + "\n")
                     new = (f" `{target['path']}` is a file this change adds: absent before "
                            f"the fix, as expected -- `verify` applies the change before it "
                            f"measures." if target["path"] in (cov.get("new_files") or []) else "")

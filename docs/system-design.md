@@ -863,6 +863,15 @@ passed on the old code and was restored; it never reached the coverage loop that
   old code, and that this failure is the test catching what the change fixes -- keep those
   assertions; loosening one undoes the flip.
 
+Round 7 result (base-it7): **xarray-7444 98.0%** (best of all rounds; 45 actions, $0.09),
+sphinx-10807 8.3% -- this time its first approach was not a build, and the reach note in
+twelve reports did not change it (rounds 5 and 6 built from the first test: 65%, 70%).
+Round 8:
+- **The target refusal carries the measured reach**: when the repository test file runs at
+  least half of the target part's missed lines, the refusal names it, the count, and shows
+  one of its tests, and says to start from it -- copy its decorators, fixtures and setup --
+  and change the input and assertions to check what the change does.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of
