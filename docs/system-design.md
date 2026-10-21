@@ -928,6 +928,23 @@ last five runs of the current design sphinx scored 62.2, 62.8, 62.2, 56.4 and 70
 6) against 11.5% before the loop; xarray never fell below its starting 92.2% (92.2, 94.1,
 98.0, 96.1). What is left on sphinx is the model not acting on a correct, measured pointer.
 
+**Option 1: seeding repository tests** (user, 2026-10-21: "give the already existing repo
+data to model"; never a stronger model -- the point is what the tools add on a weak one).
+When a target part's first turn ran none of its lines and a repository test file was
+measured to run at least half of them (`related_by_part`), the harness copies one of that
+file's tests into the agent's file, unchanged, renamed `test_seeded_<name>`, with the
+imports and module-level helpers it uses (`seed_block`), and adds a `## Seeded` section to
+the refusal: what was copied from where, how many of the part's lines it runs, that as a
+copy it tests nothing about the change and is not counted as the agent's test until
+changed. Only tests in the repository before the change -- never the pull request's. The
+copy is kept only if it passes on the code as it is; one seed per part (`_seed`, a `seed`
+entry with `via: harness`, counted as a write). At the end, `seeded` in result.json records
+each seed (kept, changed) and the coverage with the seeds and without the ones left
+unchanged (`_seed_account`, a second scoring of the file without them); the file handed in
+is scored as it is. No-model check on round 9's sphinx test: one seed
+(`test_domain_rst.py::test_rst_directive` for `ReSTMarkup._toc_entry_name`) took it from
+62.2% to 75.6%, still fail-to-pass.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

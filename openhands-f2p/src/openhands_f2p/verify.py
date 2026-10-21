@@ -590,7 +590,8 @@ def test_writes(tool_log: list, rel: str | None) -> list[int]:
     out: list[int] = []
     for j, e in enumerate(tool_log):
         # `restore`: the harness writing the best fail-to-pass version back (2026-10-21).
-        if e.get("tool") not in ("write_file", "restore") or "error" in e:
+        # `seed`: the harness adding a repository test to the file (2026-10-21).
+        if e.get("tool") not in ("write_file", "restore", "seed") or "error" in e:
             continue
         path = e.get("path", "")
         if rel is not None and not wrote_to(path, rel):
@@ -1142,6 +1143,23 @@ def coverage_turns(tool_log: list, rel: str,
                 tried.append(key)
                 blank.pop(key)
     return tried, blank
+
+
+def coverage_target(tool_log: list, rel: str, rounds: list[int]) -> tuple[dict, int, dict] | None:
+    """The part of the change the next coverage refusal names, how many turns at it ran none
+    of its lines, and the measurement it comes from -- what `duty_gap` names, for the agent
+    loop's seeding (2026-10-21)."""
+    got = _last(tool_log, "coverage", rel)
+    if got is None:
+        return None
+    cov = got[1].get("result") or {}
+    if not cov.get("measured") or not cov.get("missed"):
+        return None
+    tried, blank = coverage_turns(tool_log, rel, rounds)
+    target = _next_target(_coverage_groups(got[1]), tried)
+    if target is None:
+        return None
+    return target, blank.get((target["path"], target["function"]), 0), cov
 
 
 def coverage_tried(tool_log: list, rel: str, rounds: list[int]) -> list[tuple[str, str]]:

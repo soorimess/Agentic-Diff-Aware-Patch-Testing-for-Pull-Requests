@@ -382,6 +382,105 @@ MIN_USEFUL_ACTIONS = 3
 MAX_PASSES_AT_BASE_ROUNDS = 2
 
 
+def _seed_account(inst: dict, box: E.Sandbox, test_file: str, code: str, verdict,
+                  seeds: list) -> dict:
+    """For each seeded test: still in the final file, and changed by the agent or not. When
+    some are left as copied, the final file is scored once more without them, so the
+    record holds both numbers. The file on disk is put back afterwards."""
+    import ast
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        tree = None
+    lines = code.splitlines()
+    funcs = {n.name: n for n in (tree.body if tree else [])
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+    def body_of(n) -> str:
+        first = min([n.lineno] + [d.lineno for d in n.decorator_list])
+        return "\n".join(lines[first - 1:n.end_lineno]).strip()
+
+    rows, drop = [], []
+    for e in seeds:
+        n = funcs.get(e["name"])
+        orig = re.search(rf"(?ms)^(@[^\n]*\n)*(async\s+)?def {re.escape(e['name'])}\(.*", e["block"])
+        same = bool(n) and bool(orig) and body_of(n) == orig.group(0).strip()
+        rows.append({"name": e["name"], "from": e["from"], "part": e["part"],
+                     "kept": bool(n), "changed": bool(n) and not same})
+        if n and same:
+            drop.append(n)
+    cov = verdict.changed_line_coverage or {}
+    out = {"seeds": rows, "with_seeds": {"f2p": verdict.f2p, "covered": cov.get("covered"),
+                                        "percent": cov.get("percent")}}
+    if drop:
+        cut = set()
+        for n in drop:
+            first = min([n.lineno] + [d.lineno for d in n.decorator_list])
+            cut |= set(range(first, n.end_lineno + 1))
+        variant = "\n".join(ln for i, ln in enumerate(lines, 1) if i not in cut) + "\n"
+        box.write(test_file, variant)
+        try:
+            v = V.verify(inst, box, generated_test=variant, quiet=True, test_path=test_file)
+            c = v.changed_line_coverage or {}
+            out["without_unchanged_seeds"] = {"f2p": v.f2p, "covered": c.get("covered"),
+                                              "percent": c.get("percent")}
+        finally:
+            box.write(test_file, code)
+    else:
+        out["without_unchanged_seeds"] = out["with_seeds"]
+    return out
+
+
+def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list) -> str:
+    """Option 1 (user, 2026-10-21): when a target part's first turn ran none of its lines
+    and a repository test file was measured to run at least half of them, the harness
+    copies one of that file's tests into the agent's file, unchanged, renamed
+    `test_seeded_<name>`, and says so. Only tests that exist in the repository before the
+    change. Kept only if the copy passes on the code as it is; logged as a `seed` entry.
+    sphinx-10807 (rounds 9-11) was shown the measured file, an example and its imports,
+    and wrote its own mock tests instead, three runs in a row."""
+    from openhands_f2p import sandbox_tools as S
+    rounds = [m.get("at_tool", 0) for m in injected if V.COVERAGE_TARGET_SAID in (m.get("text") or "")]
+    got = V.coverage_target(tool_log, rel, rounds)
+    if got is None:
+        return ""
+    target, blank, cov = got
+    key = f"{target['path']}::{target['function']}"
+    hit = (cov.get("related_by_part") or {}).get(key)
+    if (blank < 1 or not hit or 2 * hit["reached"] < hit["missed"]
+            or any(e.get("tool") == "seed" and e.get("part") == key for e in tool_log)):
+        return ""
+    current = box.read(rel) or ""
+    taken = set(re.findall(r"^\s*(?:async\s+)?def (\w+)\(", current, re.M))
+    made = S.seed_block(box.read(hit["file"]) or "", [target["function"].rsplit(".", 1)[-1]], taken)
+    if made is None:
+        return ""
+    block, original, seeded = made
+    source = f"{hit['file']}::{original}"
+    new = (current.rstrip() + f"\n\n\n# Copied unchanged by the harness from {source}, a test in "
+           f"this repository before this change.\n" + block)
+    box.write(rel, new)
+    run = box.exec(E.test_command(box, [f"{rel}::{seeded}"]), timeout=600)
+    outcome = V.own_outcomes(E.parse_output(run.output), [rel])
+    if not outcome or any(v != "PASSED" for v in outcome.values()):
+        box.write(rel, current)
+        tool_log.append({"tool": "seed", "via": "harness", "path": rel, "part": key,
+                         "from": source, "error": f"did not pass here: {outcome}"})
+        flow.record(flow.AGENT, "seed", f"{source} did not pass here; not added")
+        return ""
+    tool_log.append({"tool": "seed", "via": "harness", "path": rel, "target": rel,
+                     "content": new, "part": key, "from": source, "name": seeded,
+                     "block": block})
+    flow.record(flow.AGENT, "seed", f"{source} -> {seeded} for {key}")
+    return (f"\n\n## Seeded\n\nThe harness has added `{seeded}` to the end of `{rel}`: a copy, "
+            f"unchanged, of `{source}`, a test that exists in this repository before this change "
+            f"and runs {hit['reached']} of this part's {hit['missed']} missed lines. It passes on "
+            f"the code as it is, with its imports and helpers. As it stands it passes on both "
+            f"sides of the change, so it tests nothing about it, and a copy left unchanged is not "
+            f"counted as your test. Keep it, and change its input and its assertions so they check "
+            f"what this change does -- then call `verify`.")
+
+
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
               out_dir: Path, features: FeatureSet, n_mutants: int = 0,
               model: str | None = None, provider: str | None = None,
@@ -665,6 +764,8 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                            else say + diag)
             if "passes_at_base" in reason or "verify_open" in reason:
                 say += V.lost_flip(tool_log, rel, box.read(rel))
+            if "duties_open[coverage]" in reason and "coverage-tool" in features:
+                say += _seed(box, tool_log, rel, injected)
             if stuck(reason) and streak + 1 >= MAX_PASSES_AT_BASE_ROUNDS:
                 box._unscoreable_capped = True
             nudge = prompt.followup("second-chance", shortfall=say,
@@ -1017,6 +1118,14 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                         (d / Path(test_file).name).write_text(code)
                     else:
                         box.write(test_file, code)
+                # Seeded repository tests (option 1): which the agent changed, and the
+                # coverage without the ones it left as copied -- what its own tests reach.
+                # A record for deciding on option 1 (user, 2026-10-21); the file handed in
+                # is scored as it is.
+                seeds = [e for e in run["tool_log"] if e.get("tool") == "seed" and "error" not in e]
+                if seeds:
+                    run["seeded"] = _seed_account(inst, box, test_file, code, verdict, seeds)
+                    flow.record(flow.AGENT, "seeded", json.dumps(run["seeded"]))
                 # Cut off by something outside the agent -- the gateway ran out of credit,
                 # a rate limit, a 5xx, a dropped connection. The test on disk is whatever
                 # the agent had when the call failed, and the stop was never checked, so
@@ -1183,6 +1292,9 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               # The best fail-to-pass version, when the last file scored worse and the
               # harness checked it again; `handed_in` says which one was scored.
               "restored": run.get("restored"),
+              # Option 1: the repository tests the harness copied in, whether the agent
+              # changed each, and coverage with and without the unchanged copies.
+              "seeded": run.get("seeded"),
               # Edits to files that existed at base -- the guard's subject. Scratch
               # files the agent created for itself are listed separately.
               "files_edited_outside_test": checks["preexisting_written"],

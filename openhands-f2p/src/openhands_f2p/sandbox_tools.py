@@ -686,6 +686,68 @@ def related_tests(box: Sandbox, paths: list[str], own: str, per_path: int = 3) -
     return out
 
 
+SEED_PREFIX = "test_seeded_"
+
+
+def seed_block(text: str, names: list[str], taken: set[str]) -> tuple[str, str, str] | None:
+    """A whole module-level test from a repository test file, to copy into the agent's file:
+    the module-level helpers and fixtures it uses (two levels), the imports all of that
+    needs, and the test renamed `test_seeded_<name>`. Picked like `related_example`: one
+    that names a missed function, else one with a setup, else the first. Returns
+    `(block, original name, seeded name)`, or None. Option 1 (user, 2026-10-21): the
+    harness gives the agent the repository's own test when it does not take it itself --
+    tests that exist before the change, never the pull request's."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    lines = text.splitlines()
+    defs = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    tests = [n for n in defs.values() if n.name.startswith("test_")]
+    if not tests:
+        return None
+
+    def src(n) -> str:
+        first = min([n.lineno] + [d.lineno for d in getattr(n, "decorator_list", [])])
+        return "\n".join(lines[first - 1:n.end_lineno])
+
+    def used(n) -> set[str]:
+        got = {x.id for x in ast.walk(n) if isinstance(x, ast.Name)}
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            got |= {a.arg for a in n.args.args}
+        return got
+
+    def names_any(n) -> bool:
+        body = src(n)
+        return any(re.search(rf"\b{re.escape(m)}\b", body) for m in names)
+
+    pick = (next((n for n in tests if names_any(n)), None)
+            or next((n for n in tests if n.decorator_list or n.args.args), None) or tests[0])
+    helpers: list = []
+    want = used(pick)
+    for _ in range(2):
+        more = [defs[w] for w in want if w in defs and defs[w] is not pick and defs[w] not in helpers]
+        helpers += more
+        want = set().union(*[used(h) for h in more]) if more else set()
+    need = used(pick).union(*[used(h) for h in helpers]) if helpers else used(pick)
+    imports = []
+    for node in tree.body:
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        keep = [al for al in node.names if (al.asname or al.name.split(".")[0]) in need]
+        if keep:
+            names_s = ", ".join(al.name + (f" as {al.asname}" if al.asname else "") for al in keep)
+            imports.append(f"from {'.' * node.level}{node.module or ''} import {names_s}"
+                           if isinstance(node, ast.ImportFrom) else f"import {names_s}")
+    seeded = SEED_PREFIX + pick.name[len("test_"):]
+    k = 2
+    while seeded in taken:
+        seeded, k = f"{SEED_PREFIX}{pick.name[len('test_'):]}_{k}", k + 1
+    body = re.sub(rf"\bdef {re.escape(pick.name)}\(", f"def {seeded}(", src(pick), count=1)
+    code = [src(h) for h in helpers if h.name not in taken] + [body]
+    return ("\n".join(imports) + "\n\n\n" + "\n\n\n".join(code)).strip() + "\n", pick.name, seeded
+
+
 def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[str, str]:
     """One test function from a repository test file, decorators included, cut at
     `max_lines`: the first that mentions one of `names` (the missed functions' short
