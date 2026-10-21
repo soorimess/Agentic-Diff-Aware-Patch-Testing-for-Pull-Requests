@@ -30,6 +30,7 @@ Three tools, deliberately not more:
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import re
 import shlex
@@ -729,7 +730,29 @@ def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[s
     owner = next((m.group(1) for ln in reversed(lines[:a]) if indent and
                   (m := re.match(r"class (\w+)", ln))), "")
     node = f"{owner}::{name}" if owner else name
-    return "\n".join(body) + ("\n    ..." if b > a + max_lines else ""), node
+    # The file's imports the example uses, so it can be copied as it is (2026-10-21):
+    # sphinx-10807 (round 10) was shown `test_rst_directive(app)` without its
+    # `restructuredtext` and `assert_node` imports, invented a `testroot` for it, hit "test
+    # root directory doesn't exist" and deleted the test.
+    shown = "\n".join(body)
+    used = set(re.findall(r"[A-Za-z_]\w*", "\n".join(lines[a:b])))
+    imports = []
+    try:
+        tree = ast.parse("\n".join(lines))
+    except SyntaxError:
+        tree = None
+    for node in (tree.body if tree else []):
+        if node.lineno > a or not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        keep = [al for al in node.names if (al.asname or al.name.split(".")[0]) in used]
+        if not keep:
+            continue
+        names = ", ".join(al.name + (f" as {al.asname}" if al.asname else "") for al in keep)
+        imports.append(f"from {'.' * node.level}{node.module or ''} import {names}"
+                       if isinstance(node, ast.ImportFrom) else f"import {names}")
+    head = "\n".join(imports[:8])
+    return ((head + "\n\n\n" if head else "") + shown
+            + ("\n    ..." if b > a + max_lines else "")), node
 
 
 _CONFIG_READ = re.compile(r"\b(?:config|settings)\.([A-Za-z_]\w*)")

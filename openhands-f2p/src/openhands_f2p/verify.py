@@ -1322,10 +1322,12 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                                  f"repository, runs {hit['reached']} of this part's "
                                  f"{hit['missed']} missed lines** when run with the change "
                                  f"applied, so its setup reaches this code in this container. "
-                                 f"Start from it: copy one of its tests into your file -- its "
-                                 f"decorators, fixtures and setup as they are -- then change the "
-                                 f"input and the assertions so they check what this change does."
-                                 + (f" One of its tests:\n\n```python\n{ex}\n```\n" if ex else "")
+                                 f"Start from it: copy one of its tests into your file exactly "
+                                 f"as it is -- its imports, decorators and fixtures; a test "
+                                 f"project or data directory it does not name does not exist -- "
+                                 f"and run it. Then change the input and the assertions so they "
+                                 f"check what this change does."
+                                 + (f" One of its tests, with the imports it uses:\n\n```python\n{ex}\n```\n" if ex else "")
                                  + "\n")
                     shown += conf_said
                     new = (f" `{target['path']}` is a file this change adds: absent before "

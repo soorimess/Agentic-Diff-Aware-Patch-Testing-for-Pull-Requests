@@ -908,6 +908,26 @@ between 62% and 85%: the reach map measured only two related files and showed
   value of `X`: set it in your test ... and assert on what each value changes" in its
   target refusal.
 
+Round 10 result, two runs (base-it10, base-it10-r2): sphinx-10807 62.8% and 62.2%,
+xarray-7444 94.1% and 98.0% -- both stable, both above where they started. Sphinx did not
+climb towards the 85% ceiling: the `rst.py` targets now named `test_domain_rst.py` (12 of
+14 lines) with the configuration hint, but the example, `test_rst_directive(app)`, came
+without its `restructuredtext` and `assert_node` imports and has no decorator (it uses the
+default test project); the model added an invented `testroot='domain-rst'`, read "test root
+directory doesn't exist" and deleted the test. Round 11:
+- **The example comes with the imports it uses** (parsed with `ast`, trimmed to the names
+  the example uses), and the refusal says to copy it exactly as it is -- imports,
+  decorators, fixtures; a test project or data directory it does not name does not exist
+  -- run it, then change the input and assertions.
+
+Round 11 result (base-it11): xarray-7444 96.1%, sphinx-10807 56.4%. Its targets this time
+were the JS parts, each pointing to `test_domain_js.py` (9 of 15 lines) with a copy-ready
+example and its imports; the model wrote its own mock tests instead (`JSObject(None,
+None)` inside `try: ... except Exception: pass`), they failed, and it reverted. Over the
+last five runs of the current design sphinx scored 62.2, 62.8, 62.2, 56.4 and 70.5 (round
+6) against 11.5% before the loop; xarray never fell below its starting 92.2% (92.2, 94.1,
+98.0, 96.1). What is left on sphinx is the model not acting on a correct, measured pointer.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of
