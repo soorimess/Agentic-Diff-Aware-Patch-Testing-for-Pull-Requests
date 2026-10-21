@@ -890,6 +890,24 @@ loop). The `run` note fired three times and sphinx called `verify` nineteen time
 3-7% until the refusal naming `build_toc` said `tests/test_domain_js.py` runs 32 of its 35
 missed lines and showed that test's setup -- the next versions ran 49.4% and 62.2%.
 
+The ceiling, measured with no model (2026-10-21): with the change applied, round 9's final
+test runs 62.2% of sphinx-10807's changed lines, the developer's own test 60.3%, each of
+`test_domain_js/py/rst.py` 50%, and all of them together 85.3%; 23 lines no test runs --
+mostly the `toc_object_entries_show_parents == 'hide'` / `'all'` returns. Two flaws stood
+between 62% and 85%: the reach map measured only two related files and showed
+`test_domain_js.py` (1 of the 59 lines left) for every target while `test_domain_rst.py`
+(30 of them) was never run; and the same example for every part. Round 10:
+- **Reach per part** (`related_by_part`): the first related test file of every missed file
+  (up to `RELATED_REACH_FILES` = 6) is measured; each target refusal names the file that
+  reaches most of that part, with an example from that file. The first `verify` that
+  measures coverage takes longer once (sphinx: ~170 s for six files); then cached.
+- **The example prefers a test with a setup** -- decorators, or fixtures it takes -- when no
+  test names a missed function (`test_domain_rst.py` opens with a string parser).
+- **Configuration branches** (`config_branches`): a missed part whose lines, or the line
+  above each, read `config.X` / `settings.X` gets "some of these lines run only for another
+  value of `X`: set it in your test ... and assert on what each value changes" in its
+  target refusal.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

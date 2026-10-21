@@ -625,6 +625,8 @@ def _missed_by_function(cov: dict) -> list[str]:
 # Repository test files longer than this are not run for `_reach_of`: too slow to run
 # whole under coverage inside a `verify` call.
 RELATED_RUN_MAX_LINES = 2500
+# How many missed files get their first related test file measured.
+RELATED_REACH_FILES = 6
 
 # File stems too common to say which tests are about a file (`utils.py` -> every
 # `test_utils.py` in the repository).
@@ -706,9 +708,18 @@ def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[s
         while end > i + 1 and not lines[end - 1].strip():
             end -= 1
         spans.append((top, end))
+    # Else one with a setup -- decorators, or fixtures it takes -- before the first:
+    # sphinx-10807's `test_domain_rst.py` opens with `test_parse_directive`, a string parser
+    # that reaches none of the change, while its `app`-fixture tests reach most of it.
+    def has_setup(a: int, b: int) -> bool:
+        d = next(i for i in range(a, b) if re.match(r"\s*(async\s+)?def test_", lines[i]))
+        params = re.search(r"\(([^)]*)\)", lines[d])
+        own = [x.strip() for x in (params.group(1) if params else "").split(",")
+               if x.strip() and x.strip() not in ("self", "cls")]
+        return d > a or bool(own)
     pick = next(((a, b) for a, b in spans
                  if any(re.search(rf"\b{re.escape(n)}\b", "\n".join(lines[a:b])) for n in names)),
-                spans[0])
+                next(((a, b) for a, b in spans if has_setup(a, b)), spans[0]))
     a, b = pick
     body = lines[a:min(b, a + max_lines)]
     # Its pytest node name, `Class::test` for a method.
@@ -719,6 +730,29 @@ def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[s
                   (m := re.match(r"class (\w+)", ln))), "")
     node = f"{owner}::{name}" if owner else name
     return "\n".join(body) + ("\n    ..." if b > a + max_lines else ""), node
+
+
+_CONFIG_READ = re.compile(r"\b(?:config|settings)\.([A-Za-z_]\w*)")
+
+
+def config_branches(box: Sandbox, cov: dict) -> None:
+    """Mark each missed-lines group with the configuration values its missed lines, or the
+    line above each, read (`config`). Read at head, inside the patched window.
+
+    sphinx-10807 (round 9, 2026-10-21): of the 23 changed lines no test in the repository
+    or the pull request runs, most are the `toc_object_entries_show_parents == 'hide'` and
+    `== 'all'` returns -- reachable by building with that value set, which nothing does."""
+    texts: dict[str, list[str]] = {}
+    for g in cov.get("missed_by_function") or []:
+        if not g.get("missed"):
+            continue
+        lines = texts.setdefault(g["path"], (box.read(g["path"]) or "").splitlines())
+        names: set[str] = set()
+        for n in g.get("lines") or []:
+            for ln in lines[max(n - 2, 0):n]:
+                names.update(_CONFIG_READ.findall(ln))
+        if names:
+            g["config"] = sorted(names)
 
 
 def related_note(cov: dict) -> str:
@@ -918,30 +952,55 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # constrained environment ... I can't easily create a full Sphinx build"; the lines
         # that setup runs are evidence, not advice.
         missed = set(cov.get("missed") or [])
-        reach = None
-        for f in list(dict.fromkeys(cache[p][0] for p in paths if cache.get(p)))[:2]:
-            hits = self._reach_of(f)
-            gain = (hits or set()) & missed
-            if gain and (reach is None or len(gain) > len(reach[1])):
-                reach = (f, gain)
-        if reach:
-            f, gain = reach
-            parts = [{"path": g["path"], "function": g["function"], "missed": g["missed"],
-                      "reached": sum(1 for n in g.get("lines") or [] if f"{g['path']}:{n}" in gain)}
-                     for g in groups]
-            parts = [x for x in parts if x["reached"]]
-            cov["related_reach"] = {"file": f, "lines": len(gain), "of": len(missed),
-                                    "parts": parts[:6]}
-            # One of its tests as the example: one that names a reached function, else
-            # its first. Shown only for a file that reaches the missed code -- round 4 showed
-            # xarray-7444 `test_consolidate_slices`, which has nothing to do with it.
+        # Every missed file's first related test file, not only the two biggest (2026-10-21):
+        # sphinx-10807 (round 9) was shown `test_domain_js.py` for its `rst.py` targets --
+        # it reaches 1 of the 59 lines left -- while `test_domain_rst.py`, never measured,
+        # reaches 30 of them.
+        all_paths = list(dict.fromkeys(g["path"] for g in groups))[:RELATED_REACH_FILES]
+        todo = [p for p in all_paths if p not in cache]
+        if todo:
+            cache.update({p: [] for p in todo})
+            cache.update(related_tests(self.box, todo, target.split("::")[0]))
+        files = list(dict.fromkeys(cache[p][0] for p in all_paths if cache.get(p)))
+        gains = {f: (self._reach_of(f) or set()) & missed for f in files}
+        gains = {f: g for f, g in gains.items() if g}
+
+        def parts_of(gain: set[str]) -> list[dict]:
+            got = [{"path": g["path"], "function": g["function"], "missed": g["missed"],
+                    "reached": sum(1 for n in g.get("lines") or [] if f"{g['path']}:{n}" in gain)}
+                   for g in groups]
+            return [x for x in got if x["reached"]]
+
+        def example(f: str, parts: list[dict]) -> str:
+            # One of its tests: one that names a reached function, else its first. Only for
+            # a file that reaches the missed code -- round 4 showed xarray-7444
+            # `test_consolidate_slices`, which has nothing to do with it.
             key = ("example", f, tuple(x["function"] for x in parts))
             if key not in cache:
                 names = [x["function"].rsplit(".", 1)[-1] for x in parts
                          if x["function"] != "<module>"]
                 cache[key] = related_example(self.box.read(f) or "", names)[0]
-            if cache[key]:
-                cov["related_example"] = {"file": f, "text": cache[key]}
+            return cache[key]
+
+        if gains:
+            f = max(gains, key=lambda f: len(gains[f]))
+            parts = parts_of(gains[f])
+            cov["related_reach"] = {"file": f, "lines": len(gains[f]), "of": len(missed),
+                                    "parts": parts[:6]}
+            if ex := example(f, parts):
+                cov["related_example"] = {"file": f, "text": ex}
+            # For each part, the file that reaches most of it, with its own example: what the
+            # target refusal shows.
+            by_part: dict[str, dict] = {}
+            for f, gain in gains.items():
+                for x in parts_of(gain):
+                    k = f"{x['path']}::{x['function']}"
+                    if k not in by_part or x["reached"] > by_part[k]["reached"]:
+                        by_part[k] = {"file": f, "reached": x["reached"], "missed": x["missed"]}
+            for k, v in by_part.items():
+                v["example"] = example(v["file"], [x for x in parts_of(gains[v["file"]])
+                                                   if f"{x['path']}::{x['function']}" == k])
+            cov["related_by_part"] = by_part
         return {p: cache[p] for p in paths if cache.get(p)}
 
     def _reach_of(self, test_file: str) -> set[str] | None:
@@ -1007,6 +1066,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     import_only = _import_only(self.box, cov) if cov.get("measured") else ""
                     if cov.get("measured") and cov.get("missed"):
                         cov["related_tests"] = self._related(cov, action.target)
+                        config_branches(self.box, cov)
                 except Exception as exc:
                     cov = {"measured": False, "reason": f"{type(exc).__name__}: {exc}"}
         finally:

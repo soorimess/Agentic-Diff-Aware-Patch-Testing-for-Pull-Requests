@@ -1304,13 +1304,21 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                     # (`related_reach`), the refusal says so and shows its setup (2026-10-21):
                     # sphinx-10807 (round 7) had the reach in twelve `verify` reports and
                     # never built a project; the refusal is the message it acts on.
-                    reach = cov.get("related_reach") or {}
-                    hit = next((x for x in reach.get("parts") or []
-                                if (x["path"], x["function"]) == key
-                                and 2 * x["reached"] >= x["missed"]), None)
+                    # Lines that run only for another configuration value (2026-10-21).
+                    conf = target.get("config") or []
+                    conf_said = ""
+                    if conf:
+                        conf_said = (f" Some of these lines run only for another value of "
+                                  f"{', '.join(f'`{c}`' for c in conf[:3])}: set that value in your "
+                                  f"test -- through whatever configuration the code reads it from, "
+                                  f"as the repository's tests do -- and assert on what each value "
+                                  f"changes.")
+                    hit = (cov.get("related_by_part") or {}).get(f"{key[0]}::{key[1]}")
+                    if hit and 2 * hit["reached"] < hit["missed"]:
+                        hit = None
                     if hit:
-                        ex = (cov.get("related_example") or {}).get("text")
-                        shown = (f"\n\n**`{reach['file']}`, a test file already in this "
+                        ex = hit.get("example")
+                        shown = (f"\n\n**`{hit['file']}`, a test file already in this "
                                  f"repository, runs {hit['reached']} of this part's "
                                  f"{hit['missed']} missed lines** when run with the change "
                                  f"applied, so its setup reaches this code in this container. "
@@ -1319,6 +1327,7 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                                  f"input and the assertions so they check what this change does."
                                  + (f" One of its tests:\n\n```python\n{ex}\n```\n" if ex else "")
                                  + "\n")
+                    shown += conf_said
                     new = (f" `{target['path']}` is a file this change adds: absent before "
                            f"the fix, as expected -- `verify` applies the change before it "
                            f"measures." if target["path"] in (cov.get("new_files") or []) else "")
