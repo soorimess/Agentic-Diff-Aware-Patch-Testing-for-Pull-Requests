@@ -197,16 +197,35 @@ def _import_only(box: Sandbox, cov: dict) -> str:
             "copy, not the project.")
 
 
-def _first_error(output: str, node: str) -> str:
-    """The first `E   ` line pytest printed for `node`, or "" when there is none."""
+def _section(output: str, node: str) -> str:
+    """What pytest printed under `node`'s failure header, or "" when there is none."""
     key = re.escape(".".join(node.split("::")[1:]))
     head = re.search(rf"^_{{3,}} (?:ERROR at \w+ of )?{key} _{{3,}}$", output, re.M)
     if not head:
         return ""
     end = re.search(r"^(_{3,} |={3,} )", output[head.end():], re.M)
-    section = output[head.end(): head.end() + end.start() if end else len(output)]
-    line = next((ln for ln in section.splitlines() if ln.startswith("E ")), "")
+    return output[head.end(): head.end() + end.start() if end else len(output)]
+
+
+def _first_error(output: str, node: str) -> str:
+    """The first `E   ` line pytest printed for `node`, or "" when there is none."""
+    line = next((ln for ln in _section(output, node).splitlines() if ln.startswith("E ")), "")
     return line[1:].strip().replace("`", "'")[:200]
+
+
+def _failing_line(output: str, node: str) -> tuple[int, str] | None:
+    """The line of the test file itself where `node` failed, with its number, read from
+    pytest's `--tb=short` frames (`tests/test_x.py:12: in test_x`); None when the
+    output does not show it."""
+    stem = Path(node.split("::")[0]).name
+    lines = _section(output, node).splitlines()
+    for i, ln in enumerate(lines):
+        m = re.match(r"^(\S+\.py):(\d+): in \S+", ln)
+        if m and Path(m.group(1)).name == stem and i + 1 < len(lines):
+            src = lines[i + 1].strip()
+            if src and not src.startswith("E "):
+                return int(m.group(2)), src.replace("`", "'")[:200]
+    return None
 
 
 def _why_both(before: str, after: str, nodes: list[str]) -> str:
@@ -232,6 +251,38 @@ def _why_both(before: str, after: str, nodes: list[str]) -> str:
                         f"fixes; the second is a mistake in the test itself: fix that and "
                         f"keep the rest.")
     return (" " + " ".join(said)) if said else ""
+
+
+def _backwards(after: str, nodes: list[str], wrong: list[str]) -> str:
+    """For tests that pass before the change and fail after it: where each one fails, and
+    that the assertion there is the one to reverse.
+
+    sphinx-10807 (round 16, 2026-10-22) was told "backwards: ... assert what the change
+    makes true" for `test_new_config_option_not_present`, read it as progress, and went on
+    to tests that passed on both sides. The line that fails is named now, and that this is
+    the opposite of what is needed.
+    """
+    said = []
+    for n in nodes[:3]:
+        name = n.split("::")[-1]
+        w = next((x for x in wrong if x.startswith(f"`{name}`")), "")
+        if w:
+            said.append(w)
+            continue
+        at, err = _failing_line(after, n), _first_error(after, n)
+        if at:
+            said.append(f"`{name}` fails after the change at line {at[0]}: `{at[1]}`"
+                        + (f" (`{err}`)." if err else "."))
+        elif err:
+            said.append(f"`{name}` fails after the change with `{err}`.")
+    if not said:
+        return ""
+    many = len(said) > 1
+    return (" " + " ".join(said) + (" Each of those assertions holds" if many else
+                                    " That assertion holds")
+            + " on the old code and breaks on the new one: it checks that the change is NOT "
+            "there. Reverse " + ("each" if many else "it") + " -- assert what the change "
+            "makes true -- and the same test fails before the change and passes after it.")
 
 
 def _condense(text: str) -> str:
@@ -1056,6 +1107,7 @@ class _Raises:
             _REC.append({"test": _CUR["test"], "kind": "raises", "expected": _name(self.expected),
                          "match": None if self.match is None else str(self.match),
                          "caught": None if et is None else et.__name__,
+                         "type_ok": et is not None and issubclass(et, self.expected),
                          "message": None if ev is None else str(ev)[:300]})
         except Exception:
             pass
@@ -1134,6 +1186,57 @@ def caught_differences(before: list, after: list, limit: int = 3) -> list[str]:
             out.append(f"`{name}`: `{call}` caught {said(rb)} before the change and {said(ra)} after it.")
             if len(out) >= limit:
                 return out
+    return out
+
+
+def wrong_matches(before: list, after: list, tests: list[str], limit: int = 3) -> list[str]:
+    """For tests that fail once the change is in: a `pytest.raises` / `pytest.warns` whose
+    `match=` the code's message after the change does not meet, with that message.
+
+    xarray-7444 (round 15, 2026-10-22) had six of its seven restores on one test,
+    `pytest.raises(ValueError, match="'offset' and 'base' ...")`: pandas' message, which
+    the old code gives. Once the change is in, xarray raises "base and offset cannot be
+    present at the same time" first. The verdict said "assert what the change makes true"
+    and the model kept the same `match=`.
+    """
+    def hit(pattern, message):
+        try:
+            return bool(re.search(pattern, message or ""))
+        except re.error:
+            return pattern in (message or "")
+    old = {}
+    for r in before or []:
+        old.setdefault((r.get("test"), r.get("kind"), r.get("match")), r)
+    keep = set(tests)
+    out = []
+    for r in after or []:
+        if r.get("test") not in keep or not r.get("match") or not r.get("caught"):
+            continue
+        name = (r["test"] or "?").split("::")[-1]
+        if r["kind"] == "raises":
+            got = [(r["caught"], r.get("message") or "")]
+        else:
+            got = list(zip(r.get("caught") or [], r.get("message") or []))
+        if not got or any(hit(r["match"], m) for _, m in got):
+            continue
+        b = old.get((r["test"], r["kind"], r["match"]))
+        b_msgs = ([b.get("message")] if b and b["kind"] == "raises" else (b or {}).get("message") or [])
+        was_old = any(hit(r["match"], m) for m in b_msgs if m)
+        kind, msg = got[0]
+        msg = msg.replace("`", "'")
+        line = (f"`{name}`: `pytest.{r['kind']}({r['expected']}, match={r['match']!r})` -- "
+                + ("that is the message the code gives BEFORE the change. " if was_old else "")
+                + f"Once the change is applied the code {'raises' if r['kind'] == 'raises' else 'warns'} "
+                f"`{kind}: {msg[:200]}`, which that `match=` does not meet. ")
+        if r["kind"] == "raises" and not r.get("type_ok", kind == r["expected"]):
+            line += (f"Its type is not `{r['expected']}` either: expect the type and message the "
+                     f"code gives once the change is in.")
+        else:
+            line += "Put the new message in `match=` (escape regex characters such as `(` `.` `[`)."
+        if line not in out:
+            out.append(line)
+        if len(out) >= limit:
+            break
     return out
 
 
@@ -1274,6 +1377,63 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     cache[key] = None
         return cache[key]
 
+    def _unswallowed(self, rel: str, text: str, names: set[str]) -> str:
+        """What the test's `except ...: pass` blocks hide: a copy of the file with each of
+        them re-raising, run on both sides; the tests of `names` that then fail before the
+        change and pass after it, with the old code's error. "" when none do.
+
+        sphinx-10807 (round 16, 2026-10-22) wrapped `config.toc_object_entries_show_parents`
+        in `try: ... except AttributeError: pass` -- the exact failure the change fixes --
+        passed on both sides, and was told only that an `except: pass` hides errors. Two
+        extra runs, and only for a file that passes on both sides and has such a block.
+        """
+        from openhands_f2p import verify as V
+        spots = list(V._SWALLOW.finditer(text))
+        if not spots:
+            return ""
+        copy = V._SWALLOW.sub(lambda m: m.group(0)[:-len("pass")] + "raise", text)
+        tmp = str(Path(rel).with_name("test_f2p_unswallow_tmp.py"))
+        cmd = E.test_command(self.box, [tmp])
+        self.box.write(tmp, copy)
+        try:
+            before = self.box.exec(cmd, timeout=3600)
+            self.box.apply_patch(self.patch)
+            try:
+                after = self.box.exec(cmd, timeout=3600)
+            finally:
+                self.box.apply_patch(self.patch, revert=True)
+        finally:
+            self.box.exec(f"rm -f {shlex.quote(tmp)}", timeout=60)
+        b = V.own_outcomes(E.parse_output(before.output), [tmp])
+        a = V.own_outcomes(E.parse_output(after.output), [tmp])
+        flips = sorted(n for n, v in b.items() if v in ("FAILED", "ERROR")
+                       and a.get(n) == "PASSED" and n.split("::")[-1] in names)
+        if not flips:
+            return ""
+        # Which `except` lines sit inside each test, for the sentence.
+        where: dict[str, list[int]] = {}
+        try:
+            lines = [text.count("\n", 0, m.start()) + 1 for m in spots]
+            for f in ast.walk(ast.parse(text)):
+                if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    where[f.name] = [n for n in lines if f.lineno <= n <= (f.end_lineno or n)]
+        except SyntaxError:
+            pass
+        said = []
+        for n in flips[:3]:
+            name = n.split("::")[-1]
+            at = where.get(name.split("[")[0]) or []
+            err = _first_error(before.output, n)
+            said.append("Without the `except ...: pass`"
+                        + (f" at line {', '.join(map(str, at))}" if at else "")
+                        + f", `{name}` fails before the change"
+                        + (f" with `{err}`" if err else "") + " and passes after it.")
+        return ("\n\nWhat your `except ...: pass` hides -- the harness ran a copy of your file "
+                "with those blocks re-raising, on both sides: " + " ".join(said)
+                + " That error is your test catching what the change fixes, and the `except` "
+                "throws it away. Remove the `try`/`except` around it (keep the assertions) "
+                "and that test is fail-to-pass.")
+
     def __call__(self, action: VerifyAction, conversation=None) -> VerifyObservation:
         state = self.box.ensure_base(self.patch)
         if state != "base":
@@ -1357,6 +1517,18 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # than at flipping one assertion. django-13279 hit it twice in six verifies.
         inverted = sorted({n for n, v in base_out.items() if v == "PASSED"}
                           & {n for n, v in head_out.items() if v in ("FAILED", "ERROR")})
+
+        # What each `pytest.raises` / `pytest.warns` caught on the two sides (`CATCH_PLUGIN`).
+        def rows(side):
+            try:
+                return json.loads(self.box.read(f"{CATCH_DIR}/{side}.json") or "[]")
+            except ValueError:
+                return []
+        caught_before, caught_after = (rows("before"), rows("after")) if catch else ([], [])
+        # A `match=` the message after the change does not meet (fix 5, 2026-10-23).
+        wrong = wrong_matches(caught_before, caught_after, still_failing)
+        rel = action.target.split("::")[0]
+        hidden = ""
         if not base_out and not head_out:
             head = "NOT fail-to-pass: nothing was collected -- the file does not import."
         elif inverted and not flipped:
@@ -1364,12 +1536,14 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             # no-require-tools) had one failing on both sides beside the backwards one,
             # and the headline named only the backwards one.
             both = [n for n in still_failing if n not in inverted]
-            head = (f"NOT fail-to-pass, and backwards: {inverted[:3]} pass on the code as "
-                    f"it is and fail once the change is applied. You have found the right "
-                    f"behaviour and asserted the old side of it. Assert what the change "
-                    f"makes true, not what it replaces."
+            head = (f"NOT fail-to-pass, and backwards: {inverted[:3]} pass on the code "
+                    f"before the change and fail once it is applied -- the opposite of what "
+                    f"is needed, so this is not progress yet. You have found the right "
+                    f"behaviour and asserted the old side of it."
+                    + (_backwards(after.output, inverted, wrong)
+                       or " Assert what the change makes true, not what it replaces.")
                     + (f" {both[:3]} fail on both sides: fix them or delete them."
-                       if both else ""))
+                       + _why_both(before.output, after.output, both) if both else ""))
         elif still_failing and flipped:
             # Part of the file is right. Said as such, because "the test is wrong" alone
             # sent seaborn-3069 into adding tests beside a flipping one for four verifies,
@@ -1389,12 +1563,16 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                        if both else "") +
                     f"Every test in the file has to pass once the change is in."
                     + (f" {back[:3]} pass before the change and fail after: those assert "
-                       f"the old side of the behaviour -- assert what the change makes "
-                       f"true instead." if back else ""))
+                       f"the old side of the behaviour."
+                       + (_backwards(after.output, back, wrong)
+                          or " Assert what the change makes true instead.") if back else ""))
+            head += "".join(f" {w}" for w in wrong
+                            if not any(w.startswith(f"`{n.split('::')[-1]}`") for n in back))
         elif still_failing:
             head = (f"NOT fail-to-pass: {still_failing[:3]} still fail after the change "
                     f"is applied. The test is wrong, not the code."
-                    + _why_both(before.output, after.output, still_failing))
+                    + _why_both(before.output, after.output, still_failing)
+                    + "".join(f" {w}" for w in wrong))
         elif not flipped and base_out and all(v == "SKIPPED" for v in base_out.values()):
             head = ("NOT fail-to-pass: every test was skipped before the change, so none "
                     "of them ran against the old code. Find what skips them in the output "
@@ -1409,14 +1587,16 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             head = ("NOT fail-to-pass: the test already passes before the change, so it "
                     "does not test what this pull request changes.")
             # What its own checks caught differently on the two sides (2026-10-21).
-            diffs = []
+            diffs = caught_differences(caught_before, caught_after)
+            # What its `except ...: pass` blocks hide (fix 2, 2026-10-23); pytest only, like
+            # the plugin.
             if catch:
-                def rows(side):
-                    try:
-                        return json.loads(self.box.read(f"{CATCH_DIR}/{side}.json") or "[]")
-                    except ValueError:
-                        return []
-                diffs = caught_differences(rows("before"), rows("after"))
+                try:
+                    hidden = self._unswallowed(rel, self.box.read(rel) or "",
+                                               {n.split("::")[-1] for n in head_out})
+                except Exception:
+                    hidden = ""
+                head += hidden
             if diffs:
                 head += ("\n\nBut your test does see the change -- it just does not assert on it:\n"
                          + "\n".join(f"* {d}" for d in diffs)
@@ -1517,7 +1697,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         from openhands_f2p import verify as V
         rel = action.target.split("::")[0]
         current = self.box.read(rel)
-        swallow = V.swallow_note(current)
+        # The general note only when the rerun above did not say what the swallow hides.
+        swallow = "" if hidden else V.swallow_note(current)
         # The best fail-to-pass version, put back by the harness itself when this one lost
         # the flip or a real share of the coverage (`V.restore_reason`, user 2026-10-21).
         # The agent is told what was restored and why, and goes on from there.

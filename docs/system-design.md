@@ -1015,6 +1015,27 @@ the change is applied"; the model answered "Perfect! ... fails after the change,
 exactly what we want", then wrapped its checks in `except: pass` and asserted things true on
 both sides until the passes-at-base cap. The messages were right; the model misread them.
 
+Three verdicts made concrete after round 16 (2026-10-23, user), each from evidence the two
+runs already have:
+
+- **Backwards** names, for each test that passes before and fails after, the line of the
+  test where it fails after the change and its error (pytest's `--tb=short` frame), says
+  this is the opposite of what is needed and not progress, and says to reverse that
+  assertion (`_backwards`, `_failing_line`).
+- **`except ...: pass` in a file that passes on both sides**: `verify` runs a temporary
+  copy of the file with each such block re-raising, on both sides (two extra runs, pytest
+  only, only in this case), and reports the tests that then fail before the change and pass
+  after, with the old code's error: "without the `except ...: pass` at line 19,
+  `test_config_option_behavior` fails before the change with `AttributeError: ...` and
+  passes after it ... remove the `try`/`except`". The copy is deleted; the agent's file is
+  not touched. The general swallow note is dropped when this one fires.
+- **Wrong `match=`**: for a test that fails after the change, the catch plugin's records
+  show a `pytest.raises`/`warns` whose `match=` the message after the change does not meet;
+  the verdict quotes that message, says when the `match=` is the old code's message, and
+  says to put the new one in `match=` -- or, when the type differs too (`type_ok`), to
+  expect the new type and message (`wrong_matches`). xarray round 15 had six of seven
+  restores on one such test.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of
