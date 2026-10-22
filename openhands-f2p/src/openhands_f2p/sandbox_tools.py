@@ -701,8 +701,10 @@ def _missed_by_function(cov: dict) -> list[str]:
 
 
 # Repository test files longer than this are not run for `_reach_of`: too slow to run
-# whole under coverage inside a `verify` call.
-RELATED_RUN_MAX_LINES = 2500
+# whole under coverage inside a `verify` call. 4000 since 2026-10-23: sphinx-10807's
+# `tests/test_ext_autodoc.py` (2536 lines, about 20 s) was the only test file for
+# `ModuleDocumenter.add_content` and was never measured.
+RELATED_RUN_MAX_LINES = 4000
 # How many missed files get their first related test file measured.
 RELATED_REACH_FILES = 6
 
@@ -780,7 +782,8 @@ def _function_text(text: str, name: str) -> str:
     return ""
 
 
-def seed_block(text: str, names: list[str], taken: set[str]) -> tuple[str, str, str] | None:
+def seed_block(text: str, names: list[str], taken: set[str],
+               prefer: str = "") -> tuple[str, str, str] | None:
     """A whole module-level test from a repository test file, to copy into the agent's file:
     the module-level helpers and fixtures it uses (two levels), the imports all of that
     needs, and the test renamed `test_seeded_<name>`. Picked like `related_example`: one
@@ -820,7 +823,8 @@ def seed_block(text: str, names: list[str], taken: set[str]) -> tuple[str, str, 
         body = src(n)
         return any(re.search(rf"\b{re.escape(m)}\b", body) for m in names)
 
-    pick = (next((n for n in tests if names_any(n)), None)
+    pick = (next((n for n in tests if prefer and n.name == prefer), None)
+            or next((n for n in tests if names_any(n)), None)
             or next((n for n in tests if n.decorator_list or n.args.args), None) or tests[0])
     helpers: list = []
     want = used(pick)
@@ -849,7 +853,8 @@ def seed_block(text: str, names: list[str], taken: set[str]) -> tuple[str, str, 
     return ("\n".join(imports) + "\n\n\n" + "\n\n\n".join(code)).strip() + "\n", pick.name, seeded
 
 
-def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[str, str]:
+def related_example(text: str, names: list[str], max_lines: int = 18,
+                    prefer: str = "") -> tuple[str, str]:
     """One test function from a repository test file, decorators included, cut at
     `max_lines`: the first that mentions one of `names` (the missed functions' short
     names), else the first. sphinx-10807 (round 2, 2026-10-20) was pointed at
@@ -859,10 +864,20 @@ def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[s
     starts = [i for i, ln in enumerate(lines) if re.match(r"\s*(async\s+)?def test_\w*\(", ln)]
     if not starts:
         return "", ""
+    # Where each test's decorators begin, from the parse: a `@pytest.mark.parametrize(`
+    # spread over several lines ends in `)`, not `@` -- xarray-7444's `test_resample` was
+    # shown without its five parametrize decorators.
+    deco_top: dict[int, int] = {}
+    try:
+        for n in ast.walk(ast.parse(text)):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.decorator_list:
+                deco_top[n.lineno - 1] = min(d.lineno for d in n.decorator_list) - 1
+    except SyntaxError:
+        pass
     spans = []
     for i in starts:
         indent = len(lines[i]) - len(lines[i].lstrip())
-        top = i
+        top = deco_top.get(i, i)
         while top > 0 and lines[top - 1].strip().startswith("@"):
             top -= 1
         end = i + 1
@@ -881,9 +896,13 @@ def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[s
         own = [x.strip() for x in (params.group(1) if params else "").split(",")
                if x.strip() and x.strip() not in ("self", "cls")]
         return d > a or bool(own)
-    pick = next(((a, b) for a, b in spans
-                 if any(re.search(rf"\b{re.escape(n)}\b", "\n".join(lines[a:b])) for n in names)),
-                next(((a, b) for a, b in spans if has_setup(a, b)), spans[0]))
+    def name_of(a: int, b: int) -> str:
+        d = next(i for i in range(a, b) if re.match(r"\s*(async\s+)?def test_", lines[i]))
+        return re.match(r"\s*(?:async\s+)?def (test_\w*)", lines[d]).group(1)
+    pick = (next(((a, b) for a, b in spans if prefer and name_of(a, b) == prefer), None)
+            or next(((a, b) for a, b in spans
+                     if any(re.search(rf"\b{re.escape(n)}\b", "\n".join(lines[a:b])) for n in names)),
+                    next(((a, b) for a, b in spans if has_setup(a, b)), spans[0])))
     a, b = pick
     body = lines[a:min(b, a + max_lines)]
     # Its pytest node name, `Class::test` for a method.
@@ -914,8 +933,20 @@ def related_example(text: str, names: list[str], max_lines: int = 18) -> tuple[s
         imports.append(f"from {'.' * node.level}{node.module or ''} import {names}"
                        if isinstance(node, ast.ImportFrom) else f"import {names}")
     head = "\n".join(imports[:8])
+    # Helpers and constants it uses from its own file, named so they are copied too:
+    # xarray-7444's `test_calendars` calls `da(...)`, sphinx-10807's `test_abstractmethods`
+    # calls `do_autodoc(...)`, both defined in the test file and shown nowhere else.
+    own = {}
+    for node in (tree.body if tree else []):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            own[node.name] = 1
+        elif isinstance(node, ast.Assign):
+            own.update({t.id: 1 for t in node.targets if isinstance(t, ast.Name)})
+    helpers = sorted(n for n in own if n in used and n != name and not n.startswith("test_"))
+    tail = (f"\n# also uses {', '.join(helpers[:6])} -- defined in this same file: copy "
+            f"{'them' if len(helpers) > 1 else 'it'} too" if helpers else "")
     return ((head + "\n\n\n" if head else "") + shown
-            + ("\n    ..." if b > a + max_lines else "")), node
+            + ("\n    ..." if b > a + max_lines else "") + tail), node
 
 
 _CONFIG_READ = re.compile(r"\b(?:config|settings)\.([A-Za-z_]\w*)")
@@ -1319,6 +1350,18 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             cache.update({p: [] for p in todo})
             cache.update(related_tests(self.box, todo, target.split("::")[0]))
         files = list(dict.fromkeys(cache[p][0] for p in all_paths if cache.get(p)))
+        # A missed file no repository test names gets the test files of the rest of the
+        # change (2026-10-23): xarray-7444 (round 17) never reached the new private
+        # `pdcompat._convert_base_to_offset`, which no test imports -- while
+        # `test_cftimeindex_resample.py`, the test file of `resample_cftime.py` (the change's
+        # caller, with nothing missed and so never measured), runs 4 of its 5 lines.
+        if any(not cache.get(p) for p in all_paths):
+            others = [p for p in E.patched_source_files(self.patch) if p not in cache]
+            if others:
+                cache.update({p: [] for p in others})
+                cache.update(related_tests(self.box, others, target.split("::")[0]))
+            files += [f for f in dict.fromkeys(cache[p][0] for p in E.patched_source_files(self.patch)
+                                               if cache.get(p)) if f not in files]
         gains = {f: (self._reach_of(f) or set()) & missed for f in files}
         gains = {f: g for f, g in gains.items() if g}
 
@@ -1328,15 +1371,18 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                    for g in groups]
             return [x for x in got if x["reached"]]
 
-        def example(f: str, parts: list[dict]) -> str:
-            # One of its tests: one that names a reached function, else its first. Only for
-            # a file that reaches the missed code -- round 4 showed xarray-7444
-            # `test_consolidate_slices`, which has nothing to do with it.
-            key = ("example", f, tuple(x["function"] for x in parts))
+        def example(f: str, parts: list[dict], best: str = "") -> str:
+            # One of its tests: the one that runs most of the part (`best`, from coverage's
+            # per-test contexts), else one that names a reached function, else its first.
+            # Only for a file that reaches the missed code -- round 4 showed xarray-7444
+            # `test_consolidate_slices`, which has nothing to do with it. The test that runs
+            # the part since 2026-10-23: sphinx-10807 was shown `test_parse_name(app)` for
+            # `ModuleDocumenter.add_content` -- it takes a fixture, and runs none of it.
+            key = ("example", f, tuple(x["function"] for x in parts), best)
             if key not in cache:
                 names = [x["function"].rsplit(".", 1)[-1] for x in parts
                          if x["function"] != "<module>"]
-                cache[key] = related_example(self.box.read(f) or "", names)[0]
+                cache[key] = related_example(self.box.read(f) or "", names, prefer=best)[0]
             return cache[key]
 
         if gains:
@@ -1355,8 +1401,12 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     if k not in by_part or x["reached"] > by_part[k]["reached"]:
                         by_part[k] = {"file": f, "reached": x["reached"], "missed": x["missed"]}
             for k, v in by_part.items():
+                g = next((g for g in groups if f"{g['path']}::{g['function']}" == k), {})
+                part_lines = {f"{g.get('path')}:{n}" for n in g.get("lines") or []} & gains[v["file"]]
+                v["test"] = self._best_test(v["file"], part_lines)
                 v["example"] = example(v["file"], [x for x in parts_of(gains[v["file"]])
-                                                   if f"{x['path']}::{x['function']}" == k])
+                                                   if f"{x['path']}::{x['function']}" == k],
+                                       v["test"])
             cov["related_by_part"] = by_part
         return {p: cache[p] for p in paths if cache.get(p)}
 
@@ -1371,11 +1421,31 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                 cache[key] = None
             else:
                 try:
-                    got = E.changed_line_coverage(self.box, [test_file], self.patch, self._base)
+                    got = E.changed_line_coverage(self.box, [test_file], self.patch, self._base,
+                                                  contexts=True)
                     cache[key] = set(got.get("hit") or []) if got.get("measured") else None
+                    # Which of its tests ran each line: coverage's `test_function` context,
+                    # `module.test_x` or `module.Class.test_x`.
+                    by: dict[str, set[str]] = {}
+                    for line, ctxs in (got.get("hit_by") or {}).items():
+                        for c in ctxs:
+                            parts = c.split("|")[0].split(".")
+                            if parts and parts[-1].startswith("test"):
+                                by.setdefault(line, set()).add(parts[-1])
+                    cache[("by_test", test_file)] = by
                 except Exception:
                     cache[key] = None
         return cache[key]
+
+    def _best_test(self, test_file: str, lines: set[str]) -> str:
+        """The test in `test_file` that runs most of `lines`, from `_reach_of`'s contexts;
+        "" when they were not recorded."""
+        by = self.__dict__.get("_related_cache", {}).get(("by_test", test_file)) or {}
+        count: dict[str, int] = {}
+        for ln in lines:
+            for t in by.get(ln, ()):
+                count[t] = count.get(t, 0) + 1
+        return max(sorted(count), key=lambda t: count[t]) if count else ""
 
     def _unswallowed(self, rel: str, text: str, names: set[str]) -> str:
         """What the test's `except ...: pass` blocks hide: a copy of the file with each of

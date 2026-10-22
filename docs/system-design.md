@@ -1047,6 +1047,28 @@ repository example for it), and sphinx spent its last four turns on `ModuleDocum
 restore the model three times ran `git checkout` to "revert" -- the run tool answers that
 there is no git; one wasted action each.
 
+Measured examples for the parts round 17 stalled on (2026-10-23, user):
+
+- **A missed file no test names** gets the test files of the rest of the change.
+  `pdcompat._convert_base_to_offset` is new and private, so no test imports it; the test
+  file of `resample_cftime.py`, the caller, runs 4 of its 5 lines but was never measured,
+  because `resample_cftime.py` had nothing missed.
+- **Bigger files are measured**: `RELATED_RUN_MAX_LINES` 2500 -> 4000, for sphinx's
+  `test_ext_autodoc.py` (2536 lines), the only test file for `ModuleDocumenter.add_content`
+  (5 of its 7 lines).
+- **The example is the test that runs the part**: repository test files are measured with
+  coverage's `test_function` contexts (`changed_line_coverage(contexts=True)`, only for
+  `_reach_of`), and each part's example and seed is the test that runs most of its lines
+  (`related_by_part[...]["test"]`, `related_example(prefer=)`, `seed_block(prefer=)`).
+  sphinx had been shown `test_parse_name(app)` -- it takes a fixture and runs none of
+  `add_content`; now `test_abstractmethods`. xarray now gets `test_calendars` (`base=17`).
+- The example keeps decorators that span several lines (read from the parse; the five
+  `parametrize` lines were cut), and names the helpers it uses from its own file (`da`,
+  `do_autodoc`) so they are copied too.
+
+Cost: the first coverage `verify` of a run measures these files once (cached after): about
+4-6 minutes there on these two PRs, against 2-3 before.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

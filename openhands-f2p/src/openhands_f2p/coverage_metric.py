@@ -128,7 +128,7 @@ def coverage_command(box: "Sandbox", targets: list[str]) -> str:
 
 
 def measure_coverage(box: "Sandbox", targets: list[str],
-                     limit_files: int = 12) -> dict:
+                     limit_files: int = 12, contexts: bool = False) -> dict:
     """Which lines the given tests executed, per file.
 
     Deliberately knows nothing about `patch`. It reports coverage of the files the test
@@ -139,14 +139,22 @@ def measure_coverage(box: "Sandbox", targets: list[str],
     """
     box.exec(f"rm -f {COV_DATA} {COV_DATA}.* .coverage .coverage.* f2p_cov.json",
              timeout=120)
-    run = box.exec(coverage_command(box, targets), timeout=3600)
+    cmd = coverage_command(box, targets)
+    # Which test ran each line (`contexts`), for the repository's own test files only
+    # (`_reach_of`): the example shown for a missed part is then a test that runs it.
+    if contexts:
+        box.write(COV_RC, COV_RC_SRC.replace("[run]\n", "[run]\ndynamic_context = test_function\n", 1))
+    run = box.exec(cmd, timeout=3600)
     # `combine` is a belt-and-braces step: our rcfile turns parallel mode off, but a
     # test suite that forks (pytest-xdist, django's --parallel) still leaves one data
     # file per process. With nothing to combine it is a no-op.
     box.exec(f"python -m coverage combine --rcfile={COV_RC} --append 2>/dev/null; true",
              timeout=300)
     rep = box.exec(f"python -m coverage json --rcfile={COV_RC} -o f2p_cov.json "
-                   f"--pretty-print 2>&1 | tail -2", timeout=600)
+                   f"{'--show-contexts ' if contexts else ''}--pretty-print 2>&1 | tail -2",
+                   timeout=600)
+    if contexts:
+        box.write(COV_RC, COV_RC_SRC)
     raw = box.read("f2p_cov.json")
     box.exec(f"rm -f {COV_DATA} {COV_DATA}.* f2p_cov.json", timeout=120)
     if not raw:
@@ -176,6 +184,9 @@ def measure_coverage(box: "Sandbox", targets: list[str],
         # `measurable` is what coverage can have an opinion about at all: comments,
         # blanks and docstrings appear in neither list.
         raw[rel] = {"executed": executed, "measurable": executed | missing}
+        if contexts:
+            raw[rel]["contexts"] = {int(k): [c for c in v if c]
+                                    for k, v in (info.get("contexts") or {}).items()}
         if not summary.get("num_statements"):
             continue
         # Test files themselves are noise here: of course the test ran.
@@ -282,7 +293,8 @@ def is_test_file(path: str) -> bool:
 
 
 def changed_line_coverage(box: "Sandbox", targets: list[str],
-                          patch: str, base_files: dict[str, str] | None = None) -> dict:
+                          patch: str, base_files: dict[str, str] | None = None,
+                          contexts: bool = False) -> dict:
     """Of the lines this pull request changed, how many does the test execute?
 
     The evaluation metric, and the harness computes it -- never the agent. The `coverage`
@@ -323,7 +335,7 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
     if not wanted:
         return {"measured": False, "reason": "the fix touches no source .py lines"}
 
-    traced = measure_coverage(box, targets, limit_files=0)
+    traced = measure_coverage(box, targets, limit_files=0, contexts=contexts)
     if not traced.get("ok"):
         return {"measured": False, "reason": traced.get("detail", "coverage failed")}
     env = environment_lines(box, targets)
@@ -333,6 +345,7 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
     environment: list[str] = []
     matched: dict[str, str] = {}
     unimported: list[str] = []
+    hit_by: dict[str, list[str]] = {}       # with `contexts`: the tests that ran each hit line
     for path, lines in wanted.items():
         info = traced["raw"].get(path)
         if info is not None:
@@ -377,6 +390,8 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
                 environment.append(f"{path}:{at}")    # runs with no test at all
                 continue
             (hit if at in info["executed"] else missed).append(f"{path}:{at}")
+            if contexts and at in info["executed"]:
+                hit_by[f"{path}:{at}"] = (info.get("contexts") or {}).get(at, [])
     total = len(hit) + len(missed)
     if not total and environment:
         return {"measured": False, "environment": environment,
@@ -413,7 +428,7 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
     # that has to be made true for the line to run at all.
     return {"measured": True, "percent": round(100 * len(hit) / total, 1),
             "covered": len(hit), "executable_changed_lines": total,
-            "hit": hit, "missed": missed,
+            "hit": hit, "missed": missed, **({"hit_by": hit_by} if contexts else {}),
             # Which traced file each changed file was scored against. When these differ
             # from the key, coverage followed a copy of the library somewhere else and
             # the line numbers are not comparable -- worth being able to see.

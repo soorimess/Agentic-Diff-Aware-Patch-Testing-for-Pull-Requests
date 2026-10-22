@@ -468,7 +468,8 @@ def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list, patch: str) 
         return ""
     current = box.read(rel) or ""
     taken = set(re.findall(r"^\s*(?:async\s+)?def (\w+)\(", current, re.M))
-    made = S.seed_block(box.read(hit["file"]) or "", [target["function"].rsplit(".", 1)[-1]], taken)
+    made = S.seed_block(box.read(hit["file"]) or "", [target["function"].rsplit(".", 1)[-1]], taken,
+                        prefer=hit.get("test", ""))
     if made is None:
         return ""
     # One seed per repository test (base-it13 seeded `test_rst_directive` twice, for two
