@@ -985,6 +985,18 @@ which message, and the flip is the message (pandas' wording becomes xarray's). T
 before fail-to-pass, where seeding and restores do not act; xarray failed the same way in
 rounds 4 and 5.
 
+**What the test's own checks caught on each side** (user, 2026-10-22). Under pytest, both of
+`verify`'s runs load a small plugin (`CATCH_PLUGIN`, written to `/tmp/f2p_plugin` in the
+container, `-p f2p_catch`) that wraps `pytest.raises` and `pytest.warns` and records, per
+test, what each caught: the exception or warning type and its message. When the file passes
+on both sides, `verify` lists the calls that caught something different
+(`caught_differences`) -- "`pytest.raises(ValueError)` caught `ValueError: 'offset' and
+'base' cannot be present at the same time` before the change and `ValueError: base and
+offset cannot be present at the same time` after it" -- and says to assert on what changed
+(`match=` or the type). The outcomes are unchanged (sphinx round 14's test: still 13
+fail-to-pass, 80.8%); other runners (django, sympy) do not load it. No new tool: the agent
+still calls `verify`, and the answer reports only what its own test observed.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

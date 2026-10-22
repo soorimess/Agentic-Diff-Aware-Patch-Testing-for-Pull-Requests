@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import re
 import shlex
 from pathlib import Path
@@ -1017,6 +1018,125 @@ def mutation_report(r: dict, target: str, require_tools: bool) -> tuple[str, dic
     return "\n".join(lines), entry
 
 
+# What each `pytest.raises` / `pytest.warns` caught, recorded in `verify`'s two runs
+# (2026-10-21). xarray-7444 (base-it14) asserted `pytest.raises(ValueError)` twelve times
+# and passed on both sides: a ValueError is raised before and after the change, and only
+# its message changes ("'offset' and 'base' cannot be present ..." from pandas becomes
+# xarray's "base and offset cannot be present ..."). Every good xarray run had `match=`.
+CATCH_DIR = "/tmp/f2p_plugin"
+CATCH_PLUGIN = r'''"""Records what pytest.raises / pytest.warns caught, per test (F2P harness)."""
+import json, os
+try:
+    import pytest
+    _orig_raises, _orig_warns = pytest.raises, pytest.warns
+except Exception:  # pragma: no cover
+    pytest = None
+_REC, _CUR = [], {"test": None}
+
+
+def pytest_runtest_setup(item):
+    _CUR["test"] = item.nodeid
+
+
+def _name(x):
+    if isinstance(x, tuple):
+        return "(" + ", ".join(_name(y) for y in x) + ")"
+    return getattr(x, "__name__", repr(x))
+
+
+class _Raises:
+    def __init__(self, cm, expected, match):
+        self.cm, self.expected, self.match = cm, expected, match
+
+    def __enter__(self):
+        return self.cm.__enter__()
+
+    def __exit__(self, et, ev, tb):
+        try:
+            _REC.append({"test": _CUR["test"], "kind": "raises", "expected": _name(self.expected),
+                         "match": None if self.match is None else str(self.match),
+                         "caught": None if et is None else et.__name__,
+                         "message": None if ev is None else str(ev)[:300]})
+        except Exception:
+            pass
+        return self.cm.__exit__(et, ev, tb)
+
+
+class _Warns:
+    def __init__(self, cm, expected, match):
+        self.cm, self.expected, self.match = cm, expected, match
+
+    def __enter__(self):
+        return self.cm.__enter__()
+
+    def __exit__(self, et, ev, tb):
+        try:
+            return self.cm.__exit__(et, ev, tb)
+        finally:
+            try:
+                got = [(w.category.__name__, str(w.message)[:300]) for w in list(self.cm)]
+                _REC.append({"test": _CUR["test"], "kind": "warns", "expected": _name(self.expected),
+                             "match": None if self.match is None else str(self.match),
+                             "caught": [g[0] for g in got], "message": [g[1] for g in got]})
+            except Exception:
+                pass
+
+
+if pytest is not None:
+    def raises(expected, *args, **kwargs):
+        if args:
+            return _orig_raises(expected, *args, **kwargs)
+        return _Raises(_orig_raises(expected, **kwargs), expected, kwargs.get("match"))
+
+    def warns(expected=Warning, *args, **kwargs):
+        if args:
+            return _orig_warns(expected, *args, **kwargs)
+        return _Warns(_orig_warns(expected, **kwargs), expected, kwargs.get("match"))
+
+    try:
+        pytest.raises, pytest.warns = raises, warns
+    except Exception:
+        pass
+
+
+def pytest_sessionfinish(session, exitstatus):
+    out = os.environ.get("F2P_CATCH_OUT")
+    if out:
+        try:
+            with open(out, "w") as f:
+                json.dump(_REC, f)
+        except Exception:
+            pass
+'''
+
+
+def caught_differences(before: list, after: list, limit: int = 3) -> list[str]:
+    """For tests whose `pytest.raises` / `pytest.warns` caught something different on the
+    two sides -- another message, another type -- one line each."""
+    def by_test(rows):
+        got: dict[str, list] = {}
+        for r in rows or []:
+            got.setdefault(r.get("test") or "?", []).append(r)
+        return got
+    b, a = by_test(before), by_test(after)
+    out = []
+    for test in b:
+        for rb, ra in zip(b[test], a.get(test, [])):
+            if rb.get("kind") != ra.get("kind") or (rb.get("caught"), rb.get("message")) == (ra.get("caught"), ra.get("message")):
+                continue
+            name = test.split("::")[-1]
+            call = f"pytest.{rb['kind']}({rb['expected']}" + (f", match={rb['match']!r}" if rb.get("match") else "") + ")"
+            def said(r):
+                if r["kind"] == "raises":
+                    return f"`{r['caught']}: {r['message']}`" if r.get("caught") else "nothing"
+                pairs = [f"{c}: {m}" for c, m in zip(r.get("caught") or [], r.get("message") or [])]
+                return ", ".join(f"`{p}`" for p in pairs[:2]) or "no warning"
+            out.append(f"`{name}`: `{call}` caught {said(rb)} before the change and {said(ra)} after it.")
+            if len(out) >= limit:
+                return out
+    return out
+
+
 # --------------------------------------------------------------------- verify
 class VerifyAction(ToolArgs):
     target: str = Field(
@@ -1166,14 +1286,27 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                 is_error=True)
         cmd = E.test_command(self.box, [action.target])
         from openhands_f2p import verify as V
-        before = self.box.exec(cmd, timeout=3600)
+        from openhands_f2p import runners
+        # Under pytest, both runs load the plugin that records what `pytest.raises` /
+        # `pytest.warns` caught (`CATCH_PLUGIN`); the outcomes are the same either way.
+        catch = runners.runner_for(self.box)["args"] == "nodes"
+        if catch:
+            if not getattr(self, "_catch_ready", False):
+                self.box.write(f"{CATCH_DIR}/f2p_catch.py", CATCH_PLUGIN)
+                self._catch_ready = True
+            self.box.exec(f"rm -f {CATCH_DIR}/before.json {CATCH_DIR}/after.json", timeout=60)
+
+        def caught_cmd(side: str) -> str:
+            return (f"F2P_CATCH_OUT={CATCH_DIR}/{side}.json PYTHONPATH={CATCH_DIR}${{PYTHONPATH:+:$PYTHONPATH}} "
+                    f"{cmd} -p f2p_catch") if catch else cmd
+        before = self.box.exec(caught_cmd("before"), timeout=3600)
         base_out = V.own_outcomes(E.parse_output(before.output), [action.target])
         self._base = E.base_texts(self.box, self.patch)
         self.box.apply_patch(self.patch)
         cov: dict | None = None
         import_only = ""
         try:
-            after = self.box.exec(cmd, timeout=3600)
+            after = self.box.exec(caught_cmd("after"), timeout=3600)
             head_out = V.own_outcomes(E.parse_output(after.output), [action.target])
             # A file that did not import at base and does now: its tests failed at base
             # (`V.unimportable_at_base`, the verdict's own rule).
@@ -1275,6 +1408,22 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         elif not flipped:
             head = ("NOT fail-to-pass: the test already passes before the change, so it "
                     "does not test what this pull request changes.")
+            # What its own checks caught differently on the two sides (2026-10-21).
+            diffs = []
+            if catch:
+                def rows(side):
+                    try:
+                        return json.loads(self.box.read(f"{CATCH_DIR}/{side}.json") or "[]")
+                    except ValueError:
+                        return []
+                diffs = caught_differences(rows("before"), rows("after"))
+            if diffs:
+                head += ("\n\nBut your test does see the change -- it just does not assert on it:\n"
+                         + "\n".join(f"* {d}" for d in diffs)
+                         + "\nThe same call raises or warns on both sides, with a different message "
+                           "or type. Assert on what changed -- `match=` with the message the code "
+                           "gives once the change is applied, or the type -- and that test fails "
+                           "before the change and passes after it.")
         else:
             head = f"Fail-to-pass: {len(flipped)} test(s) fail before and pass after."
             # Which old-code failure is the catch, said so it is kept (2026-10-21).
