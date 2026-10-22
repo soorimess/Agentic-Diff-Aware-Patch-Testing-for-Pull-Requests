@@ -997,6 +997,24 @@ offset cannot be present at the same time` after it" -- and says to assert on wh
 fail-to-pass, 80.8%); other runners (django, sympy) do not load it. No new tool: the agent
 still calls `verify`, and the answer reports only what its own test observed.
 
+Round 15 (base-it15): **xarray-7444 96.1%**, **sphinx-10807 80.1%, all of it the agent's
+own tests** (its one seed was weakened to a single assertion and dropped from the
+"without" count, and the coverage stayed 125 lines). The caught-difference hint did not
+fire: xarray flipped at its first `verify` this time. Reading the trajectories found one
+harness bug: `_content_at` counted only `write_file`, so right after a restore the stop
+refusal said the test "has not changed since. Rewrite the test" about the restored
+fail-to-pass file -- and xarray rewrote it. Now restores and seeds count as writes (with a
+content hash), and after a restore the refusal says the harness put the best version back
+and to call `verify` on it (`restored_since`).
+
+Round 16 (base-it16): xarray-7444 96.1% -- after each of two restores the refusal said the
+best version was back and the next `verify` was fail-to-pass. sphinx-10807 NO, the first
+time in sixteen runs it never flipped: its first `verify` said "NOT fail-to-pass, and
+backwards: `test_new_config_option_not_present` passes on the code as it is and fails once
+the change is applied"; the model answered "Perfect! ... fails after the change, which is
+exactly what we want", then wrapped its checks in `except: pass` and asserted things true on
+both sides until the passes-at-base cap. The messages were right; the model misread them.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

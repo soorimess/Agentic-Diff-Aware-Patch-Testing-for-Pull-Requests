@@ -1529,7 +1529,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             text = seeded
             self.box.write(rel, text)
             self.log.append({"tool": "restore", "via": "verify", "path": rel, "target": rel,
-                             "content": text, "from_call": V.call_number(self.log, i),
+                             "content": text, "sha": hashlib.sha1(text.encode()).hexdigest(),
+                             "from_call": V.call_number(self.log, i),
                              "why": why})
             covered = f", running {then} changed lines" if then is not None else ""
             head += (f"\n\n## Restored\n\nThe version you just checked is worse than your best "

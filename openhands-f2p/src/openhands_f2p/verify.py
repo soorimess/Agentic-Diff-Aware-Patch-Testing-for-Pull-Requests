@@ -692,12 +692,16 @@ def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, st
             # side of the change -- and stopped again without calling `verify` once.
             last_said = (e.get("shown") or "").split("\n\n")[0].strip()
             quoted = f" Its answer was:\n\n> {last_said}\n\n" if last_said else " "
-            say = (f"The last `verify` said **not fail-to-pass**, and you have edited the "
-                   f"test since, so nothing has checked the file on disk now.{quoted}"
-                   f"Call `verify` with `target` set to `{rel}`, and keep going until it "
-                   f"says fail-to-pass. "
-                   + "`run_tests` does not answer this: it runs the test on one side of the "
-                     "change only.")
+            say = ((f"The last `verify` said **not fail-to-pass** about the version you wrote, "
+                    f"and the harness then put your best fail-to-pass version back on disk. "
+                    f"Nothing has checked that file since.{quoted}")
+                   if restored_since(tool_log, i, rel) else
+                   f"The last `verify` said **not fail-to-pass**, and you have edited the "
+                   f"test since, so nothing has checked the file on disk now.{quoted}")
+            say += (f"Call `verify` with `target` set to `{rel}`, and keep going until it "
+                    f"says fail-to-pass. "
+                    + "`run_tests` does not answer this: it runs the test on one side of the "
+                      "change only.")
         elif not flipped or still:
             if flipped and still:
                 said = (f"{len(flipped)} test(s) already fail before the change and pass "
@@ -938,12 +942,23 @@ def _attempt_failed(tool_log: list, tool: str, rel: str, score, since: int,
 
 
 def _content_at(tool_log: list, i: int, rel: str) -> str | None:
-    """What the test file held when entry `i` ran: the last write to it before `i`."""
+    """What the test file held when entry `i` ran: the last write to it before `i` -- the
+    agent's, or the harness's own (`restore`, `seed`). Counting only `write_file`, a
+    restore read as "the test has not changed since": xarray-7444 (base-it15) was told to
+    rewrite a file the harness had just put back to its fail-to-pass version, and did."""
     for e in reversed(tool_log[:i]):
-        if (e.get("tool") == "write_file" and "error" not in e
+        if (e.get("tool") in ("write_file", "restore", "seed") and "error" not in e
                 and wrote_to(e.get("path", ""), rel)):
             return e.get("sha") or e.get("content")
     return None
+
+
+def restored_since(tool_log: list, i: int, rel: str) -> bool:
+    """Whether the last write to `rel` after entry `i` was the harness's restore."""
+    last = next((e for e in reversed(tool_log[i + 1:])
+                 if e.get("tool") in ("write_file", "restore", "seed") and "error" not in e
+                 and wrote_to(e.get("path", ""), rel)), None)
+    return bool(last) and last.get("tool") == "restore"
 
 
 def _best_before(tool_log: list, tool: str, rel: str, score) -> float | None:

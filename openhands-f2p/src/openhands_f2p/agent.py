@@ -497,8 +497,10 @@ def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list, patch: str) 
                          "from": source, "error": f"does not pass on both sides: {sides}"})
         flow.record(flow.AGENT, "seed", f"{source} does not pass on both sides; not added")
         return ""
+    import hashlib
     tool_log.append({"tool": "seed", "via": "harness", "path": rel, "target": rel,
-                     "content": new, "part": key, "from": source, "name": seeded,
+                     "content": new, "sha": hashlib.sha1(new.encode()).hexdigest(),
+                     "part": key, "from": source, "name": seeded,
                      "block": block})
     flow.record(flow.AGENT, "seed", f"{source} -> {seeded} for {key}")
     return (f"\n\n## Seeded\n\nThe harness has added `{seeded}` to the end of `{rel}`: a copy, "
