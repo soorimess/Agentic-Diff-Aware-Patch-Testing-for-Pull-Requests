@@ -1036,6 +1036,17 @@ runs already have:
   expect the new type and message (`wrong_matches`). xarray round 15 had six of seven
   restores on one such test.
 
+Round 17 (base-it17): both YES, xarray-7444 90.2%, sphinx-10807 75.6%. The `match=` line
+fired on xarray and the test was fixed from it, but at first next to `_why_both`'s "fails the
+same way on both sides (`DID NOT WARN ...`), so the change does not touch what fails" --
+pytest's error reads the same while the message behind it changed. Tests with a `match=`
+finding are now left out of `_why_both`. Neither run hit a backwards or swallow verdict.
+Both stalls were the model's: xarray never reached `_convert_base_to_offset` (no measured
+repository example for it), and sphinx spent its last four turns on `ModuleDocumenter` and
+`JSObject` with tests that ran none of their lines, then hit the ten-refusal cap. After a
+restore the model three times ran `git checkout` to "revert" -- the run tool answers that
+there is no git; one wasted action each.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

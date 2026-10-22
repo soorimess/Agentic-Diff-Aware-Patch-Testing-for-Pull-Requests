@@ -1527,6 +1527,14 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         caught_before, caught_after = (rows("before"), rows("after")) if catch else ([], [])
         # A `match=` the message after the change does not meet (fix 5, 2026-10-23).
         wrong = wrong_matches(caught_before, caught_after, still_failing)
+        # Tests with a `match=` finding are left out of `_why_both`: their pytest error reads
+        # the same on both sides ("DID NOT WARN ... matching the regex") while the message
+        # behind it changed, and "fails the same way, the change does not touch what fails"
+        # contradicted the `match=` line -- xarray-7444 (round 17) took three tries.
+        def explain(nodes):
+            return _why_both(before.output, after.output,
+                             [n for n in nodes
+                              if not any(w.startswith(f"`{n.split('::')[-1]}`") for w in wrong)])
         rel = action.target.split("::")[0]
         hidden = ""
         if not base_out and not head_out:
@@ -1543,7 +1551,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     + (_backwards(after.output, inverted, wrong)
                        or " Assert what the change makes true, not what it replaces.")
                     + (f" {both[:3]} fail on both sides: fix them or delete them."
-                       + _why_both(before.output, after.output, both) if both else ""))
+                       + explain(both) if both else ""))
         elif still_failing and flipped:
             # Part of the file is right. Said as such, because "the test is wrong" alone
             # sent seaborn-3069 into adding tests beside a flipping one for four verifies,
@@ -1559,7 +1567,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             head = (f"NOT fail-to-pass yet, but part of it is right: {flipped[:3]} fail "
                     f"before the change and pass after -- keep those. "
                     + (f"{both[:3]} still fail after the change is applied: fix them or "
-                       f"delete them.{_why_both(before.output, after.output, both)} "
+                       f"delete them.{explain(both)} "
                        if both else "") +
                     f"Every test in the file has to pass once the change is in."
                     + (f" {back[:3]} pass before the change and fail after: those assert "
@@ -1571,7 +1579,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         elif still_failing:
             head = (f"NOT fail-to-pass: {still_failing[:3]} still fail after the change "
                     f"is applied. The test is wrong, not the code."
-                    + _why_both(before.output, after.output, still_failing)
+                    + explain(still_failing)
                     + "".join(f" {w}" for w in wrong))
         elif not flipped and base_out and all(v == "SKIPPED" for v in base_out.values()):
             head = ("NOT fail-to-pass: every test was skipped before the change, so none "
