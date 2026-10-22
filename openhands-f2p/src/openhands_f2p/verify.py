@@ -692,6 +692,17 @@ def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, st
             # side of the change -- and stopped again without calling `verify` once.
             last_said = (e.get("shown") or "").split("\n\n")[0].strip()
             quoted = f" Its answer was:\n\n> {last_said}\n\n" if last_said else " "
+            # Tests that answer names and the file no longer has (2026-10-23): sphinx-10807
+            # (round 18) deleted the failing seed, was shown "fix `test_seeded_...`" seven
+            # times, searched its file for a hidden test and never called `verify` again.
+            have = tests_now(tool_log, rel)
+            gone = sorted({n.split("::")[-1].split("[")[0] for n in still}
+                          - set(have)) if have is not None else []
+            if last_said and gone:
+                quoted += (f"That answer is about a version that is gone: "
+                           f"{', '.join(f'`{g}`' for g in gone[:3])} "
+                           f"{'is' if len(gone) == 1 else 'are'} no longer in your file. Only a "
+                           f"new `verify` says where the file on disk stands now. ")
             say = ((f"The last `verify` said **not fail-to-pass** about the version you wrote, "
                     f"and the harness then put your best fail-to-pass version back on disk. "
                     f"Nothing has checked that file since.{quoted}")
@@ -715,6 +726,19 @@ def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, st
                    f"not changed since. Rewrite the test and call `verify` again, and keep "
                    f"doing that until it says fail-to-pass. Nothing else you could do with "
                    f"the remaining budget counts for anything while this is the answer.")
+        elif edited and restored_since(tool_log, i, rel):
+            # The harness's own restore, not an edit (2026-10-23): xarray-7444 (round 18)
+            # had a fail-to-pass version that ran fewer lines put back to the best one, was
+            # told "you edited the test ... your edits have lost that, write that version
+            # back" with the worse version pasted, wrote it back, and went round that loop
+            # eight times.
+            say = (f"After that `verify` the harness put your best fail-to-pass version back "
+                   f"in `{rel}` -- it runs more of the change than the version `verify` just "
+                   f"checked. You did not edit anything, and there is nothing to write back: "
+                   f"build on the file on disk. Call `verify` on it now; it checks this "
+                   f"version and gives the coverage report to continue from.")
+            return ("verify_open", f"`{rel}` was put back to your best fail-to-pass version "
+                                   f"after its last `verify`.\n\n* {say}")
         elif edited:
             say = (f"You edited the test after the last `verify`, so the fail-to-pass "
                    f"result describes a file that no longer exists. Call `verify` again on "
@@ -950,6 +974,20 @@ def _content_at(tool_log: list, i: int, rel: str) -> str | None:
         if (e.get("tool") in ("write_file", "restore", "seed") and "error" not in e
                 and wrote_to(e.get("path", ""), rel)):
             return e.get("sha") or e.get("content")
+    return None
+
+
+def tests_now(tool_log: list, rel: str) -> list[str] | None:
+    """The test names in the last write to `rel` (the agent's, a restore or a seed); None
+    when nothing records them."""
+    for e in reversed(tool_log):
+        if (e.get("tool") in ("write_file", "restore", "seed") and "error" not in e
+                and wrote_to(e.get("path", ""), rel)):
+            if e.get("tests") is not None:
+                return e["tests"]
+            if e.get("tool") != "write_file" and e.get("content"):
+                return re.findall(r"^\s*(?:async\s+)?def (test_\w+)", e["content"], re.M)
+            return None
     return None
 
 

@@ -1069,6 +1069,34 @@ Measured examples for the parts round 17 stalled on (2026-10-23, user):
 Cost: the first coverage `verify` of a run measures these files once (cached after): about
 4-6 minutes there on these two PRs, against 2-3 before.
 
+Round 18 (base-it18), sphinx-10807: YES 78.8% (own tests 61.5%, the seed adds 27 lines;
+the end-of-run rescoring handed in the best version, 123 lines, over the last, 96). The
+seed of `test_rst_directive_and_directive_option` came from the new per-test choice. Then
+the model added `@pytest.mark.sphinx('dummy', testroot='domain-rst')` to the seed -- a test
+project that does not exist -- was restored, rewrote the file without the seed, and never
+called `verify` again: seven stop refusals each quoted the old verdict, "fix
+`test_seeded_...`", about a test no longer in the file, and the model searched its file for
+a "hidden" test. Two changes:
+
+- A seeded test that fails after the agent changed it is named in the verdict with the
+  line the agent added, and the agent is told to put the copy back as it was and make its
+  own changes in a new test (`_seed_changed`).
+- When the stop refusal quotes a verdict that names tests the file no longer has, it says
+  so: that answer is about a version that is gone; only a new `verify` says where the file
+  stands (`tests_now`; `write_file` log entries carry the test names of the whole text,
+  since `content` is clipped at 4000 characters).
+
+Round 18, xarray-7444: YES 94.1% (48 of 51; `_convert_base_to_offset` reached this time,
+from the change-wide fallback). But eight restores and nine stop refusals went to one loop,
+a harness bug: the model's version was fail-to-pass and ran fewer lines (41 against 47), the
+harness put the 47-line version back, and the stop check then saw "changed since its last
+`verify`, which said fail-to-pass" and said "You edited the test ... your edits since have
+lost that ... write that version back", pasting the version `verify` had checked last --
+the worse one. The model wrote it back, and round it went. The r15 fix covered only the
+not-fail-to-pass branch. Now, after the harness's own restore, the refusal says the best
+version was put back, nothing was edited, there is nothing to write back, and to call
+`verify` on it; `lost_flip` is not offered then.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

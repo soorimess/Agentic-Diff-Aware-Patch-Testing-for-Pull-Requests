@@ -285,6 +285,32 @@ def _backwards(after: str, nodes: list[str], wrong: list[str]) -> str:
             "makes true -- and the same test fails before the change and passes after it.")
 
 
+def _seed_changed(log: list, text: str, failing: list[str]) -> str:
+    """For seeded tests among `failing` whose text differs from the copy the harness added:
+    which lines the agent added to it, and to put the copy back."""
+    said = []
+    for e in log:
+        if e.get("tool") != "seed" or "error" in e or not e.get("name"):
+            continue
+        name = e["name"]
+        if not any(n.split("::")[-1].split("[")[0] == name for n in failing):
+            continue
+        was, now = _function_text(e.get("block") or "", name), _function_text(text, name)
+        if not was or not now or was.strip() == now.strip():
+            continue
+        old = {ln.strip() for ln in was.splitlines()}
+        added = [ln.strip() for ln in now.splitlines() if ln.strip() and ln.strip() not in old]
+        said.append(f"`{name}` is the repository test the harness copied in (from "
+                    f"`{e.get('from')}`); as copied it passed on both sides. Your version "
+                    f"changes it"
+                    + (f" -- it adds `{added[0][:160]}`" + (f" and {len(added) - 1} more line(s)"
+                                                           if len(added) > 1 else "")
+                       if added else "")
+                    + " -- and now fails. Put the copy back exactly as it was added; make your "
+                      "own changes in a new test next to it.")
+    return (" " + " ".join(said)) if said else ""
+
+
 def _condense(text: str) -> str:
     """`text` without the lines that describe the runner instead of the test."""
     kept, in_warnings, in_astropy, frame_body = [], False, False, False
@@ -506,9 +532,13 @@ class WriteExecutor(ToolExecutor[WriteAction, WriteObservation]):
         lines = action.content.count("\n") + 1
         # `sha` of the whole text: `content` is clipped for the log, and whether a write
         # changed the test (`V.test_writes`) must not depend on its first 4000 characters.
+        # `tests`: the test names in the whole text, which the clipped `content` may not
+        # reach -- the stop check reads them (`V.tests_now`).
         self.log.append({"tool": "write_file", "path": action.path,
                          "lines": lines, "content": action.content[:4000],
-                         "sha": hashlib.sha1(action.content.encode()).hexdigest()})
+                         "sha": hashlib.sha1(action.content.encode()).hexdigest(),
+                         "tests": re.findall(r"^\s*(?:async\s+)?def (test_\w+)", action.content,
+                                             re.M)})
         # A seeded repository test the write leaves out (option 1, 2026-10-21): sphinx-10807
         # rewrote its file right after `test_seeded_rst_directive` was added, without it.
         from openhands_f2p import verify as V
@@ -1696,6 +1726,13 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                          + " That failure is your test catching what this change fixes: it is "
                            "meant to fail there. Keep those assertions as they are -- loosening "
                            "one so it passes on the old code undoes the flip.")
+        # A seeded repository test that fails now, changed from the copy that passed on both
+        # sides (2026-10-23): sphinx-10807 (round 18) added `@pytest.mark.sphinx('dummy',
+        # testroot='domain-rst')` to its seed -- a test project that does not exist -- was
+        # told only "fails the same way on both sides", and then deleted the seed.
+        if still_failing:
+            head += _seed_changed(self.log, self.box.read(action.target.split("::")[0]) or "",
+                                  still_failing)
         # The harness's rule, in one place, for everything below the headline. The
         # headline was always right, but the duty line, the coverage pointer, the mutation
         # pointer and the error flag all asked `flipped` -- "did anything flip" -- which is

@@ -796,7 +796,13 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                     marker = "whatever it checks was true before the change as well."
                     say = (say.replace(marker, marker + diag, 1) if marker in say
                            else say + diag)
-            if "passes_at_base" in reason or "verify_open" in reason:
+            # Not after the harness's own restore: the file on disk is then the best version,
+            # and `lost_flip` would offer the worse one `verify` checked last (xarray-7444,
+            # round 18).
+            last_v = next((k for k in range(len(tool_log) - 1, -1, -1)
+                           if tool_log[k].get("tool") == "verify"), None)
+            if (("passes_at_base" in reason or "verify_open" in reason)
+                    and not (last_v is not None and V.restored_since(tool_log, last_v, rel))):
                 say += V.lost_flip(tool_log, rel, box.read(rel))
             if "duties_open[coverage]" in reason and "coverage-tool" in features:
                 say += _seed(box, tool_log, rel, injected, instance["patch"])
