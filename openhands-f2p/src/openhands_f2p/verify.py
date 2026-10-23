@@ -1252,6 +1252,99 @@ _SWALLOW = re.compile(r"^[ \t]*except\b[^:\n]*:[ \t]*(?:#[^\n]*)?\n(?:[ \t]*#[^\
                       re.M)
 
 
+# Tests that make the numbers without testing anything (user, 2026-10-24). pylint-4492
+# (base-c1) was fail-to-pass at 89% changed-line coverage with tests that asserted
+# `hasattr(linter, '_load_reporters')` and then called the new code inside
+# `try: ... except Exception: pass`: it caught 3 of 20 wrong versions of the fix, the
+# developer's test 15. Such a test does not count -- not for the flip, not for coverage --
+# and the run is not done while one is left.
+_EXISTENCE_CALLS = {"hasattr", "callable", "isinstance", "issubclass"}
+
+
+def _existence_only(expr) -> bool:
+    """Whether an assertion's expression only checks that something exists."""
+    import ast as _ast
+    if isinstance(expr, _ast.BoolOp):
+        return all(_existence_only(v) for v in expr.values)
+    if isinstance(expr, _ast.UnaryOp) and isinstance(expr.op, _ast.Not):
+        return _existence_only(expr.operand)
+    if isinstance(expr, (_ast.Name, _ast.Attribute)):
+        return True                                   # assert Thing
+    if isinstance(expr, _ast.Call) and isinstance(expr.func, _ast.Name):
+        return expr.func.id in _EXISTENCE_CALLS
+    if isinstance(expr, _ast.Compare) and len(expr.ops) == 1:
+        op, right = expr.ops[0], expr.comparators[0]
+        if isinstance(op, (_ast.IsNot, _ast.Is)) and isinstance(right, _ast.Constant) and right.value is None:
+            return True                               # assert x is not None
+        if isinstance(op, (_ast.In, _ast.NotIn)) and isinstance(right, _ast.Call) and \
+                isinstance(right.func, _ast.Name) and right.func.id in ("dir", "vars"):
+            return True                               # assert "name" in dir(obj)
+    return False
+
+
+def trick_tests(text: str | None) -> dict[str, list[str]]:
+    """For each test that checks nothing about what the code does, why: an `except` that
+    throws the error away, no assertion at all, or assertions that only check that names
+    exist. Read off the syntax, no run."""
+    import ast as _ast
+    try:
+        tree = _ast.parse(text or "")
+    except SyntaxError:
+        return {}
+    out: dict[str, list[str]] = {}
+    for fn in _ast.walk(tree):
+        if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)) or not fn.name.startswith("test"):
+            continue
+        why = []
+        for node in _ast.walk(fn):
+            if isinstance(node, _ast.Try):
+                for h in node.handlers:
+                    if all(isinstance(b, _ast.Pass) or (isinstance(b, _ast.Expr) and isinstance(b.value, _ast.Constant))
+                           for b in h.body):
+                        why.append(f"line {h.lineno}: `except ...: pass` throws away whatever the "
+                                   f"code above it raises, so that code is run, not tested")
+        asserts = [n for n in _ast.walk(fn) if isinstance(n, _ast.Assert)]
+        # Assertion helpers and expected-error blocks: `self.assertEqual`, `assert_node`,
+        # `np.testing.assert_allclose`, `pytest.raises`/`warns`, `self.assertRaises`.
+        helpers = [n for n in _ast.walk(fn) if isinstance(n, _ast.Call) and (
+            (isinstance(n.func, _ast.Attribute) and (n.func.attr.startswith("assert")
+                                                     or n.func.attr in ("raises", "warns", "fail")))
+            or (isinstance(n.func, _ast.Name) and (n.func.id.startswith("assert")
+                                                   or n.func.id in ("raises", "warns"))))]
+        if not asserts and not helpers:
+            why.append("it asserts nothing: it runs code and checks no result")
+        elif asserts and not helpers and all(_existence_only(a.test) for a in asserts):
+            why.append(f"its only assertions (line {', '.join(str(a.lineno) for a in asserts[:4])}) "
+                       f"check that names exist -- `hasattr`, `is not None`, a bare name -- which "
+                       f"any version of the change passes, right or wrong")
+        if why:
+            out[fn.name] = why
+    return out
+
+
+def trick_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
+    """Refuse the stop while the file `verify` last checked holds tests that check nothing
+    (`trick_tests`), when that file is still the one on disk."""
+    got = _last(tool_log, "verify", rel)
+    if got is None:
+        return None
+    i, e = got
+    tricks = e.get("tricks") or {}
+    if not tricks or wrote_test_after(tool_log, i, rel):
+        return None
+    lines = [f"* `{n}`: " + "; ".join(w) for n, w in list(tricks.items())[:6]]
+    if len(tricks) > 6:
+        lines.append(f"* and {len(tricks) - 6} more: " + ", ".join(f"`{n}`" for n in list(tricks)[6:]))
+    return ("tricks_open",
+            f"`{rel}` has tests that check nothing about what the change does:\n\n"
+            + "\n".join(lines) + "\n\n"
+            "They do not count -- not for fail-to-pass, not for coverage. Make each one call the "
+            "changed code with real input and assert on what it returns, writes or raises -- the "
+            "exact value, the output, the exception and its message -- with no `try`/`except` "
+            "around it: an error should fail the test. A test you cannot make check something, "
+            "delete. Then call `verify` again.")
+
+
 def swallow_note(test_text: str | None) -> str:
     """A note when the test catches every exception and ignores it, naming the lines."""
     lines = [test_text.count("\n", 0, m.start()) + 1

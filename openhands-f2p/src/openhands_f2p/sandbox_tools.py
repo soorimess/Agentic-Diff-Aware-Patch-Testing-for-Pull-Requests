@@ -1665,6 +1665,10 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                 f"cannot verify: the working tree is in an unexpected state ({state})",
                 is_error=True)
         cmd = E.test_command(self.box, [action.target])
+        # Tests that check nothing about what the code does (`V.trick_tests`, 2026-10-24):
+        # they count neither for the flip nor for coverage.
+        from openhands_f2p import verify as _V
+        tricks = _V.trick_tests(self.box.read(action.target.split("::")[0]) or "")
         from openhands_f2p import verify as V
         from openhands_f2p import runners
         # Under pytest, both runs load the plugin that records what `pytest.raises` /
@@ -1709,7 +1713,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     e.get("f2p_test") for e in self.log if e.get("tool") == "verify")):
                 try:
                     cov = E.changed_line_coverage(self.box, [action.target], self.patch,
-                                                  self._base)
+                                                  self._base, exclude_tests=set(tricks))
                     import_only = _import_only(self.box, cov) if cov.get("measured") else ""
                     if cov.get("measured") and cov.get("missed"):
                         cov["related_tests"] = self._related(cov, action.target)
@@ -1724,10 +1728,20 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         passed_after = {n for n, v in head_out.items() if v == "PASSED"}
         flipped = sorted(failed_before & passed_after)
         still_failing = [n for n, v in head_out.items() if v in ("FAILED", "ERROR")]
+        # A flip from tests that check nothing is not one (2026-10-24): pylint-4492 flipped on
+        # `assert hasattr(linter, '_reporter_names')` -- the name is new, so any version of
+        # the change, right or wrong, passes it.
+        def _short(n: str) -> str:
+            return n.split("::")[-1].split("[")[0]
+        trick_flips = [n for n in flipped if _short(n) in tricks]
+        only_tricks = bool(flipped) and len(trick_flips) == len(flipped)
+        if only_tricks:
+            flipped = []
         # `reach`: how many changed lines this version runs, read by the hand-back
         # (`V.lost_flip`) to tell a test that went further from one that fell back.
         self.log.append({"tool": "verify", "target": action.target,
                          "before": base_out, "after": head_out, "flipped": flipped,
+                         "tricks": tricks, "trick_flips": trick_flips,
                          "reach": (cov or {}).get("covered") if (cov or {}).get("measured")
                          else None})
 
@@ -1760,6 +1774,14 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         hidden = ""
         if not base_out and not head_out:
             head = "NOT fail-to-pass: nothing was collected -- the file does not import."
+        elif only_tricks and not still_failing:
+            head = (f"NOT fail-to-pass in a way that counts: {trick_flips[:3]} fail before the "
+                    f"change and pass after, but none of them checks what the changed code does. "
+                    + " ".join(f"`{_short(n)}`: {tricks[_short(n)][0]}." for n in trick_flips[:3])
+                    + " A test like that passes on any version of the change, right or wrong, so it "
+                      "tests nothing. Call the changed code with real input and assert on what it "
+                      "returns, writes or raises -- the exact value, the output, the exception and "
+                      "its message -- with no `try`/`except` around it.")
         elif inverted and not flipped:
             # The others that still fail are named too: requests-1142 (no-second-chance-
             # no-require-tools) had one failing on both sides beside the backwards one,
@@ -1862,6 +1884,19 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # "That it flips, and what it reaches, are two of the three questions", with no
         # duty line. It scored NO having been told both things.
         ok = bool(flipped) and not still_failing
+        # The tests that do not count, said with every answer while there are any.
+        if tricks and not only_tricks:
+            unchecked = len((cov or {}).get("unchecked") or [])
+            head += ("\n\n## Tests that do not count\n\n"
+                     + "\n".join(f"* `{n}`: " + "; ".join(w) for n, w in list(tricks.items())[:6])
+                     + (f"\n* and {len(tricks) - 6} more: " + ", ".join(f"`{n}`" for n in list(tricks)[6:])
+                        if len(tricks) > 6 else "")
+                     + ("\n\nThey count neither for fail-to-pass nor for coverage"
+                        + (f": {unchecked} changed line(s) run only inside them and are left out "
+                           f"of the coverage below" if unchecked else "")
+                        + ". Make each one assert on what the changed code returns, writes or "
+                          "raises, with no `try`/`except` around it, or delete it. You cannot "
+                          "finish while they are in the file."))
         # The file as it stood when `verify` said fail-to-pass, kept for the record only:
         # `f2p_history` in the result says whether the test the agent finally handed in
         # is still that one, or it edited a passing test into a failing one afterwards.

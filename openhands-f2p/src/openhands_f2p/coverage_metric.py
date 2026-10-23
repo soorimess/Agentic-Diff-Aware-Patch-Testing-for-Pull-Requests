@@ -294,7 +294,8 @@ def is_test_file(path: str) -> bool:
 
 def changed_line_coverage(box: "Sandbox", targets: list[str],
                           patch: str, base_files: dict[str, str] | None = None,
-                          contexts: bool = False) -> dict:
+                          contexts: bool = False,
+                          exclude_tests: set[str] | None = None) -> dict:
     """Of the lines this pull request changed, how many does the test execute?
 
     The evaluation metric, and the harness computes it -- never the agent. The `coverage`
@@ -335,9 +336,23 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
     if not wanted:
         return {"measured": False, "reason": "the fix touches no source .py lines"}
 
-    traced = measure_coverage(box, targets, limit_files=0, contexts=contexts)
+    traced = measure_coverage(box, targets, limit_files=0,
+                              contexts=contexts or bool(exclude_tests))
     if not traced.get("ok"):
         return {"measured": False, "reason": traced.get("detail", "coverage failed")}
+    # Lines only tests in `exclude_tests` ran do not count (2026-10-24): tests that check
+    # nothing about what the code does (`verify.trick_tests`). A line with no test context
+    # -- run while the file was imported -- still counts as it did.
+    unchecked_raw: dict[str, set[int]] = {}
+    if exclude_tests:
+        def counts(ctxs: list[str]) -> bool:
+            return not ctxs or any(not c or c.split("|")[0].split(".")[-1] not in exclude_tests
+                                   for c in ctxs)
+        for rel_path, info in traced["raw"].items():
+            ctx = info.get("contexts") or {}
+            kept = {ln for ln in info["executed"] if counts(ctx.get(ln) or [])}
+            unchecked_raw[rel_path] = info["executed"] - kept
+            info["executed"] = kept
     env = environment_lines(box, targets)
 
     hit: list[str] = []
@@ -346,6 +361,7 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
     matched: dict[str, str] = {}
     unimported: list[str] = []
     hit_by: dict[str, list[str]] = {}       # with `contexts`: the tests that ran each hit line
+    unchecked: list[str] = []               # run, but only by excluded tests
     for path, lines in wanted.items():
         info = traced["raw"].get(path)
         if info is not None:
@@ -390,6 +406,8 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
                 environment.append(f"{path}:{at}")    # runs with no test at all
                 continue
             (hit if at in info["executed"] else missed).append(f"{path}:{at}")
+            if at in unchecked_raw.get(matched.get(path, path), set()):
+                unchecked.append(f"{path}:{at}")
             if contexts and at in info["executed"]:
                 hit_by[f"{path}:{at}"] = (info.get("contexts") or {}).get(at, [])
     total = len(hit) + len(missed)
@@ -429,6 +447,7 @@ def changed_line_coverage(box: "Sandbox", targets: list[str],
     return {"measured": True, "percent": round(100 * len(hit) / total, 1),
             "covered": len(hit), "executable_changed_lines": total,
             "hit": hit, "missed": missed, **({"hit_by": hit_by} if contexts else {}),
+            **({"unchecked": unchecked} if exclude_tests else {}),
             # Which traced file each changed file was scored against. When these differ
             # from the key, coverage followed a copy of the library somewhere else and
             # the line numbers are not comparable -- worth being able to see.

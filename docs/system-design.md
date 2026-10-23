@@ -1198,6 +1198,24 @@ judge rates the developer's test better on all ten. One run each.
 `runs.py` crashed rebuilding RUNS.md after judging: a PR of the dataset with no result in
 the folder has no `scale`; the legend now skips it.
 
+**Useful tests, not coverage at any cost** (user, 2026-10-24). pylint-4492 (`base-c1`)
+was fail-to-pass at 89.1% with thirteen tests that asserted `hasattr(...)` and called the
+new code inside `try: ... except Exception: pass` -- 3 of 20 wrong versions of the fix
+caught, the developer's test 15. The coverage loop paid for lines run, not lines checked.
+Loop on that one PR until its test is meaningful and covers the change (no judge; read the
+test). Iteration 1:
+
+- `verify.trick_tests` reads each test's syntax: an `except` whose body is only `pass`, no
+  assertion at all, or assertions that only check that names exist (`hasattr`, `callable`,
+  `isinstance`, `is not None`, a bare name, `in dir(...)`). On the old tests it finds all
+  13 of pylint-4492's, and 2 of sphinx's and 1 of xarray's round-19 tests -- all real.
+- Such tests do not count for the flip (a file whose only flips are theirs is "NOT
+  fail-to-pass in a way that counts") nor for coverage (`changed_line_coverage(...,
+  exclude_tests=)`, from the per-test contexts: a line only they run is left out and
+  listed as `unchecked`).
+- Every `verify` answer lists them ("## Tests that do not count"), and the stop check
+  refuses while the file has any (`trick_gap`, `tricks_open`).
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

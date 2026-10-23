@@ -701,6 +701,9 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 # judge's `meaningful` label instead.
                 found = (V.shortfall(box, instance, rel)
                          or V.verify_gap(tool_log, rel, coverage="coverage-tool" in features)
+                         # Tests that check nothing (2026-10-24, user): refused before the
+                         # coverage loop, whose lines they would otherwise make.
+                         or V.trick_gap(tool_log, rel)
                          or V.duty_gap(tool_log, instruments(features), rel,
                                        refused=_first_refusals(injected),
                                        last_refused=_last_refusals(injected),
