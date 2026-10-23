@@ -809,7 +809,7 @@ def with_seeds(text: str, tool_log: list, rel: str) -> str:
     base-it13: three seeds lost that way, xarray 80.4% where version + seed ran 94.1%)."""
     for e in tool_log:
         if (e.get("tool") == "seed" and "error" not in e and wrote_to(e.get("path", ""), rel)
-                and not re.search(rf"\bdef {re.escape(e['name'])}\(", text)):
+                and not re.search(rf"\bdef {re.escape(e['name'].split('::')[-1])}\(", text)):
             text = (text.rstrip() + f"\n\n\n# Copied unchanged by the harness from {e['from']}, "
                     f"a test in this repository before this change.\n" + e["block"])
     return text

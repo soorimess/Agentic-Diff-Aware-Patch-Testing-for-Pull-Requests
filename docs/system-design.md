@@ -1216,6 +1216,21 @@ test). Iteration 1:
 - Every `verify` answer lists them ("## Tests that do not count"), and the stop check
   refuses while the file has any (`trick_gap`, `tricks_open`).
 
+Run `base-p1`: the agent dropped the swallowed calls after one `tricks_open` refusal, and
+ended with one test -- `hasattr(linter, '_reporter_names')` and `_reporter_names == "text"`
+-- at 0.0% coverage, 1 of 20 mutants. The 0% is honest: 35 of the 55 changed lines run with
+no test (pylint's conftest calls `set_option`), and the rest -- `_load_reporters`,
+`MultiReporter` -- had been "reached" in base-c1 only by calls that crashed inside
+`except: pass`. The agent did not know how to drive that code. The measured repository test
+was `TestRunTC.test_abbreviations_are_not_supported` in `tests/test_self.py` (11 of
+`_load_reporters`' 16 lines), a method that runs pylint through the class's
+`self._test_output`; seeding copied module-level functions only, so nothing was copied.
+Iteration 2: `seed_block` copies a test method with its class (renamed `TestSeeded<Name>`),
+its setup/teardown, the helper methods and fixtures it uses (through `self.` or as
+arguments), class attributes, and the module-level helpers and imports all of it needs; the
+seed's name is `Class::method` wherever seeds are looked up. On pylint-4492 the copy brings
+`_run_pylint`, `_test_output`, `_clean_paths` and `_patch_streams`, and passes on both sides.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

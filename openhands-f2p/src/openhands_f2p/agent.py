@@ -396,6 +396,23 @@ def _seed_account(inst: dict, box: E.Sandbox, test_file: str, code: str, verdict
     funcs = {n.name: n for n in (tree.body if tree else [])
              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
+    def find(body, name):
+        """The function `name`, or the method of `Class::method` (a seeded test method)."""
+        if "::" in name:
+            cls, meth = name.split("::", 1)
+            c = next((x for x in body if isinstance(x, ast.ClassDef) and x.name == cls), None)
+            return next((x for x in (c.body if c else [])
+                         if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef)) and x.name == meth), None)
+        return next((x for x in body if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and x.name == name), None)
+
+    def whole(body, name):
+        """What leaving the seed out removes: the function, or the whole seeded class."""
+        if "::" in name:
+            return next((x for x in body if isinstance(x, ast.ClassDef)
+                         and x.name == name.split("::")[0]), None)
+        return find(body, name)
+
     def body_of(n) -> str:
         first = min([n.lineno] + [d.lineno for d in n.decorator_list])
         return "\n".join(lines[first - 1:n.end_lineno]).strip()
@@ -405,12 +422,11 @@ def _seed_account(inst: dict, box: E.Sandbox, test_file: str, code: str, verdict
 
     rows, drop = [], []
     for e in seeds:
-        n = funcs.get(e["name"])
+        n = find(tree.body if tree else [], e["name"])
         # The copy as added, read the same way as the final file (decorators may span lines).
         try:
             btree, blines = ast.parse(e["block"]), e["block"].splitlines()
-            bn = next((x for x in btree.body if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef))
-                       and x.name == e["name"]), None)
+            bn = find(btree.body, e["name"])
         except SyntaxError:
             bn = None
         was = ("\n".join(blines[min([bn.lineno] + [d.lineno for d in bn.decorator_list]) - 1:
@@ -423,7 +439,7 @@ def _seed_account(inst: dict, box: E.Sandbox, test_file: str, code: str, verdict
                      "asserts_copied": asserts(was), "asserts_final": asserts(now) if n else 0})
         # Without the copies the agent did not add to: what its own work reaches.
         if state in ("unchanged", "weakened"):
-            drop.append(n)
+            drop.append(whole(tree.body, e["name"]))
     cov = verdict.changed_line_coverage or {}
     out = {"seeds": rows, "with_seeds": {"f2p": verdict.f2p, "covered": cov.get("covered"),
                                         "percent": cov.get("percent")}}
@@ -467,7 +483,8 @@ def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list, patch: str) 
             or any(e.get("tool") == "seed" and e.get("part") == key for e in tool_log)):
         return ""
     current = box.read(rel) or ""
-    taken = set(re.findall(r"^\s*(?:async\s+)?def (\w+)\(", current, re.M))
+    taken = (set(re.findall(r"^\s*(?:async\s+)?def (\w+)\(", current, re.M))
+             | set(re.findall(r"^class (\w+)", current, re.M)))
     made = S.seed_block(box.read(hit["file"]) or "", [target["function"].rsplit(".", 1)[-1]], taken,
                         prefer=hit.get("test", ""))
     if made is None:

@@ -293,7 +293,7 @@ def _seed_changed(log: list, text: str, failing: list[str]) -> str:
         if e.get("tool") != "seed" or "error" in e or not e.get("name"):
             continue
         name = e["name"]
-        if not any(n.split("::")[-1].split("[")[0] == name for n in failing):
+        if not any(n.split("::")[-1].split("[")[0] == name.split("::")[-1] for n in failing):
             continue
         was, now = _function_text(e.get("block") or "", name), _function_text(text, name)
         if not was or not now or was.strip() == now.strip():
@@ -588,7 +588,7 @@ class WriteExecutor(ToolExecutor[WriteAction, WriteObservation]):
         from openhands_f2p import verify as V
         gone = [e for e in self.log if e.get("tool") == "seed" and "error" not in e
                 and V.wrote_to(action.path, e.get("path", ""))
-                and not re.search(rf"\bdef {re.escape(e['name'])}\(", action.content)]
+                and not re.search(rf"\bdef {re.escape(e['name'].split('::')[-1])}\(", action.content)]
         seen: set[str] = set()
         gone = [e for e in gone if not (e["name"] in seen or seen.add(e["name"]))]
         lost = ("".join(f"\n\n[harness] This write leaves out `{e['name']}`, the copy of "
@@ -857,13 +857,18 @@ SEED_PREFIX = "test_seeded_"
 
 
 def _function_text(text: str, name: str) -> str:
-    """The source of the module-level function `name` in `text`, decorators included."""
+    """The source of the module-level function `name` in `text`, decorators included; a
+    method when `name` is `Class::method`."""
     try:
         tree = ast.parse(text)
     except SyntaxError:
         return ""
     lines = text.splitlines()
-    for n in tree.body:
+    body = tree.body
+    if "::" in name:
+        cls, name = name.split("::", 1)
+        body = next((n.body for n in tree.body if isinstance(n, ast.ClassDef) and n.name == cls), [])
+    for n in body:
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name:
             first = min([n.lineno] + [d.lineno for d in n.decorator_list])
             return "\n".join(lines[first - 1:n.end_lineno])
@@ -894,6 +899,20 @@ def seed_block(text: str, names: list[str], taken: set[str],
         for t in targets:
             if isinstance(t, ast.Name) and t.id not in defs:
                 defs[t.id] = n
+    # A test that is a method of a test class (2026-10-24): pylint-4492's measured repository
+    # test is `TestRunTC.test_abbreviations_are_not_supported` in `tests/test_self.py`, which
+    # runs pylint through the class's `self._runtest`. Module-level functions only, nothing
+    # was copied, and the example could not be copied as shown.
+    in_class = None
+    if not any(prefer and n.name == prefer for n in tests):
+        for c in (n for n in tree.body if isinstance(n, ast.ClassDef)):
+            meth = next((m for m in c.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         and m.name.startswith("test") and (m.name == prefer if prefer else True)), None)
+            if meth is not None and (prefer or not tests):
+                in_class = (c, meth)
+                break
+    if in_class is not None:
+        return _seed_method(text, tree, lines, defs, in_class[0], in_class[1], taken)
     if not tests:
         return None
 
@@ -939,6 +958,70 @@ def seed_block(text: str, names: list[str], taken: set[str],
     helpers.sort(key=lambda h: h.lineno)
     code = [src(h) for h in helpers if getattr(h, "name", None) not in taken] + [body]
     return ("\n".join(imports) + "\n\n\n" + "\n\n\n".join(code)).strip() + "\n", pick.name, seeded
+
+
+def _seed_method(text: str, tree, lines: list[str], defs: dict, cls, meth,
+                 taken: set[str]) -> tuple[str, str, str] | None:
+    """`seed_block` for a test method: the class with that method, its setup and teardown,
+    the fixtures and helper methods the test uses (through `self.` or as arguments, two
+    levels), class attributes, and the module-level helpers and imports all of it needs.
+    The class is renamed `TestSeeded<Name>`, the method `test_seeded_<name>`."""
+    def src(n) -> str:
+        first = min([n.lineno] + [d.lineno for d in getattr(n, "decorator_list", [])])
+        return "\n".join(lines[first - 1:n.end_lineno])
+    methods = {m.name: m for m in cls.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    setup = {"setUp", "tearDown", "setup_method", "teardown_method", "setup_class",
+             "teardown_class", "setUpClass", "tearDownClass", "setup", "teardown"}
+    autouse = {n for n, m in methods.items()
+               if any("fixture" in ast.unparse(d) and "autouse" in ast.unparse(d) for d in m.decorator_list)}
+
+    def uses(m) -> set[str]:
+        got = {x.attr for x in ast.walk(m) if isinstance(x, ast.Attribute)
+               and isinstance(x.value, ast.Name) and x.value.id in ("self", "cls")}
+        return got | {a.arg for a in m.args.args}
+    keep = {meth.name} | (setup & set(methods)) | autouse
+    for _ in range(3):
+        keep |= {u for k in list(keep) for u in uses(methods[k]) if u in methods}
+    attrs = [n for n in cls.body if isinstance(n, (ast.Assign, ast.AnnAssign))]
+    seeded_cls = "TestSeeded" + cls.name.removeprefix("Test")
+    k = 2
+    while seeded_cls in taken:
+        seeded_cls, k = f"TestSeeded{cls.name.removeprefix('Test')}{k}", k + 1
+    seeded = SEED_PREFIX + meth.name[len("test_"):] if meth.name.startswith("test_") else SEED_PREFIX + meth.name
+    head = src(cls).splitlines()
+    cls_line = next(i for i, ln in enumerate(head) if re.match(rf"\s*class {re.escape(cls.name)}\b", ln))
+    header = head[:cls_line] + [head[cls_line].replace(f"class {cls.name}", f"class {seeded_cls}", 1)]
+    parts = [src(a) for a in attrs] + [src(m) for name, m in methods.items() if name in keep]
+    body_text = "\n\n".join(parts)
+    body_text = re.sub(rf"\bdef {re.escape(meth.name)}\(", f"def {seeded}(", body_text, count=1)
+    block_cls = "\n".join(header) + "\n" + body_text
+    # Module-level helpers, constants and imports the class needs (two levels).
+    try:
+        probe = ast.parse(block_cls)
+    except SyntaxError:
+        return None
+    need = {x.id for x in ast.walk(probe) if isinstance(x, ast.Name)}
+    helpers: list = []
+    want = set(need)
+    for _ in range(2):
+        more = [defs[w] for w in sorted(want) if w in defs and defs[w] not in helpers
+                and getattr(defs[w], "name", None) != cls.name]
+        helpers += more
+        want = {x.id for h in more for x in ast.walk(h) if isinstance(x, ast.Name)}
+        need |= want
+    imports = []
+    for node in tree.body:
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        kept = [al for al in node.names if (al.asname or al.name.split(".")[0]) in need]
+        if kept:
+            names_s = ", ".join(al.name + (f" as {al.asname}" if al.asname else "") for al in kept)
+            imports.append(f"from {'.' * node.level}{node.module or ''} import {names_s}"
+                           if isinstance(node, ast.ImportFrom) else f"import {names_s}")
+    helpers.sort(key=lambda h: h.lineno)
+    code = [src(h) for h in helpers if getattr(h, "name", None) not in taken] + [block_cls]
+    return (("\n".join(imports) + "\n\n\n" + "\n\n\n".join(code)).strip() + "\n",
+            f"{cls.name}::{meth.name}", f"{seeded_cls}::{seeded}")
 
 
 def related_example(text: str, names: list[str], max_lines: int = 18,
