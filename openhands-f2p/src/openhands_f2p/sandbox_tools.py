@@ -435,13 +435,42 @@ class RunObservation(Observation):
     pass
 
 
+def added_defs(patch: str, max_lines: int = 30) -> dict[str, tuple[str, str]]:
+    """Functions and classes a diff adds to library code: name -> (path, its added lines).
+    The agent is shown the diff whenever `verify` exists; this only points at a part of it."""
+    out: dict[str, tuple[str, str]] = {}
+    path, lines = "", (patch or "").splitlines()
+    for k, ln in enumerate(lines):
+        if ln.startswith("+++ "):
+            path = ln[4:].removeprefix("b/").strip()
+            continue
+        m = re.match(r"^\+(\s*)(?:async\s+)?(?:def|class)\s+(\w+)", ln)
+        if not m or not path.endswith(".py") or E.is_test_file(path) or m.group(2) in out:
+            continue
+        indent, body = len(m.group(1)), [ln[1:]]
+        for nxt in lines[k + 1:k + max_lines]:
+            if not nxt.startswith("+"):
+                break
+            text = nxt[1:]
+            if text.strip() and len(text) - len(text.lstrip()) <= indent and not text.lstrip().startswith(("#", "@", ")")):
+                break
+            body.append(text)
+        out[m.group(2)] = (path, "\n".join(body).rstrip())
+    # A definition the diff also removes is rewritten, not added: it is in the checkout.
+    removed = set(re.findall(r"^-\s*(?:async\s+)?(?:def|class)\s+(\w+)", patch or "", re.M))
+    return {n: v for n, v in out.items() if n not in removed}
+
+
 class RunExecutor(ToolExecutor[RunAction, RunObservation]):
     def __init__(self, box: Sandbox, log: list | None = None, guard: bool = True,
-                 verify_named: bool = False):
+                 verify_named: bool = False, patch: str = ""):
         self.box = box
         self.log = log if log is not None else []
         self.guard = guard
         self.verify_named = verify_named
+        # Names the change adds, for a search that cannot find them (only when `verify`
+        # exists, which is when the agent is shown the diff at all).
+        self.added = added_defs(patch) if verify_named and patch else {}
 
     def __call__(self, action: RunAction, conversation=None) -> RunObservation:
         # 120s, not 900. `run` is for reading and searching; nothing legitimate there
@@ -472,6 +501,20 @@ class RunExecutor(ToolExecutor[RunAction, RunObservation]):
                      "it runs your test on this code, applies the change itself, runs the test "
                      "again and puts the code back. Call the `verify` tool with `target` set to "
                      "your test file.")
+        # A search for something the change adds, which finds nothing because the change is
+        # not applied (2026-10-23): django-13207 (B rerun) was told "it is new in this change,
+        # so it is not in the code you can read now (read it in the diff)" and still grepped
+        # the checkout for `_get_column_collations` six times, then gave up on it.
+        if self.added and r.returncode != 0 and not (r.output or "").strip() and re.search(
+                r"\b(grep|rg|ag|ack)\b", action.command or ""):
+            named = [n for n in self.added if re.search(rf"\b{re.escape(n)}\b", action.command)]
+            if named:
+                n = named[0]
+                path, code = self.added[n]
+                body += (f"\n\n[harness] `{n}` is added by this change (in `{path}`), so it is "
+                         f"not in this checkout: the change is not applied here, and searching "
+                         f"for it finds nothing. `verify` applies the change when it runs your "
+                         f"test. Its code, from the diff:\n\n```python\n{code}\n```")
         undone = _undo_edits(self.box, self.log, self.guard)
         dropped = _ignored(action, "run")
         return RunObservation.from_text(
@@ -502,7 +545,8 @@ class SandboxRunTool(ToolDefinition[RunAction, RunObservation]):
             observation_type=RunObservation,
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
             executor=_Shown(RunExecutor(box, log, params.get("guard", True),
-                                        params.get("verify_named", False)), "run"),
+                                        params.get("verify_named", False),
+                                        params.get("patch", "")), "run"),
         )]
 
 
@@ -2007,7 +2051,8 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
     guard = "guard" in features
     require_tools = "require-tools" in features
     made = {"run": SandboxRunTool.create(box=box, log=log, guard=guard,
-                                         verify_named="verify-tool" in features)[0],
+                                         verify_named="verify-tool" in features,
+                                         patch=patch)[0],
             "write_file": SandboxWriteTool.create(box=box, log=log, guard=guard)[0],
             "run_tests": SandboxTestTool.create(box=box, repo=repo, log=log,
                                                 reveal_runner=briefed,

@@ -1158,6 +1158,14 @@ new in this change, so it is not in the code you can read now (read it in the di
 still grepped the checkout for `_get_column_collations` six times. One run per PR: a
 20-point swing on the same code is within what these runs do.
 
+**A search for what the change adds** (user, 2026-10-23): the `run` tool, when a `grep` /
+`rg` / `ag` / `ack` finds nothing and names a function or class the diff adds to library
+code, says so where the model looks -- "`_get_column_collations` is added by this change
+(in `django/db/backends/sqlite3/introspection.py`), so it is not in this checkout ...
+`verify` applies the change when it runs your test" -- with that definition from the diff
+(`added_defs`; a definition the diff also removes is rewritten, not added, and left out).
+Only when `verify` exists, which is when the agent is shown the diff at all.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of
