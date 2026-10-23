@@ -1186,6 +1186,11 @@ def coverage_turns(tool_log: list, rel: str,
     coverage refusals that named a target."""
     tried: list[tuple[str, str]] = []
     blank: dict[tuple[str, str], int] = {}
+    # Parts a turn has gained lines in. Such a part stays open while each turn gains more
+    # (2026-10-23, user): scikit-learn-24145 (B) had one part, 47 missed lines; its one
+    # turn gained 15 and the loop ended at 25.4%. It ends at the first turn after that
+    # which gains nothing.
+    gained: set[tuple[str, str]] = set()
     for k, r in enumerate(rounds):
         before = _measured_coverage(tool_log, rel, r)
         if not before:
@@ -1200,9 +1205,14 @@ def coverage_turns(tool_log: list, rel: str,
                  if writes and writes[0] < i < end]
         if not after:
             continue
-        if _missed_in(after[-1], key) < target["missed"]:
-            tried.append(key)
+        now = _missed_in(after[-1], key)
+        if now < target["missed"]:
             blank.pop(key, None)
+            gained.add(key)
+            if now == 0:
+                tried.append(key)
+        elif key in gained:
+            tried.append(key)
         else:
             blank[key] = blank.get(key, 0) + 1
             if blank[key] >= TARGET_TURNS:
@@ -1425,10 +1435,11 @@ def duty_gap(tool_log: list, instruments: tuple[str, ...], rel: str,
                                  f"{'s' if target['missed'] != 1 else ''}).{new}{shown} {again}Change the test "
                                  f"so it goes through that code, asserting on what it returns, "
                                  f"raises or does there -- then call `verify` again. "
-                                 f"Each part of the change gets one such turn -- two when the first runs "
-                                 f"none of its lines; this ends when "
-                                 f"every part has had its turn or every line runs. A call with no "
-                                 f"assertion behind it does not count."))
+                                 f"A part keeps its turns while each one runs more of its lines, and "
+                                 f"ends at a turn that runs none more (two turns when the first runs "
+                                 f"none of them); this ends when every part has had its turns or "
+                                 f"every line runs. A call with no assertion behind it does not "
+                                 f"count."))
     if "mutation" in instruments:
         got = _last(tool_log, "mutation", rel)
         if got is None:

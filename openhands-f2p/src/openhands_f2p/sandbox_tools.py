@@ -793,7 +793,17 @@ def related_tests(box: Sandbox, paths: list[str], own: str, per_path: int = 3) -
             continue
         both = sorted(got["I"] & got["N"])
         rest = sorted(got["N"] - got["I"]) + sorted(got["I"] - got["N"], key=lambda f: (len(f), f))
-        picked = (both + rest)[:per_path]
+        # Test files under the same package first (2026-10-23): for
+        # `django/db/backends/sqlite3/introspection.py`, django-13207 (B) was pointed at the
+        # base, mysql and oracle `test_introspection.py`, never `tests/backends/sqlite/`.
+        dirs = [d for d in Path(p).parent.parts if len(d) >= 4]
+        def near(f: str) -> int:
+            parts = Path(f).parent.parts
+            return sum(any(d.startswith(t) or t.startswith(d) for t in parts if len(t) >= 4)
+                       for d in dirs)
+        ranked = both + rest
+        ranked = sorted(ranked, key=lambda f: (-near(f), ranked.index(f)))
+        picked = ranked[:per_path]
         if picked:
             out[p] = picked
     return out
@@ -983,6 +993,51 @@ def related_example(text: str, names: list[str], max_lines: int = 18,
             + ("\n    ..." if b > a + max_lines else "") + tail), node
 
 
+def mark_new(box: Sandbox, cov: dict, patch: str, base: dict[str, str]) -> None:
+    """Mark each missed-lines group whose function the change adds (`new`), with the
+    functions the changed code calls it from (`called_from`). Read at head, inside the
+    patched window; `base` holds the changed files' text before the change."""
+    groups = [g for g in cov.get("missed_by_function") or [] if g.get("function") != "<module>"]
+    if not groups:
+        return
+    heads: dict[str, str] = {}
+    spans: dict[str, list[tuple[int, int, str]]] = {}
+    for p in E.patched_source_files(patch):
+        text = box.read(p) or ""
+        heads[p] = text
+        got = []
+        try:
+            def walk(node, prefix=""):
+                for n in ast.iter_child_nodes(node):
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        q = f"{prefix}{n.name}"
+                        if not isinstance(n, ast.ClassDef):
+                            got.append((n.lineno, n.end_lineno or n.lineno, q))
+                        walk(n, q + ".")
+            walk(ast.parse(text))
+        except SyntaxError:
+            pass
+        spans[p] = got
+    for g in groups:
+        short = g["function"].rsplit(".", 1)[-1]
+        if re.search(rf"^\s*(?:async\s+)?def {re.escape(short)}\(", base.get(g["path"]) or "", re.M):
+            continue
+        g["new"] = True
+        callers = []
+        for p, text in heads.items():
+            for k, ln in enumerate(text.splitlines(), 1):
+                if re.search(rf"\b{re.escape(short)}\(", ln) and not re.match(r"\s*(?:async\s+)?def ", ln):
+                    inner = [s for s in spans.get(p, []) if s[0] <= k <= s[1]]
+                    if not inner:
+                        continue
+                    q = min(inner, key=lambda s: s[1] - s[0])[2]
+                    name = q if p == g["path"] else f"{q} in {p}"
+                    if q.rsplit(".", 1)[-1] != short and name not in callers:
+                        callers.append(name)
+        if callers:
+            g["called_from"] = callers[:3]
+
+
 _CONFIG_READ = re.compile(r"\b(?:config|settings)\.([A-Za-z_]\w*)")
 
 
@@ -1034,11 +1089,24 @@ def where_to_call(g: dict) -> str:
     """How to name one missed-lines group as something a test can call."""
     if g["function"] == "<module>":
         return f"the module-level code of `{g['path']}`"
-    fname = g["path"].rsplit("/", 1)[-1]
+    # The whole path (2026-10-23): django-13207 (B) was sent to "`_get_column_collations`
+    # in `introspection.py`" -- five changed files carry that name.
+    fname = g["path"]
     if g.get("outer") and g["outer"] != g["function"]:
         return (f"`{g['function']}` in `{fname}` -- it is defined inside `{g['outer']}` and "
                 f"runs only while that runs, so call `{g['outer']}`, or the code that calls it")
-    return f"`{g['function']}` in `{fname}`"
+    said = f"`{g['function']}` in `{fname}`"
+    # New in this change, and who calls it (2026-10-23): the same run grepped the checkout
+    # for `_get_column_collations` five times, found nothing -- it exists only once the
+    # change is applied -- and gave up on it.
+    if g.get("new"):
+        said += (" -- it is new in this change, so it is not in the code you can read now "
+                 "(read it in the diff)")
+        if g.get("called_from"):
+            said += (f"; the change calls it from "
+                     f"{', '.join(f'`{c}`' for c in g['called_from'][:3])}: call that, with "
+                     f"input that takes it there")
+    return said
 
 
 def coverage_report(box: Sandbox, target: str, cov: dict, require_tools: bool,
@@ -1088,9 +1156,9 @@ def coverage_report(box: Sandbox, target: str, cov: dict, require_tools: bool,
               + related_note(cov) + _spawn_note(box, target) + import_only]
     if require_tools:
         lines += ["", "You will be sent back while coverage is below 100%, one part of the "
-                      "change at a time -- each function holding a missed line gets one turn, "
-                      "two when the first runs none of its lines -- until it reaches 100% or "
-                      "every part has had its turn."]
+                      "change at a time -- each function holding a missed line keeps its turns "
+                      "while each one runs more of its lines -- until it reaches 100% or every "
+                      "part has had its turns."]
     return "\n".join(lines)
 
 
@@ -1602,6 +1670,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     if cov.get("measured") and cov.get("missed"):
                         cov["related_tests"] = self._related(cov, action.target)
                         config_branches(self.box, cov)
+                        mark_new(self.box, cov, self.patch, self._base)
                 except Exception as exc:
                     cov = {"measured": False, "reason": f"{type(exc).__name__}: {exc}"}
         finally:
@@ -1837,13 +1906,32 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                              "from_call": V.call_number(self.log, i),
                              "why": why})
             covered = f", running {then} changed lines" if then is not None else ""
+            # The restored file is byte for byte one `verify` already answered for: that answer
+            # is put back with it, so the stop check does not ask for it again (2026-10-23,
+            # user): pylint-5136 (B) spent about half its ten refusal rounds re-verifying
+            # restores. Not when copied repository tests were added back -- that file as a
+            # whole was never checked.
+            replayed = False
+            if not seeds_back:
+                was = {k: v for k, v in self.log[i].items()}
+                was.update({"via": "restore", "replay_of": V.call_number(self.log, i)})
+                self.log.append(was)
+                stage = next((e for e in self.log[i + 1:i + 3] if e.get("tool") == "coverage"
+                              and e.get("via") == "verify"), None)
+                if stage is not None:
+                    self.log.append(dict(stage, replay_of=V.call_number(self.log, i)))
+                replayed = True
             head += (f"\n\n## Restored\n\nThe version you just checked is worse than your best "
                      f"one: {why}. So the harness has put the best fail-to-pass version back in "
                      f"`{rel}` -- the one `verify` checked at tool call "
                      f"{V.call_number(self.log, i)}{covered}"
                      + (", with the repository tests the harness copied in added back"
                         if seeds_back else "") + ". That is the file on disk now; "
-                     f"you do not need to write it back. Everything below is about the version "
+                     f"you do not need to write it back."
+                     + (" It is byte for byte the file `verify` checked then, so that answer "
+                        "stands -- it is fail-to-pass, and you need not call `verify` on it "
+                        "before going on." if replayed else "")
+                     + f" Everything below is about the version "
                      f"you wrote, so you can see what went wrong in it. To improve on the "
                      f"restored file, change it in small steps -- keep its tests and add to "
                      f"them, one new test at a time -- and call `verify` after each step.")

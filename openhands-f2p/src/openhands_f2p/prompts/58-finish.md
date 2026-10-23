@@ -85,8 +85,9 @@ is sent back with the reason.
 order:**
 - coverage, as a loop with a score: your changed-line coverage must reach 100%. While it
   is below, change the test and call `verify` again, until it does or every part of the
-  change (each function holding a missed line) has had its turn -- a turn that runs none
-  of that function's lines gets a second one;
+  change (each function holding a missed line) has had its turns -- a part keeps its turns
+  while each one runs more of its lines, and a first turn that runs none of them gets a
+  second one;
 {?mutation-tool}
 - mutation, as a loop with a score: maximise your mutation score. While variants survive,
   add assertions about the behaviour they break and call `verify` again, until none

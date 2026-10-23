@@ -1124,6 +1124,40 @@ and xarray-7444 (92.2 -> 96.1), 6/6 YES. $1.13 for the four. Read from the traje
   file, about half of its ten.
 - pylint-4492: gained lines on every turn up to the ten-refusal cap.
 
+Changes after B (user chose P1 and P2, 2026-10-23; the target-message fixes are flaws):
+
+- **P1, turns while gaining**: a part of the change keeps its turns while each turn runs
+  more of its lines, and ends at the first turn after that which gains nothing; a part
+  whose first turn runs none still gets a second (`coverage_turns`, `gained`). Refusal,
+  report and `58-finish.md` say so.
+- **P2, a restore that is a verified file is verified**: when the restored file is byte
+  for byte the version `verify` called fail-to-pass, that `verify` entry and its coverage
+  stage are put back in the log after the restore (`via: restore`, `replay_of`), so the
+  stop check goes on to coverage instead of asking for `verify` again. Not when copied
+  repository tests were added back -- that file as a whole was never checked.
+- **The target names the whole path** (`where_to_call`): django-13207 was sent to
+  "`_get_column_collations` in `introspection.py`" with five changed files of that name.
+- **A new function is said to be new, with its callers** (`mark_new`, inside the patched
+  window): "it is new in this change, so it is not in the code you can read now (read it
+  in the diff); the change calls it from `DatabaseIntrospection.get_table_description`:
+  call that". django had grepped the checkout for it five times and given up.
+- **Related test files under the same package come first** (`related_tests`): for
+  `django/db/backends/sqlite3/introspection.py`, `tests/backends/sqlite/` before the base,
+  mysql and oracle ones.
+
+Not changed: django's Oracle/MySQL parts (P3, not chosen) and the ten-refusal cap.
+
+B rerun (`base-b2`, f44a853e), 4/4 YES, $0.98: django-13207 18.6 (18.6 in B), pylint-4492
+25.5 (45.5), pylint-5136 54.8 (30.6), scikit-learn-24145 23.8 (25.4); mean 30.7 against
+30.0. In pylint-5136 both changes show: `_set_one_msg_status` kept its turns while each
+gained (24, 26, 29, 32 lines), and its four restores were replayed as verified, so every
+refusal went to a coverage target. The two drops are where the run started: pylint-4492's
+first fail-to-pass version ran 14 lines and its next seven ran none (each restored), and
+scikit-learn's ran 3 against 16 in B, so P1 never had a gain to extend. django read "it is
+new in this change, so it is not in the code you can read now (read it in the diff)" and
+still grepped the checkout for `_get_column_collations` six times. One run per PR: a
+20-point swing on the same code is within what these runs do.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of
