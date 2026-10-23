@@ -1166,6 +1166,16 @@ code, says so where the model looks -- "`_get_column_collations` is added by thi
 (`added_defs`; a definition the diff also removes is rewritten, not added, and left out).
 Only when `verify` exists, which is when the agent is shown the diff at all.
 
+Base rerun (`base-c1`, e460c837) on the five B trial PRs, all YES: django-13207 16.3,
+pylint-4492 89.1, pylint-5136 37.1, scikit-learn-24145 28.6, sphinx-10807 78.8. The search
+note fired in django (5), pylint-5136 (3) and sphinx (2); the model read it ("the
+ManagedMessage class is added by the change, so it doesn't exist yet") and sometimes
+searched again. Base+mutation trial (`mut-c1`, scikit-learn-24145): YES 25.4%, 5/20 caught,
+no errors -- but the replay of a verified restore (P2) carried the coverage stage and not
+the mutation stage, so after each restore the mutation loop read the discarded version:
+"5.0% (1 of 20) ... you changed the test after the last `verify`", four refusals of nine.
+The replay now carries every stage of that call.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

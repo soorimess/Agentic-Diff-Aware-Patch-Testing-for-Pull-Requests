@@ -1960,10 +1960,15 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                 was = {k: v for k, v in self.log[i].items()}
                 was.update({"via": "restore", "replay_of": V.call_number(self.log, i)})
                 self.log.append(was)
-                stage = next((e for e in self.log[i + 1:i + 3] if e.get("tool") == "coverage"
-                              and e.get("via") == "verify"), None)
-                if stage is not None:
-                    self.log.append(dict(stage, replay_of=V.call_number(self.log, i)))
+                # Every stage of that call: coverage, and mutation too -- left out, the
+                # mutation loop read the discarded version's score after each restore,
+                # "5.0% (1 of 20) ... you changed the test after the last `verify`", four
+                # refusals of nine in scikit-learn-24145's base+mutation trial (2026-10-23).
+                for stage in self.log[i + 1:i + 4]:
+                    if stage.get("tool") == "verify":
+                        break
+                    if stage.get("tool") in ("coverage", "mutation") and stage.get("via") == "verify":
+                        self.log.append(dict(stage, replay_of=V.call_number(self.log, i)))
                 replayed = True
             head += (f"\n\n## Restored\n\nThe version you just checked is worse than your best "
                      f"one: {why}. So the harness has put the best fail-to-pass version back in "
