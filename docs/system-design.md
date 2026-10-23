@@ -1231,6 +1231,24 @@ arguments), class attributes, and the module-level helpers and imports all of it
 seed's name is `Class::method` wherever seeds are looked up. On pylint-4492 the copy brings
 `_run_pylint`, `_test_output`, `_clean_paths` and `_patch_streams`, and passes on both sides.
 
+Run `base-p2`: the class seed was copied in at the second coverage turn; the agent added
+`test_multiple_output_formats` inside it, running pylint with
+`--output-format=json:output.json,text` -- 67.3% coverage, **10 of 20** mutants (from 1),
+no swallowed calls. Still weak: it asserts only `len(output) > 0`, and its flip comes from
+`_reporter_names == "json:output.json,text"`. The developer's test asserts the exact JSON
+written and the text output. The agent cannot see those values: its checkout is the code
+before the change, and `verify` reports pass or fail, not what the code returned.
+Iteration 3:
+
+- **`compare`**, a tool (with `verify`, only when the agent is shown the diff): runs a short
+  Python script in an empty directory on the code before the change and again with it
+  applied, and shows both outputs. On pylint-4492: before, `InvalidReporterError:
+  json:out.json,text`; after, the text report and `out.json` created (empty until the
+  reporters are closed -- what the developer's test calls `close_output_files()` for).
+- `trick_tests` also counts assertions that only something came out -- `len(x) > 0`,
+  `x != ""`, `bool(x)` -- as checking nothing; and a call to a helper that asserts
+  (`self._test_output(...)`) counts as an assertion. The refusals point to `compare`.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

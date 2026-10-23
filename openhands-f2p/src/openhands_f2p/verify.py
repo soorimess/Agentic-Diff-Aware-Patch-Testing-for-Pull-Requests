@@ -1279,6 +1279,18 @@ def _existence_only(expr) -> bool:
         if isinstance(op, (_ast.In, _ast.NotIn)) and isinstance(right, _ast.Call) and \
                 isinstance(right.func, _ast.Name) and right.func.id in ("dir", "vars"):
             return True                               # assert "name" in dir(obj)
+        # Only that something came out, not what (2026-10-24): pylint-4492 (base-p2) ran
+        # pylint with two output formats and asserted `len(output) > 0`.
+        left = expr.left
+        sized = isinstance(left, _ast.Call) and isinstance(left.func, _ast.Name) and left.func.id == "len"
+        if sized and isinstance(right, _ast.Constant) and right.value in (0, 1) and \
+                isinstance(op, (_ast.Gt, _ast.GtE, _ast.NotEq)):
+            return True                               # assert len(x) > 0
+        if isinstance(op, _ast.NotEq) and isinstance(right, (_ast.Constant, _ast.List, _ast.Dict, _ast.Tuple)) \
+                and (getattr(right, "value", None) in ("", 0, None) or not getattr(right, "elts", getattr(right, "keys", [1]))):
+            return True                               # assert x != "" / != []
+    if isinstance(expr, _ast.Call) and isinstance(expr.func, _ast.Name) and expr.func.id == "bool":
+        return True                                   # assert bool(x)
     return False
 
 
@@ -1292,6 +1304,11 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
     except SyntaxError:
         return {}
     out: dict[str, list[str]] = {}
+    # Helpers that assert themselves -- pylint's tests call `self._test_output(...)`, whose
+    # body holds the `assert`: a call to one is an assertion.
+    asserting = {f.name for f in _ast.walk(tree)
+                 if isinstance(f, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and not f.name.startswith("test")
+                 and any(isinstance(n, _ast.Assert) for n in _ast.walk(f))}
     for fn in _ast.walk(tree):
         if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)) or not fn.name.startswith("test"):
             continue
@@ -1310,12 +1327,15 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
             (isinstance(n.func, _ast.Attribute) and (n.func.attr.startswith("assert")
                                                      or n.func.attr in ("raises", "warns", "fail")))
             or (isinstance(n.func, _ast.Name) and (n.func.id.startswith("assert")
-                                                   or n.func.id in ("raises", "warns"))))]
+                                                   or n.func.id in ("raises", "warns")))
+            or (isinstance(n.func, _ast.Attribute) and n.func.attr in asserting)
+            or (isinstance(n.func, _ast.Name) and n.func.id in asserting))]
         if not asserts and not helpers:
             why.append("it asserts nothing: it runs code and checks no result")
         elif asserts and not helpers and all(_existence_only(a.test) for a in asserts):
             why.append(f"its only assertions (line {', '.join(str(a.lineno) for a in asserts[:4])}) "
-                       f"check that names exist -- `hasattr`, `is not None`, a bare name -- which "
+                       f"check that names exist or that something came out -- `hasattr`, "
+                       f"`is not None`, a bare name, `len(...) > 0` -- not what it is, which "
                        f"any version of the change passes, right or wrong")
         if why:
             out[fn.name] = why
@@ -1341,8 +1361,9 @@ def trick_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
             "They do not count -- not for fail-to-pass, not for coverage. Make each one call the "
             "changed code with real input and assert on what it returns, writes or raises -- the "
             "exact value, the output, the exception and its message -- with no `try`/`except` "
-            "around it: an error should fail the test. A test you cannot make check something, "
-            "delete. Then call `verify` again.")
+            "around it: an error should fail the test. To see those exact values, run the call "
+            "with `compare`: it shows what it prints before the change and with the change "
+            "applied. A test you cannot make check something, delete. Then call `verify` again.")
 
 
 def swallow_note(test_text: str | None) -> str:

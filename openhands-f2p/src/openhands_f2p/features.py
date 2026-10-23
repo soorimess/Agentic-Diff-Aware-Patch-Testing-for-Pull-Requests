@@ -107,7 +107,7 @@ FEATURES: tuple[Feature, ...] = (
                            "and after the fix and says whether it flips. Without it the "
                            "agent can watch its test fail on this code but never watch it "
                            "pass; the harness decides the verdict either way",
-            added=True, tools=("verify",)),
+            added=True, tools=("verify", "compare")),
     Feature("coverage-tool", "add the coverage stage to `verify`: once the test is "
                              "fail-to-pass, every `verify` reports changed-line coverage "
                              "(target 100%) and every missed line, by function. The "

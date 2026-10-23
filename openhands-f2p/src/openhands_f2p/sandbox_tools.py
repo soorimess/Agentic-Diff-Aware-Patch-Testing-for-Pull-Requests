@@ -1504,6 +1504,88 @@ def wrong_matches(before: list, after: list, tests: list[str], limit: int = 3) -
     return out
 
 
+# --------------------------------------------------------------------- compare
+class CompareAction(ToolArgs):
+    code: str = Field(
+        description="A short Python script that calls the changed code and prints what it "
+                    "returns or writes, e.g. `print(result)` or the contents of a file it "
+                    "creates. It runs in an empty temporary directory, with the project "
+                    "importable.")
+
+
+class CompareObservation(Observation):
+    pass
+
+
+# The script's output per side, at most this many characters.
+COMPARE_MAX = 2500
+
+
+class CompareExecutor(ToolExecutor[CompareAction, CompareObservation]):
+    """Run a script on the code before the change and with it applied, and show both
+    outputs (2026-10-24, user: useful tests). The checkout is the code before the change,
+    so the agent cannot see what the changed code returns -- only `verify`'s pass or fail.
+    pylint-4492 (base-p2) ran pylint with `--output-format=json:output.json,text` and could
+    only assert `len(output) > 0`; the developer's test asserts the JSON written, line by
+    line. This shows the agent the values to assert."""
+
+    def __init__(self, box: Sandbox, patch: str, log: list | None = None):
+        self.box, self.patch = box, patch
+        self.log = log if log is not None else []
+
+    def __call__(self, action: CompareAction, conversation=None) -> CompareObservation:
+        state = self.box.ensure_base(self.patch)
+        if state != "base":
+            return CompareObservation.from_text(
+                f"cannot compare: the working tree is in an unexpected state ({state})",
+                is_error=True)
+        script = "/tmp/f2p_compare/script.py"
+        self.box.write(script, action.code)
+        # A fresh directory per side, so a file the script writes is that side's own.
+        cmd = ("rm -rf /tmp/f2p_compare/run && mkdir -p /tmp/f2p_compare/run && "
+               "cd /tmp/f2p_compare/run && PYTHONPATH=" + REPO_DIR + "${PYTHONPATH:+:$PYTHONPATH} "
+               "timeout 120 python " + script + " 2>&1")
+        before = self.box.exec(cmd, timeout=180)
+        self.box.apply_patch(self.patch)
+        try:
+            after = self.box.exec(cmd, timeout=180)
+        finally:
+            self.box.apply_patch(self.patch, revert=True)
+        self.box.exec("rm -rf /tmp/f2p_compare/run", timeout=60)
+        b, a = (before.output or "").rstrip(), (after.output or "").rstrip()
+        self.log.append({"tool": "compare", "code": action.code[:4000],
+                         "before": b[:COMPARE_MAX], "after": a[:COMPARE_MAX]})
+        same = b == a
+        text = (f"before the change (exit {before.returncode}):\n{_clip(b, COMPARE_MAX) or '(no output)'}"
+                f"\n\nafter the change (exit {after.returncode}):\n{_clip(a, COMPARE_MAX) or '(no output)'}"
+                + ("\n\nThe two outputs are the same: this script does not reach what the change does."
+                   if same else
+                   "\n\nWhat differs is what your test should assert -- the exact values printed "
+                   "after the change -- and it should fail on what was printed before."))
+        return CompareObservation.from_text(text, is_error=False)
+
+
+class SandboxCompareTool(ToolDefinition[CompareAction, CompareObservation]):
+    name = "compare"
+
+    @classmethod
+    def create(cls, conv_state=None, box: Sandbox | None = None, patch: str = "",
+               log: list | None = None, **params):
+        assert box is not None and patch, "needs a Sandbox and the patch"
+        return [cls(
+            name="compare",
+            description=("Run a short Python script on the code before the change and again "
+                         "with the change applied, and show what it printed each time. Use it "
+                         "to see what the changed code returns or writes once the change is "
+                         "in -- the exact values -- and assert those in your test. Reverts the "
+                         "change afterwards."),
+            action_type=CompareAction,
+            observation_type=CompareObservation,
+            annotations=ToolAnnotations(readOnlyHint=False),
+            executor=_Shown(CompareExecutor(box, patch, log), "compare"),
+        )]
+
+
 # --------------------------------------------------------------------- verify
 class VerifyAction(ToolArgs):
     target: str = Field(
@@ -1978,7 +2060,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                         + (f": {unchecked} changed line(s) run only inside them and are left out "
                            f"of the coverage below" if unchecked else "")
                         + ". Make each one assert on what the changed code returns, writes or "
-                          "raises, with no `try`/`except` around it, or delete it. You cannot "
+                          "raises, with no `try`/`except` around it, or delete it -- `compare` "
+                          "shows the exact values the changed code gives, to assert. You cannot "
                           "finish while they are in the file."))
         # The file as it stood when `verify` said fail-to-pass, kept for the record only:
         # `f2p_history` in the result says whether the test the agent finally handed in
@@ -2197,6 +2280,11 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
             gated="require-tools" in features)[0]
         register_tool("verify", made["verify"])
         names.append("verify")
+        # Only when the agent is shown the diff: it shows what the changed code does.
+        if "patch" in features:
+            made["compare"] = SandboxCompareTool.create(box=box, patch=patch, log=log)[0]
+            register_tool("compare", made["compare"])
+            names.append("compare")
     _check_no_leak(made, box, features)
     return names
 
