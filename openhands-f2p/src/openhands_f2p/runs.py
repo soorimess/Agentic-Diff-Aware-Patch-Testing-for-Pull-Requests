@@ -546,7 +546,7 @@ def build(root: Path = OUT) -> str:
                "agent's does not is a gap, and one neither kills is probably "
                "behaviourally equivalent to the fix and says nothing about either test. "
                "The individual diffs are in each instance's `mutations/`.", ""]),
-            *_judge_legend({r["scale"] for r in rows}),
+            *_judge_legend({r.get("scale") for r in rows}),
             f"| instance | version | verdict | coverage |"
             f"{' mutants: agent test | mutants: dev test |' if has_mutation else ''}"
             f" actions | tools used | meaningful | concept | issue | readable | last run |",

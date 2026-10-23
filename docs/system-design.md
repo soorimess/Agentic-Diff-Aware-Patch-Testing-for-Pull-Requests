@@ -1176,6 +1176,28 @@ the mutation stage, so after each restore the mutation loop read the discarded v
 "5.0% (1 of 20) ... you changed the test after the last `verify`", four refusals of nine.
 The replay now carries every stage of that call.
 
+**Base against base+mutation** (2026-10-23, user), the five B trial PRs, one run each:
+`base-c1` and `mut-c2` (base + `--add-mutation-tool`, with the replay fix), all ten YES, no
+errors, every mutation loop reading its own file after restores. Judged afterwards
+(gpt-5.6-luna, comparative scale: 1 developer's clearly better .. 3 par .. 5 generated
+clearly better).
+
+| PR | coverage base / +mutation | mutants caught base / +mutation (dev) | judge concept base / +mutation |
+|---|---|---|---|
+| django-13207 | 16.3 / 18.6 | 2 / 2 (7) | 2 / 2 |
+| pylint-4492 | 89.1 / 54.5 | 3 / 10 (15) | 1 / 1 |
+| pylint-5136 | 37.1 / 41.9 | 1 / 1 (0) | 1 / 1 |
+| scikit-learn-24145 | 28.6 / 25.4 | 6 / 5 (5) | 2 / 1 |
+| sphinx-10807 | 78.8 / 84.0 | 5 / 5 (9) | 1 / 1 |
+| mean / total | 50.0 / 44.9 | 17 / 23 of 100 (36) | 1.4 / 1.2 |
+
+Agent cost $1.33 / $1.50, wall clock about 0.75 h / 1.1 h; the judge $0.14 for all ten. The
+mutation loop raised caught mutants on one PR (pylint-4492, 3 -> 10) and nowhere else; the
+judge rates the developer's test better on all ten. One run each.
+
+`runs.py` crashed rebuilding RUNS.md after judging: a PR of the dataset with no result in
+the folder has no `scale`; the legend now skips it.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of
