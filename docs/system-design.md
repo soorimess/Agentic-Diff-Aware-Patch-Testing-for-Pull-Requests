@@ -1097,6 +1097,14 @@ not-fail-to-pass branch. Now, after the harness's own restore, the refusal says 
 version was put back, nothing was edited, there is nothing to write back, and to call
 `verify` on it; `lost_flip` is not offered then.
 
+Round 19 (base-it19, c7f45bf2): **sphinx-10807 84.6%** (own tests 82.1%; the union of every
+related repository test measured without a model is 85.3%), **xarray-7444 96.1%**, both
+YES, $0.78. Restores 5 and 2 (xarray had 8 in round 18), each after a version that was not
+fail-to-pass, and each refusal after one said the quoted answer was about a version that
+is gone. One seed was extended by the agent, one left unchanged. The only thing found: the
+catch plugin's own frame (`/tmp/f2p_plugin/f2p_catch.py: in __exit__`) showed in the
+agent's tracebacks; its context-manager methods now set `__tracebackhide__`.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

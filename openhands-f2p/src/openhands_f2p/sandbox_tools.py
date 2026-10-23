@@ -1161,9 +1161,11 @@ class _Raises:
         self.cm, self.expected, self.match = cm, expected, match
 
     def __enter__(self):
+        __tracebackhide__ = True
         return self.cm.__enter__()
 
     def __exit__(self, et, ev, tb):
+        __tracebackhide__ = True   # the test's traceback shows its own line, not this file
         try:
             _REC.append({"test": _CUR["test"], "kind": "raises", "expected": _name(self.expected),
                          "match": None if self.match is None else str(self.match),
@@ -1180,9 +1182,11 @@ class _Warns:
         self.cm, self.expected, self.match = cm, expected, match
 
     def __enter__(self):
+        __tracebackhide__ = True
         return self.cm.__enter__()
 
     def __exit__(self, et, ev, tb):
+        __tracebackhide__ = True
         try:
             return self.cm.__exit__(et, ev, tb)
         finally:
