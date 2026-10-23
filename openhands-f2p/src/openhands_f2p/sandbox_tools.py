@@ -760,6 +760,10 @@ def related_tests(box: Sandbox, paths: list[str], own: str, per_path: int = 3) -
         mod = re.sub(r"^(src|lib)/", "", mod).replace("/", ".")
         # A package's `__init__.py` goes by the package's name.
         stem = Path(p).parent.name if Path(p).stem == "__init__" else Path(p).stem
+        # A private module's tests drop the underscore: scikit-learn-24145 (B, 2026-10-23)
+        # changed `_polynomial.py`, whose tests are `test_polynomial.py` -- never found, so
+        # no measured example and no seed.
+        stem = stem.lstrip("_")
         script.append(f"echo '@@I {k}'; grep -rlF --include='test_*.py' --include='*_test.py' "
                       f"--include='tests.py' -e {shlex.quote(mod)} . 2>/dev/null | head -40")
         if len(stem) >= 4 and stem not in _GENERIC_STEMS:

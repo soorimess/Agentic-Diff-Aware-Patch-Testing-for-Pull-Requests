@@ -1105,6 +1105,25 @@ is gone. One seed was extended by the agent, one left unchanged. The only thing 
 catch plugin's own frame (`/tmp/f2p_plugin/f2p_catch.py: in __exit__`) showed in the
 agent's tracebacks; its context-manager methods now set `__tracebackhide__`.
 
+**B (2026-10-23, `base-b1`)**, the current design on four more large PRs, against the
+merged-verify `base` trial: django-13207 18.6 -> 18.6, pylint-4492 0 -> 45.5, pylint-5136
+NO -> YES 30.6, scikit-learn-24145 25.4 -> 25.4; with round 19's sphinx-10807 (0 -> 84.6)
+and xarray-7444 (92.2 -> 96.1), 6/6 YES. $1.13 for the four. Read from the trajectories:
+
+- scikit-learn: `related_tests` built the name pattern `test_*_polynomial*.py` from the
+  private module `_polynomial.py`, so `test_polynomial.py` was never found -- no measured
+  example, no seed. Leading underscores are now dropped from the stem; the file reaches 13
+  of the 47 missed lines. Its one part, `SplineTransformer.transform`, got one turn (it
+  gained 15 lines) and the loop ended at 25.4%: a part gets a second turn only when the
+  first ran none of its lines.
+- django: 5 of 10 coverage turns went to Oracle/MySQL backend code this container cannot
+  run (no driver, no server). Importing the module is no test of that -- `oracle/features.py`
+  imports and still needs a connection, and `sqlite3/features.py` fails a standalone
+  import that the tests do not.
+- pylint-5136: 7 restores; each one costs a refusal round asking `verify` on the restored
+  file, about half of its ten.
+- pylint-4492: gained lines on every turn up to the ten-refusal cap.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of
