@@ -246,11 +246,29 @@ def _why_both(before: str, after: str, nodes: list[str]) -> str:
             said.append(f"`{name}` fails the same way on both sides (`{a}`), so the change "
                         f"does not touch what fails: fix that first.")
         else:
+            # pylint-4492 (mut-p10, 2026-10-24) was told only `assert 0 > 0` and never found
+            # what the 0 was; pytest's own `where` lines and the line that failed say it
+            at, where = _failing_line(after, n), _where(after, n)
             said.append(f"`{name}` fails before the change with `{b}` and after it with "
-                        f"`{a}`. The first can be the right failure -- what the change "
-                        f"fixes; the second is a mistake in the test itself: fix that and "
-                        f"keep the rest.")
+                        f"`{a}`" + (f" at line {at[0]}: `{at[1]}`" if at else "")
+                        + (f" ({'; '.join(where)})" if where else "")
+                        + ". The first can be the right failure -- what the change "
+                        "fixes; the second is a mistake in the test itself: fix that and "
+                        "keep the rest.")
+            if a.startswith("SystemExit"):
+                said.append(f"With the change applied the code still ends by raising `{a}` "
+                            f"-- that is how it finishes, not an error: catch it with "
+                            f"`pytest.raises(SystemExit)` and assert its code and what the "
+                            f"run wrote.")
     return (" " + " ".join(said)) if said else ""
+
+
+def _where(output: str, node: str) -> list[str]:
+    """pytest's `+  where 0 = len([])` lines for `node`: the values its failed assertion
+    was made of."""
+    got = [ln[1:].strip().lstrip("+").strip() for ln in _section(output, node).splitlines()
+           if re.match(r"^E\s+\+\s+where ", ln)]
+    return [g.replace("`", "'")[:160] for g in got[:3]]
 
 
 def _backwards(after: str, nodes: list[str], wrong: list[str]) -> str:
