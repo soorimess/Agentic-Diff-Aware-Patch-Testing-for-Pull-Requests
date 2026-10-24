@@ -1024,6 +1024,35 @@ def _seed_method(text: str, tree, lines: list[str], defs: dict, cls, meth,
             f"{cls.name}::{meth.name}", f"{seeded_cls}::{seeded}")
 
 
+_COMMON_WORDS = frozenset(
+    "self none true false return import from with class else elif raise assert test tests "
+    "list dict name names value values args kwargs init str int len def pass for while "
+    "lambda yield not and the this that".split())
+
+
+def _words(text: str) -> set[str]:
+    """Lower-case word parts of identifiers and strings (`sub_reporters` -> sub, reporters;
+    `MultiReporter` -> multi, reporter), four letters or more, common ones left out."""
+    parts = []
+    for tok in re.findall(r"[A-Za-z][A-Za-z0-9]*", text):
+        parts += re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])", tok)
+    words = {p.lower() for p in parts if len(p) >= 4} - _COMMON_WORDS
+    return {w[:-1] if w.endswith("s") and len(w) > 4 else w for w in words}
+
+
+def _test_source(text: str, name: str) -> str:
+    """The body of `def name(` in a test file, up to the next definition at its indent."""
+    m = re.search(rf"^([ \t]*)def {re.escape(name)}\(", text, re.M)
+    if not m:
+        return ""
+    end = re.compile(rf"^{m.group(1)}(def |class |@)", re.M).search(text, m.end())
+    return text[m.start():end.start() if end else len(text)]
+
+
+def _shared_words(source: str, diff_words: set[str]) -> int:
+    return len(_words(source) & diff_words)
+
+
 def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
     """Before the agent starts (2026-10-24, user: useful tests): the repository test that
     runs the most changed lines, with the change applied, copied into the agent's test
@@ -1040,6 +1069,8 @@ def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
     if not files:
         return ""
     base = E.base_texts(box, patch)
+    diff_words = _words("\n".join(l[1:] for l in patch.splitlines()
+                                  if l.startswith("+") and not l.startswith("+++")))
     best = None
     box.apply_patch(patch)
     try:
@@ -1055,14 +1086,19 @@ def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
                 for c in {c.split("|")[0].split(".")[-1] for c in ctxs}:
                     if c.startswith("test"):
                         count[c] = count.get(c, 0) + 1
+            text = box.read(f) or ""
             for t, n in count.items():
-                if best is None or n > best[2]:
-                    best = (f, t, n, got.get("executable_changed_lines"))
+                # many tests reach the same lines (every `Run(...)` test on pylint); the tie
+                # went to set order, a different seed each run -- the one that shares the
+                # change's words (output, reporter, ...) is the one worth building from
+                key = (n, _shared_words(_test_source(text, t), diff_words), t)
+                if best is None or key > best[4]:
+                    best = (f, t, n, got.get("executable_changed_lines"), key)
     finally:
         box.apply_patch(patch, revert=True)
     if best is None:
         return ""
-    f, t, n, total = best
+    f, t, n, total, _ = best
     made = seed_block(box.read(f) or "", [], set(), prefer=t)
     if made is None:
         return ""
@@ -1094,7 +1130,8 @@ def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
             f"goes through what this change does, asserting what the change produces -- the "
             f"objects, the output, the files written. `compare` shows those exact values before "
             f"and after the change, and `verify` lists what the changed functions did in your "
-            f"tests.")
+            f"tests. Where it checks what the code wrote -- a file it reads back, the output it "
+            f"captures -- check the same way in your tests.")
 
 
 def related_example(text: str, names: list[str], max_lines: int = 18,
@@ -1429,10 +1466,24 @@ def wrong_versions_report(got: list | dict, target: str, require_tools: bool) ->
                       "returns, or holds afterwards -- and this wrong version fails your test. "
                       "First ask whether a reviewer would call that behaviour part of what the "
                       "change is for; if not, say so and leave it."]
-    if blind:
-        lines += ["", f"{len(blind)} more pass your test with no difference your tests can see: "
-                      f"your calls do not reach what they change, or they change nothing "
-                      f"observable."]
+    # a model-written version names a behaviour, which is worth listing even when the trace
+    # saw nothing -- what it breaks is often a file or stdout, which the trace does not record
+    named = [g for g in blind if g["mutant"].name.startswith("wrong-")]
+    if named:
+        lines += ["", "Your test also passes on these, and the calls it makes look the same under "
+                      "them -- what they break is something your test does not check, such as "
+                      "the file or text the code writes:"]
+        lines += [f"* {g['mutant'].operator} (`{g['mutant'].file}` line {g['mutant'].line})"
+                  for g in named]
+        lines += ["", "For each one a reviewer would call part of what the change is for, run the "
+                      "code the way the change is used and assert the result this version gets "
+                      "wrong -- read the file it writes, the output it prints, the value it "
+                      "returns -- so this version fails your test. If it is not part of the "
+                      "change, say so and leave it."]
+    if len(blind) > len(named):
+        lines += ["", f"{len(blind) - len(named)} more pass your test with no difference your "
+                      f"tests can see: your calls do not reach what they change, or they change "
+                      f"nothing observable."]
     if not seen and not blind:
         lines += ["", "Every wrong version tried was caught."]
     return "\n".join(lines), entry
