@@ -38,6 +38,7 @@ from __future__ import annotations
 import bisect
 import difflib
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -75,12 +76,24 @@ class Mutant:
     diff: str = ""
     agent_kills: bool | None = None
     developer_kills: bool | None = None
+    # How each test objected: "assertion" (an assertion failed) or "crash" (anything else
+    # -- an exception, a vanished node, a timeout). 2026-10-24: a test that only checks an
+    # exit code kills every mutant that crashes, and the score could not tell that apart
+    # from a test that checks the output.
+    agent_kind: str | None = None
+    developer_kind: str | None = None
+    # Compiles to the same bytecode as the fix: behaviourally identical, left out of the
+    # total with the reason recorded (`same_bytecode`).
+    equivalent: bool = False
 
     def as_dict(self) -> dict:
         return {"name": self.name, "file": self.file, "line": self.line,
                 "operator": self.operator,
                 "killed_by_agent_test": self.agent_kills,
                 "killed_by_developer_test": self.developer_kills,
+                "agent_kill_kind": self.agent_kind,
+                "developer_kill_kind": self.developer_kind,
+                "equivalent": self.equivalent or None,
                 # A developer test that was never measured (None) is not a survival:
                 # requests-1766 (no-verify) read "survived both" beside a developer score
                 # of "none of the developer's tests pass on the fixed code".
@@ -470,6 +483,43 @@ def _mutant_timeout(unmutated_s: float) -> int:
     return max(MUTANT_TIMEOUT_MIN, int(MUTANT_TIMEOUT_FACTOR * unmutated_s) + 1)
 
 
+def same_bytecode(a: str, b: str, filename: str = "<f2p>") -> bool:
+    """Whether two versions of a module compile to the same code: the same bytecode,
+    constants and names in every code object, nested ones included, line numbers aside.
+    The Python analogue of trivial compiler equivalence (2026-10-24, the user's mutation
+    briefing, §4.1): a mutant that compiles away is behaviourally identical to the fix. It
+    says nothing about mutants that do compile differently."""
+    import types
+
+    def norm(c):
+        consts = tuple(norm(x) if isinstance(x, types.CodeType) else (type(x).__name__, repr(x))
+                       for x in c.co_consts)
+        return (c.co_code, consts, c.co_names, c.co_varnames, c.co_freevars, c.co_cellvars,
+                c.co_argcount, c.co_kwonlyargcount, c.co_flags)
+    try:
+        return norm(compile(a, filename, "exec")) == norm(compile(b, filename, "exec"))
+    except (SyntaxError, ValueError):
+        return False
+
+
+def _kind(output: str) -> str:
+    """How a failing run objected: "assertion" when an assertion failed, else "crash"."""
+    return ("assertion" if re.search(r"^E\s+(AssertionError|assert\b)|^E\s+Failed: ", output or "", re.M)
+            else "crash")
+
+
+def _fail_kind(box: Sandbox, targets: list[str], expected: list[str],
+               timeout: int = 1800) -> str | None:
+    """`_fails`, and how: None when the test passed, else `_kind` of its output."""
+    r = box.exec(R.test_command(box, targets), timeout=timeout)
+    out = R.parse_output(r.output)
+    if not out:
+        return "crash"
+    if any(R.outcome_of(out, node) in (None, "FAILED", "ERROR") for node in expected):
+        return _kind(r.output)
+    return None
+
+
 def _fails(box: Sandbox, targets: list[str], expected: list[str],
            timeout: int = 1800) -> bool:
     """True when the test objects to the code as it currently stands.
@@ -503,6 +553,11 @@ class Score:
     developer_excluded: list[str] = field(default_factory=list)
     developer_why: str = ""
     mutants: list[dict] = field(default_factory=list)
+    # Left out as equivalent (`same_bytecode`), by name; and the kills that came from a
+    # failed assertion rather than a crash.
+    equivalent: list[str] = field(default_factory=list)
+    agent_by_assertion: int = 0
+    developer_by_assertion: int = 0
 
     def _pct(self, n: int) -> float | None:
         return round(100.0 * n / self.total, 1) if self.total else None
@@ -511,10 +566,15 @@ class Score:
         return {"measured": self.measured, "why": self.why or None,
                 "tool": "mutmut", "asked": self.asked, "total": self.total,
                 "held_out": self.held_out,
+                "equivalent_left_out": self.equivalent,
                 "agent": {"killed": self.agent_killed, "total": self.total,
-                          "percent": self._pct(self.agent_killed)},
+                          "percent": self._pct(self.agent_killed),
+                          "by_assertion": self.agent_by_assertion,
+                          "by_crash": self.agent_killed - self.agent_by_assertion},
                 "developer": ({"killed": self.developer_killed, "total": self.total,
                                "percent": self._pct(self.developer_killed),
+                               "by_assertion": self.developer_by_assertion,
+                               "by_crash": self.developer_killed - self.developer_by_assertion,
                                "excluded": self.developer_excluded}
                               if self.developer_measured else
                               {"killed": None, "total": self.total, "percent": None,
@@ -672,11 +732,20 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
 
         originals = {m.file: box.read(m.file) or "" for m in mutants}
         for m in mutants:
+            # Compiles to the fix's own bytecode: never run, left out of the total.
+            if same_bytecode(originals[m.file], m.source, m.file):
+                m.equivalent, m.source = True, ""
+                flow.record(flow.VERIFY, "mutant", f"{m.name}: same bytecode as the fix, left out")
+                continue
             box.write(m.file, m.source)
             try:
-                m.agent_kills = _fails(box, [gen_path], gen_expected, timeout=gen_limit)
-                m.developer_kills = (_fails(box, gold_targets, gold_ok, timeout=gold_limit)
-                                     if gold_ok else None)
+                m.agent_kind = _fail_kind(box, [gen_path], gen_expected, timeout=gen_limit)
+                m.agent_kills = m.agent_kind is not None
+                if gold_ok:
+                    m.developer_kind = _fail_kind(box, gold_targets, gold_ok, timeout=gold_limit)
+                    m.developer_kills = m.developer_kind is not None
+                else:
+                    m.developer_kills = None
             finally:
                 box.write(m.file, originals[m.file])
             m.source = ""              # written; no reason to keep it in the record
@@ -700,9 +769,13 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
                 pass
         box.exec(f"rm -rf {BASE_COPIES}")
 
-    score.total = len(mutants)
-    score.agent_killed = sum(1 for m in mutants if m.agent_kills)
-    score.developer_killed = sum(1 for m in mutants if m.developer_kills is True)
+    live = [m for m in mutants if not m.equivalent]
+    score.equivalent = [m.name for m in mutants if m.equivalent]
+    score.total = len(live)
+    score.agent_killed = sum(1 for m in live if m.agent_kills)
+    score.developer_killed = sum(1 for m in live if m.developer_kills is True)
+    score.agent_by_assertion = sum(1 for m in live if m.agent_kind == "assertion")
+    score.developer_by_assertion = sum(1 for m in live if m.developer_kind == "assertion")
     score.mutants = [m.as_dict() for m in mutants]
     score.measured = True
     if out_dir is not None:

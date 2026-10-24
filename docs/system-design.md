@@ -1332,6 +1332,33 @@ briefing (`mutation-testing.md`, 2026-10-24) is under review: proposal to drop t
 every `verify`, add a bytecode equivalence filter, show only survivors whose effect the
 agent's own calls can observe, and report crash kills apart from assertion kills.
 
+**A practical mutation system** (user, 2026-10-24: keep mutmut -- "I don't care about
+TestForge" -- change the methods). Built:
+
+- **Measurement** (`mutants.measure`, end of run, held-out half, deterministic): a mutant
+  that compiles to the fix's own bytecode (`same_bytecode`: code objects compared
+  recursively, line numbers aside) is never run and left out of the total, by name
+  (`equivalent_left_out`). Each kill is labelled `assertion` or `crash` (`_fail_kind`,
+  from pytest's `E   AssertionError` / `E   assert` / `Failed:` lines) for both the
+  agent's and the developer's test (`by_assertion`, `by_crash`): an exit-code test kills
+  every mutant that crashes, and the score could not tell that from a test that checks the
+  output.
+- **Agent feedback** (the mutation stage of `verify`, `--add-mutation-tool`): it ran the
+  whole shown half -- up to 20 mutants per call (`probe_mutants` was the measurement's
+  size) -- which is why base+mutation runs took half again as long. Now at most 6
+  (`OBSERVE_MAX`): plausible wrong versions of the change written once per pull request by
+  the judge model before the agent starts (`wrong_fixes.generate`, cached as
+  `wrong_fixes.json`; gated by `wrong_fixes.build`: found verbatim, parses, not the same
+  bytecode), then `mutmut`'s. Each runs against the agent's test with the trace plugin;
+  for one the test still passes, `_trace_diff` compares the changed functions' calls with
+  the real fix's in the same tests, and `wrong_versions_report` names the difference --
+  "in `test_x`, `f(...)` returned `B` instead of `A`" -- and asks whether a reviewer would
+  call that behaviour part of the change before asserting it (the briefing's "do not encode
+  bugs"). Survivors with no difference the tests can see are counted, not listed.
+- The trace section lists calls that return something first and says to prefer public
+  results over private attributes (`_name`), which another correct implementation may not
+  have.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

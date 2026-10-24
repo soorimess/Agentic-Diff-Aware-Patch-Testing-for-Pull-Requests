@@ -1362,6 +1362,81 @@ def coverage_report(box: Sandbox, target: str, cov: dict, require_tools: bool,
     return "\n".join(lines)
 
 
+# Wrong versions the mutation stage runs per `verify`: the model's plausible ones first,
+# then `mutmut`'s on the changed lines. It ran the whole shown half before -- up to 20 per
+# call, which made every base+mutation run half again as long for no change in the test.
+OBSERVE_MAX = 6
+
+
+def _trace_diff(fix: list, wrong: list, limit: int = 2) -> list[str]:
+    """What the changed functions did differently, in the same tests, under a wrong
+    version: the observable difference a test could assert. Empty when none showed."""
+    def key(r):
+        return (r.get("test"), r.get("func"), json.dumps(r.get("args") or {}, sort_keys=True))
+    a = {key(r): r for r in fix}
+    b = {key(r): r for r in wrong}
+    said = []
+    for k, r in a.items():
+        test = (r.get("test") or "?").split("::")[-1]
+        call = f"`{r['func']}({', '.join(f'{x}={v}' for x, v in (r.get('args') or {}).items())})`"
+        w = b.get(k)
+        if w is None:
+            said.append(f"in `{test}`, {call} never ran")
+        elif w.get("ret") != r.get("ret"):
+            said.append(f"in `{test}`, {call} returned `{w.get('ret')}` instead of `{r.get('ret')}`")
+        else:
+            for attr, v in (r.get("set") or {}).items():
+                if (w.get("set") or {}).get(attr) != v:
+                    said.append(f"in `{test}`, {call} set `self.{attr}` to "
+                                f"`{(w.get('set') or {}).get(attr)}` instead of `{v}`")
+                    break
+        if len(said) >= limit:
+            break
+    return [x.replace("\n", " ")[:400] for x in said]
+
+
+def wrong_versions_report(got: list | dict, target: str, require_tools: bool) -> tuple[str, dict]:
+    """The mutation stage of `verify` (2026-10-24, user): wrong versions of the change run
+    against the test, and for each that it still passes, what the changed code did
+    differently in the agent's own tests -- the value to assert. Survivors that showed no
+    difference in those tests are counted, not listed: either the tests never reach what
+    they change, or they change nothing a test here can observe."""
+    if isinstance(got, dict):
+        return (f"\n\n## Wrong versions of the change\n\nCould not run them: {got.get('why')}.",
+                {"tool": "mutation", "via": "verify", "target": target, "error": got.get("why", "")})
+    if not got:
+        return ("\n\n## Wrong versions of the change\n\nNone could be made from these lines.",
+                {"tool": "mutation", "via": "verify", "target": target, "total": 0})
+    killed = [g for g in got if g["killed"]]
+    by_assert = sum(1 for g in killed if g["kind"] == "assertion")
+    seen = [g for g in got if not g["killed"] and g["seen"]]
+    blind = [g for g in got if not g["killed"] and not g["seen"]]
+    entry = {"tool": "mutation", "via": "verify", "target": target, "total": len(got),
+             "killed": len(killed), "by_assertion": by_assert,
+             "survived": [g["mutant"].operator for g in seen + blind],
+             "observable": len(seen)}
+    lines = [f"\n\n## Wrong versions of the change: your test catches {len(killed)} of {len(got)}"
+             f" ({by_assert} by an assertion, {len(killed) - by_assert} only because the code "
+             f"crashed)"]
+    if seen:
+        lines += ["", "Your test still passes on these, though your own tests can see the "
+                      "difference:"]
+        for g in seen:
+            m = g["mutant"]
+            lines.append(f"* {m.operator} (`{m.file}` line {m.line}): " + "; ".join(g["seen"]) + ".")
+        lines += ["", "For each, assert the value the real change gives in that call -- what it "
+                      "returns, or holds afterwards -- and this wrong version fails your test. "
+                      "First ask whether a reviewer would call that behaviour part of what the "
+                      "change is for; if not, say so and leave it."]
+    if blind:
+        lines += ["", f"{len(blind)} more pass your test with no difference your tests can see: "
+                      f"your calls do not reach what they change, or they change nothing "
+                      f"observable."]
+    if not seen and not blind:
+        lines += ["", "Every wrong version tried was caught."]
+    return "\n".join(lines), entry
+
+
 def mutation_report(r: dict, target: str, require_tools: bool) -> tuple[str, dict]:
     """The mutation stage of `verify`, from one `mutants.probe`: the score, then each wrong
     variant of the fix the test still passes on. Returns the text and the log entry."""
@@ -1621,6 +1696,10 @@ def trace_said(rows: list, limit: int = 8, patch: str = "",
     named = set(re.findall(r"\bself\.(\w+)", "\n".join(
         ln[1:] for ln in (patch or "").splitlines() if ln.startswith("+") and not ln.startswith("+++"))))
     said, seen = [], set()
+    # Calls that return something first: a public result is the thing to assert; a private
+    # attribute (`_name`) only when nothing public shows the change (the user's mutation
+    # briefing, 2026-10-24: a test on implementation details rejects valid alternatives).
+    rows = sorted(rows, key=lambda r: r.get("ret") in (None, "None"))
     for r in rows:
         if named and r.get("set"):
             r = dict(r, set={k: v for k, v in r["set"].items() if k in named})
@@ -1649,9 +1728,11 @@ def trace_said(rows: list, limit: int = 8, patch: str = "",
         return ""
     return ("\n\n## What the change did while your tests ran (with it applied)\n\n"
             + ("\n".join(said) + "\n\nThese are the values the changed code produced in your "
-               "own tests. Assert them -- the object and what it holds, the value returned -- not "
-               "that the call ran or that a name exists; a test that checks these fails on a "
-               "wrong version of the change." if said else "")
+               "own tests. Assert them -- the value returned, the output written, what the "
+               "public objects hold -- not that the call ran or that a name exists. Prefer "
+               "what the code gives through its public interface; assert a private attribute "
+               "(`_name`) only when nothing public shows the change, since another correct "
+               "implementation may not have it." if said else "")
             + (("\n\n" if said else "") + "Changed functions your tests never ran: "
                + ", ".join(f"`{n}`" for n in unrun[:6]) + ". Call the code that runs them, with "
                "input that takes it there, and assert on what they produce." if unrun else ""))
@@ -1845,7 +1926,11 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
 
     def __init__(self, box: Sandbox, repo: str, patch: str, log: list | None = None,
                  coverage: bool = False, mutation: bool = False, probe_mutants: int = 5,
-                 require_tools: bool = False, scored_name: str = "", gated: bool = False):
+                 require_tools: bool = False, scored_name: str = "", gated: bool = False,
+                 wrong_fixes: list | None = None):
+        # Plausible wrong versions of the change from `wrong_fixes.generate`, for the
+        # mutation stage (2026-10-24).
+        self.wrong_fixes = wrong_fixes or []
         self.box = box
         # Whether a stop is refused while this says not fail-to-pass -- `require-tools`'
         # stop checks. Kept apart from `require_tools` only so the two sentences can be
@@ -1994,6 +2079,63 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             for t in by.get(ln, ()):
                 count[t] = count.get(t, 0) + 1
         return max(sorted(count), key=lambda t: count[t]) if count else ""
+
+    def _observe(self, target: str, fix_rows: list) -> list | dict:
+        """Run wrong versions of the change -- the model's, then `mutmut`'s -- against the
+        test, with the trace plugin under pytest, and say for each whether the test caught
+        it, how, and what the changed functions did differently from the real fix in the
+        same tests (`_trace_diff`)."""
+        from openhands_f2p import mutants as M
+        from openhands_f2p import runners
+        from openhands_f2p import verify as V
+        from openhands_f2p import wrong_fixes as W
+        rel = target.split("::")[0]
+        state = self.box.ensure_base(self.patch)
+        if state != "base":
+            return {"why": f"the working tree is {state}, not base"}
+        pytest_runner = runners.runner_for(self.box)["args"] == "nodes"
+        for path in E.patched_source_files(self.patch):
+            text = self.box.read(path)
+            if text is not None:
+                self.box.write(f"{M.BASE_COPIES}/{path}", text)
+        cmd = E.test_command(self.box, [rel])
+        if pytest_runner:
+            cmd = (f"F2P_TRACE_SPEC={CATCH_DIR}/trace_spec.json F2P_TRACE_OUT={CATCH_DIR}/trace_m.json "
+                   f"PYTHONPATH={CATCH_DIR}${{PYTHONPATH:+:$PYTHONPATH}} {cmd} -p f2p_trace")
+        out = []
+        self.box.apply_patch(self.patch)
+        try:
+            cands = W.build(self.box, self.wrong_fixes)[:OBSERVE_MAX // 2 + 1]
+            shown, _held = M.split_pool(self.box, self.patch, self.probe_mutants)
+            for m in shown:
+                if len(cands) >= OBSERVE_MAX:
+                    break
+                if not M.same_bytecode(self.box.read(m.file) or "", m.source, m.file):
+                    cands.append(m)
+            for m in cands:
+                original = self.box.read(m.file) or ""
+                self.box.write(m.file, m.source)
+                try:
+                    self.box.exec(f"rm -f {CATCH_DIR}/trace_m.json", timeout=60)
+                    r = self.box.exec(cmd, timeout=900)
+                    got = V.own_outcomes(E.parse_output(r.output), [rel])
+                    killed = not got or any(v in ("FAILED", "ERROR") for v in got.values())
+                    rows = []
+                    if pytest_runner and not killed:
+                        try:
+                            rows = json.loads(self.box.read(f"{CATCH_DIR}/trace_m.json") or "[]")
+                        except ValueError:
+                            rows = []
+                finally:
+                    self.box.write(m.file, original)
+                out.append({"mutant": m, "killed": killed,
+                            "kind": M._kind(r.output) if killed else None,
+                            "seen": _trace_diff(fix_rows, rows) if not killed and pytest_runner else []})
+        finally:
+            if self.box.patch_state(self.patch) == "head":
+                self.box.apply_patch(self.patch, revert=True)
+            self.box.exec(f"rm -rf {M.BASE_COPIES}", timeout=60)
+        return out
 
     def _unswallowed(self, rel: str, text: str, names: set[str]) -> str:
         """What the test's `except ...: pass` blocks hide: a copy of the file with each of
@@ -2293,6 +2435,12 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # duty line. It scored NO having been told both things.
         ok = bool(flipped) and not still_failing
         # What the changed functions did in the agent's own tests (`TRACE_PLUGIN`).
+        fix_trace: list = []
+        if catch:
+            try:
+                fix_trace = json.loads(self.box.read(f"{CATCH_DIR}/trace.json") or "[]")
+            except ValueError:
+                fix_trace = []
         if catch:
             try:
                 head += trace_said(json.loads(self.box.read(f"{CATCH_DIR}/trace.json") or "[]"),
@@ -2352,10 +2500,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             stages += coverage_report(self.box, action.target, cov, self.require_tools,
                                       import_only)
         if ok and self.mutation:
-            from openhands_f2p import mutants as M
-            text, entry = mutation_report(
-                M.probe(self.box, self.patch, action.target, self.probe_mutants),
-                action.target, self.require_tools)
+            text, entry = wrong_versions_report(self._observe(action.target, fix_trace),
+                                                action.target, self.require_tools)
             if entry.get("total"):
                 entry["measured_text"] = f2p_text
             self.log.append(entry)
@@ -2464,7 +2610,8 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
     def create(cls, conv_state=None, box: Sandbox | None = None, repo: str = "",
                patch: str = "", log: list | None = None, coverage: bool = False,
                mutation: bool = False, probe_mutants: int = 5, require_tools: bool = False,
-               scored_name: str = "", gated: bool = False, **params):
+               scored_name: str = "", gated: bool = False, wrong_fixes: list | None = None,
+               **params):
         assert box is not None and repo and patch, "needs a Sandbox, repo and patch"
         stages = [s for s, on in (("which changed lines it runs (coverage, target 100%)",
                                    coverage),
@@ -2481,14 +2628,16 @@ class SandboxVerifyTool(ToolDefinition[VerifyAction, VerifyObservation]):
             observation_type=VerifyObservation,
             annotations=ToolAnnotations(readOnlyHint=False),
             executor=_Shown(VerifyExecutor(box, repo, patch, log, coverage, mutation,
-                                           probe_mutants, require_tools, scored_name, gated),
+                                           probe_mutants, require_tools, scored_name, gated,
+                                           wrong_fixes),
                             "verify"),
         )]
 
 
 def register(box: Sandbox, repo: str, log: list, patch: str = "",
              features: FeatureSet | None = None, gen_path: str = "",
-             version: str = "", probe_mutants: int = 5) -> list[str]:
+             version: str = "", probe_mutants: int = 5,
+             wrong_fixes: list | None = None) -> list[str]:
     """Register the agent's tools against one sandbox. Returns their names.
 
     Which tools exist is part of the run's configuration, and the registry in `features`
@@ -2527,6 +2676,7 @@ def register(box: Sandbox, repo: str, log: list, patch: str = "",
             box=box, repo=repo, patch=patch, log=log,
             coverage=("coverage-tool" in features), mutation=("mutation-tool" in features),
             probe_mutants=probe_mutants, require_tools=require_tools,
+            wrong_fixes=wrong_fixes,
             scored_name=Path(gen_path).name if gen_path else "",
             gated="require-tools" in features)[0]
         register_tool("verify", made["verify"])

@@ -570,10 +570,21 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     # of one pool: `probe` takes `split_pool(...)[0]`, `measure` takes `[1]`. Passing
     # different sizes here would draw two pools and the "held out" half could contain
     # mutants the agent had already been shown.
+    # Plausible wrong versions of the change, for the mutation stage's feedback: one model
+    # call per pull request, cached in the run directory (`wrong_fixes`, 2026-10-24).
+    wrong: list = []
+    if "mutation-tool" in features:
+        try:
+            from openhands_f2p import wrong_fixes
+            wrong = wrong_fixes.generate(instance, out_dir)
+            flow.record(flow.AGENT, "wrong fixes", f"{len(wrong)} from the model")
+        except Exception as exc:                                  # noqa: BLE001
+            flow.record(flow.AGENT, "wrong fixes failed", f"{type(exc).__name__}: {exc}")
     names = sandbox_tools.register(box, instance["repo"], tool_log,
                                    patch=instance["patch"], features=features,
                                    gen_path=test_file,
-                                   probe_mutants=(n_mutants or mutants.DEFAULT_MUTANTS))
+                                   probe_mutants=(n_mutants or mutants.DEFAULT_MUTANTS),
+                                   wrong_fixes=wrong)
     agent = Agent(llm=llm, tools=[Tool(name=n) for n in names])
 
     transcript: list[dict] = []
