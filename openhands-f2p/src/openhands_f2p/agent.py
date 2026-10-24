@@ -652,7 +652,18 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                                 callbacks=[on_event],
                                 max_iteration_per_run=max_iterations, visualizer=None)
     flow.record(flow.AGENT, "tools registered", ", ".join(names))
-    opening = task + (f"\n\n{restart_note}" if restart_note else "")
+    # The repository's best-reaching test, copied into the test file before the agent
+    # starts (2026-10-24, user: useful tests; `start_seed`).
+    start = ""
+    if (not restart_note and all(f in features for f in ("coverage-tool", "verify-tool", "patch"))
+            and box.read(test_file) is None):
+        try:
+            start = sandbox_tools.start_seed(box, instance["patch"], test_file, tool_log)
+        except Exception as exc:                                  # noqa: BLE001
+            flow.record(flow.AGENT, "start seed failed", f"{type(exc).__name__}: {exc}")
+        if start:
+            flow.record(flow.AGENT, "start seed", tool_log[-1].get("from", ""))
+    opening = task + start + (f"\n\n{restart_note}" if restart_note else "")
     flow.record(flow.AGENT, "restart sent" if restart_note else "task sent",
                 f"{len(opening)} chars, max_iter={max_iterations}")
     conversation.send_message(opening)

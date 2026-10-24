@@ -1024,6 +1024,79 @@ def _seed_method(text: str, tree, lines: list[str], defs: dict, cls, meth,
             f"{cls.name}::{meth.name}", f"{seeded_cls}::{seeded}")
 
 
+def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
+    """Before the agent starts (2026-10-24, user: useful tests): the repository test that
+    runs the most changed lines, with the change applied, copied into the agent's test
+    file with its class, setup and helpers -- kept only if it passes on both sides -- and
+    the sentences for the opening message. Option 1's seed, given at the start: on
+    pylint-4492 the seed was the only thing that ever got the agent's test to drive the
+    reporters end to end (base-p2), and in base-p5/p6 the agent never got it, because it
+    came only in the coverage loop. Never the pull request's own test."""
+    from openhands_f2p import verify as V
+    srcs = [p for p in E.patched_source_files(patch) if not E.is_test_file(p)]
+    related = related_tests(box, srcs, rel) if srcs else {}
+    files = [f for f in dict.fromkeys(fs[0] for fs in related.values() if fs)
+             if (box.read(f) or "").count("\n") <= RELATED_RUN_MAX_LINES][:4]
+    if not files:
+        return ""
+    base = E.base_texts(box, patch)
+    best = None
+    box.apply_patch(patch)
+    try:
+        for f in files:
+            try:
+                got = E.changed_line_coverage(box, [f], patch, base, contexts=True)
+            except Exception:
+                continue
+            if not got.get("measured"):
+                continue
+            count: dict[str, int] = {}
+            for ctxs in (got.get("hit_by") or {}).values():
+                for c in {c.split("|")[0].split(".")[-1] for c in ctxs}:
+                    if c.startswith("test"):
+                        count[c] = count.get(c, 0) + 1
+            for t, n in count.items():
+                if best is None or n > best[2]:
+                    best = (f, t, n, got.get("executable_changed_lines"))
+    finally:
+        box.apply_patch(patch, revert=True)
+    if best is None:
+        return ""
+    f, t, n, total = best
+    made = seed_block(box.read(f) or "", [], set(), prefer=t)
+    if made is None:
+        return ""
+    block, original, seeded = made
+    text = (f"# Copied unchanged by the harness from {f}::{original}, a test in this "
+            f"repository before this change.\n" + block)
+    box.write(rel, text)
+    cmd = E.test_command(box, [f"{rel}::{seeded}"])
+    sides = {"before": V.own_outcomes(E.parse_output(box.exec(cmd, timeout=600).output), [rel])}
+    box.apply_patch(patch)
+    try:
+        sides["after"] = V.own_outcomes(E.parse_output(box.exec(cmd, timeout=600).output), [rel])
+    finally:
+        box.apply_patch(patch, revert=True)
+    if any(not o or any(v != "PASSED" for v in o.values()) for o in sides.values()):
+        box.exec(f"rm -f {shlex.quote(rel)}", timeout=60)
+        log.append({"tool": "seed", "via": "harness", "path": rel, "part": "start",
+                    "from": f"{f}::{original}", "error": f"does not pass on both sides: {sides}"})
+        return ""
+    log.append({"tool": "seed", "via": "harness", "path": rel, "target": rel, "content": text,
+                "sha": hashlib.sha1(text.encode()).hexdigest(), "part": "start",
+                "from": f"{f}::{original}", "name": seeded, "block": block})
+    return (f"\n\n## A starting point\n\nThe harness has put a test from this repository in "
+            f"`{rel}`: a copy, unchanged, of `{f}::{original}`. With the change applied it runs "
+            f"{n} of the change's {total} changed lines -- its setup reaches the changed code in "
+            f"this container, which is the hard part. It passes on both sides of the change, so "
+            f"as it stands it tests nothing about the change. Build your test from it: keep it "
+            f"and its helpers, and add tests next to it that use the same setup with input that "
+            f"goes through what this change does, asserting what the change produces -- the "
+            f"objects, the output, the files written. `compare` shows those exact values before "
+            f"and after the change, and `verify` lists what the changed functions did in your "
+            f"tests.")
+
+
 def related_example(text: str, names: list[str], max_lines: int = 18,
                     prefer: str = "") -> tuple[str, str]:
     """One test function from a repository test file, decorators included, cut at
@@ -1539,10 +1612,18 @@ def watched_functions(box: Sandbox, patch: str) -> list[list[str]]:
     return out
 
 
-def trace_said(rows: list, limit: int = 8) -> str:
-    """The section of a `verify` answer that says what the changed functions did."""
+def trace_said(rows: list, limit: int = 8, patch: str = "",
+               watched: list | None = None) -> str:
+    """The section of a `verify` answer that says what the changed functions did. Only the
+    attributes the diff itself sets or reads on `self` are shown -- `PyLinter.__init__`
+    sets dozens, and pylint-4492 (base-p6) was shown `msgs_store` first -- and the changed
+    functions the tests never ran are named."""
+    named = set(re.findall(r"\bself\.(\w+)", "\n".join(
+        ln[1:] for ln in (patch or "").splitlines() if ln.startswith("+") and not ln.startswith("+++"))))
     said, seen = [], set()
     for r in rows:
+        if named and r.get("set"):
+            r = dict(r, set={k: v for k, v in r["set"].items() if k in named})
         key = (r.get("func"), tuple(sorted((r.get("args") or {}).items())), tuple(sorted((r.get("set") or {}).items())), r.get("ret"))
         # A call that set nothing and returned nothing says nothing to assert.
         if key in seen or (not r.get("set") and r.get("ret") in (None, "None")):
@@ -1562,14 +1643,18 @@ def trace_said(rows: list, limit: int = 8) -> str:
         said.append(line.replace("\n", " "))
         if len(said) >= limit:
             break
-    if not said:
+    ran = {(r.get("func") or "").rsplit(".", 1)[-1] for r in rows}
+    unrun = [n for _, n in (watched or []) if n not in ran and not n.startswith("__")]
+    if not said and not unrun:
         return ""
     return ("\n\n## What the change did while your tests ran (with it applied)\n\n"
-            + "\n".join(said)
-            + "\n\nThese are the values the changed code produced in your own tests. Assert "
-              "them -- the object and what it holds, the value returned -- not that the call "
-              "ran or that a name exists; a test that checks these fails on a wrong version of "
-              "the change.")
+            + ("\n".join(said) + "\n\nThese are the values the changed code produced in your "
+               "own tests. Assert them -- the object and what it holds, the value returned -- not "
+               "that the call ran or that a name exists; a test that checks these fails on a "
+               "wrong version of the change." if said else "")
+            + (("\n\n" if said else "") + "Changed functions your tests never ran: "
+               + ", ".join(f"`{n}`" for n in unrun[:6]) + ". Call the code that runs them, with "
+               "input that takes it there, and assert on what they produce." if unrun else ""))
 
 
 def caught_differences(before: list, after: list, limit: int = 3) -> list[str]:
@@ -2210,7 +2295,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # What the changed functions did in the agent's own tests (`TRACE_PLUGIN`).
         if catch:
             try:
-                head += trace_said(json.loads(self.box.read(f"{CATCH_DIR}/trace.json") or "[]"))
+                head += trace_said(json.loads(self.box.read(f"{CATCH_DIR}/trace.json") or "[]"),
+                                   patch=self.patch,
+                                   watched=json.loads(self.box.read(f"{CATCH_DIR}/trace_spec.json") or "[]"))
             except ValueError:
                 pass
         # The tests that do not count, said with every answer while there are any.

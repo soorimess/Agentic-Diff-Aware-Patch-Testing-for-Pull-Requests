@@ -1295,6 +1295,43 @@ the values: it never sees what the change builds. Iteration 6:
 - `trick_tests`: a test whose only checks sit inside an `except` (`pytest.fail` when the
   call raises) tests only that the call does not raise.
 
+Run `base-p6`: NO -- 125 actions, never fail-to-pass. The agent asserted
+`hasattr(PyLinter, '_load_reporter_by_class')`, a module-level function, failing on both
+sides, in variant after variant; no `compare`, and no seed, since the seed came only in the
+coverage loop after a flip. The trace section was there but listed only `PyLinter.__init__`
+-- `msgs_store` first -- since nothing deeper ran. Iteration 7:
+
+- **A starting point** (`start_seed`): before the agent starts, the repository test that
+  runs the most changed lines with the change applied (per-test coverage contexts over the
+  changed files' related test files) is copied into the test file with its class, setup
+  and helpers, kept only if it passes on both sides, and the opening message says what it
+  is and to build from it -- option 1's seed at the start, never the pull request's test.
+  On pylint-4492: `TestRunTC.test_parallel_execution_bug_2674` (15 of 55 lines), with
+  `_runtest`, `_run_pylint`, `_patch_streams`; 157 s before the agent's first step.
+- The trace section shows only the attributes the diff names on `self`, and names the
+  changed functions the tests never ran.
+
+Run `base-p7`: the start seed (`TestRunTC.test_error_help_message_option` this time -- a
+tie with the no-model pick) was in the file before the first step. The agent wrote a
+`TestMultiReporter` class that runs pylint end to end through `Run([...,
+"--output-format", "json:output.json,colorized", ...])` on a real file and asserts the exit
+code: fail-to-pass on that (the old code rejects the format), **69.1%**, 9 of 20 mutants,
+no test that checks nothing, `compare` once. Still unchecked: what the feature writes --
+the JSON file's content, the text on stdout -- and it writes `output.json` into the working
+directory. The 11 surviving mutants are wrong versions that exit cleanly but write the
+wrong output. Iteration 8 runs the same system with the mutation stage on (`mut-p8`), so
+each refusal names a surviving wrong version, now that the agent can drive the code.
+
+Run `mut-p8`: 72.7%, 9 of 20 -- the same as without the stage. The in-run mutation score
+was 10/20 on every `verify` and never moved; one refusal named survivors and the agent
+changed nothing for it. Its end-to-end tests run pylint with
+`--output-format=json:<tmpfile>,colorized` and assert only `pylint_code in [0, 32]`; the
+JSON file is created and deleted unread. On this PR, as on the five-PR comparison, the
+mutation stage in the loop costs time and does not change the test. The user's mutation
+briefing (`mutation-testing.md`, 2026-10-24) is under review: proposal to drop the stage from
+every `verify`, add a bytecode equivalence filter, show only survivors whose effect the
+agent's own calls can observe, and report crash kills apart from assertion kills.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of
