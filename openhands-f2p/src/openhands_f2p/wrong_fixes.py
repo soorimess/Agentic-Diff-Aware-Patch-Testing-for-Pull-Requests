@@ -85,6 +85,39 @@ def generate(instance: dict[str, Any], out_dir: Path | None = None, n: int = 6,
     return got
 
 
+FROZEN_N = 12
+
+
+def frozen_dir() -> Path:
+    import os
+    return Path(os.environ.get("F2P_WRONG_FIXES_DIR")
+                or Path(__file__).resolve().parents[3] / "datasets" / "wrong_fixes")
+
+
+def frozen(instance: dict[str, Any], out_dir: Path | None = None) -> list[dict]:
+    """The pull request's one set of wrong versions (2026-10-24, user: a wrong-version
+    score beside mutmut's): generated once, committed under `datasets/wrong_fixes/`, and
+    read from there by every configuration and every rerun, so the score is repeatable.
+    A copy goes into the run directory."""
+    path = frozen_dir() / f"{instance['instance_id']}.json"
+    if path.exists():
+        got = json.loads(path.read_text())
+    else:
+        got = generate(instance, None, n=FROZEN_N)
+        if got:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(got, indent=2))
+    if out_dir is not None:
+        (out_dir / "wrong_fixes.json").write_text(json.dumps(got, indent=2))
+    return got
+
+
+def halves(entries: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Shown to the agent (`verify`'s mutation stage) and held out for the score: every
+    other entry, so neither half is the model's first ideas only."""
+    return entries[0::2], entries[1::2]
+
+
 def build(box, entries: list[dict]):
     """`mutants.Mutant`s from the model's entries, read against the code as it stands --
     call with the change applied. Entries whose text is not found verbatim, that do not

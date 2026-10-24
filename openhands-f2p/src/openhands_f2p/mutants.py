@@ -542,6 +542,7 @@ class Score:
     why: str = ""
     asked: int = 0
     total: int = 0
+    tool: str = "mutmut"
     held_out: bool = False
     """Whether the agent held the `mutation` tool, and so was shown the other half of the
     pool. Every run is scored on the same half since 2026-09-28 -- see `measure`."""
@@ -564,7 +565,7 @@ class Score:
 
     def as_dict(self) -> dict:
         return {"measured": self.measured, "why": self.why or None,
-                "tool": "mutmut", "asked": self.asked, "total": self.total,
+                "tool": self.tool, "asked": self.asked, "total": self.total,
                 "held_out": self.held_out,
                 "equivalent_left_out": self.equivalent,
                 "agent": {"killed": self.agent_killed, "total": self.total,
@@ -628,14 +629,15 @@ def _write_records(d: Path, mutants: list[Mutant], score: Score) -> None:
 
 def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
             gen_path: str, n: int = DEFAULT_MUTANTS, out_dir: Path | None = None,
-            quiet: bool = False, held_out: bool = False) -> Score:
+            quiet: bool = False, held_out: bool = False, pool=None,
+            tool: str = "mutmut") -> Score:
     """Mutation score for one generated test, and for the developer's, on one set.
 
     The box arrives at base and is left at base. In between the real patch goes on --
     mutants are variants of the *fixed* code, so the fix has to be there first -- and
     both tests are installed, because every mutant is asked of both.
     """
-    score = Score(asked=n, held_out=held_out)
+    score = Score(asked=n, held_out=held_out, tool=tool)
     if n <= 0:
         score.why = "not requested"
         return score
@@ -715,7 +717,9 @@ def measure(instance: dict[str, Any], box: Sandbox, generated_test: str,
         # half is used anyway: until 2026-09-28 such arms were scored on the whole pool
         # (often 10 mutants) while arms with the tool got the half (often 1-3), so the
         # two columns were different quantities and could not be paired per instance.
-        shown, mutants = split_pool(box, instance["patch"], n)
+        # `pool(box)` -- the held-out half of the model's wrong versions (2026-10-24, user:
+        # a second column beside mutmut's) -- is read with the fix applied, as mutmut's is.
+        shown, mutants = ([], pool(box)) if pool is not None else split_pool(box, instance["patch"], n)
         if not mutants:
             score.measured = True
             # A pool of one goes to the agent's half, and "offers no mutations" was false

@@ -576,7 +576,7 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
     if "mutation-tool" in features:
         try:
             from openhands_f2p import wrong_fixes
-            wrong = wrong_fixes.generate(instance, out_dir)
+            wrong = wrong_fixes.halves(wrong_fixes.frozen(instance, out_dir))[0]
             flow.record(flow.AGENT, "wrong fixes", f"{len(wrong)} from the model")
         except Exception as exc:                                  # noqa: BLE001
             flow.record(flow.AGENT, "wrong fixes failed", f"{type(exc).__name__}: {exc}")
@@ -1064,6 +1064,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
     # append the id to. Appending nested the id twice and, worse, left the "output" line
     # pointing at out/ where nothing had been written.
     mutation: dict | None = None
+    wrong_mutation: dict | None = None
     d = out_root if out_root is not None else OUT / pr["id"]
     d.mkdir(parents=True, exist_ok=True)
     (d / "pr.json").write_text(json.dumps(
@@ -1343,6 +1344,20 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                                   held_out=("mutation-tool" in features))
             mutation = mut.as_dict()
             field("mutants", mutants.line(mutation))
+            # The second column (2026-10-24, user): the held-out half of the PR's model-written
+            # wrong versions, run against both tests exactly as mutmut's mutants are. On
+            # pylint-4492 they separated tests that read the output from exit-code-only ones;
+            # mutmut's mostly-crashing mutants did not.
+            try:
+                from openhands_f2p import wrong_fixes
+                held = wrong_fixes.halves(wrong_fixes.frozen(inst, d))[1]
+                wm = mutants.measure(inst, box, code, test_file, len(held), out_dir=d / "wrong",
+                                     quiet=True, held_out=True, tool="wrong-versions",
+                                     pool=lambda b: wrong_fixes.build(b, held))
+                wrong_mutation = wm.as_dict()
+                field("wrong versions", mutants.line(wrong_mutation))
+            except Exception as exc:                              # noqa: BLE001
+                wrong_mutation = {"measured": False, "why": f"{type(exc).__name__}: {exc}"}
 
     iso = checks["isolation"]
     field("audit", f"network {checks['network_attempts'] or 'none'}, "
@@ -1417,6 +1432,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
     if mutation is not None:
         # Beside the verdict, like coverage and the judge. Nothing here changes F2P.
         result["mutation"] = mutation
+    if wrong_mutation is not None:
+        result["wrong_mutation"] = wrong_mutation
     # The concept check goes here and nowhere earlier: it is the only step that reads
     # the developer's test, so it must not run until the F2P verdict is settled. Its
     # answer is recorded beside the verdict, never folded into it.

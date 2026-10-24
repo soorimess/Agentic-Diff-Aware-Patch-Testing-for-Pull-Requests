@@ -1276,6 +1276,13 @@ nothing ("only that the code above it did not crash"); the refusal and `compare`
 description say what to print -- the objects the calls return or build (`vars(x)`), files
 they write, text they print.
 
+Rounds 9-11: an assertion that accepts any of several literal outcomes (`assert code in
+[0, 1, 2]`) counts as checking nothing, like `isinstance`; and `pytest.raises(SystemExit)`
+is not a check -- it is how a command-line program finishes (pylint's `Run` always ends in
+one). mut-p11 parsed the JSON its run wrote but asserted only `isinstance(parsed, list)`
+(inside an `if` that never ran: the file went to the working directory) and `pylint_code
+in [0, 1, 2]`; all eleven of its tests now count as trick tests.
+
 Run `base-p5`: three tests of the form `try: linter.set_option("output-format",
 "json:output.json,text") except Exception: pytest.fail(...)` -- they check only that the
 call does not raise; 52.7%, 9 of 20, `compare` never called, no seed. Blocking one shape at
@@ -1343,6 +1350,30 @@ TestForge" -- change the methods). Built:
   agent's and the developer's test (`by_assertion`, `by_crash`): an exit-code test kills
   every mutant that crashes, and the score could not tell that from a test that checks the
   output.
+- **A second column: the wrong-version score** (user, 2026-10-24, after the tool
+  comparison below). Each pull request gets one set of 12 model-written wrong versions
+  (`wrong_fixes.frozen`: generated once, committed under `datasets/wrong_fixes/<id>.json`,
+  read by every configuration and rerun). `wrong_fixes.halves` gives every other entry to
+  the agent's feedback and holds the rest out; `mutants.measure(pool=...)` runs the
+  held-out half against both tests exactly as it runs mutmut's mutants, and the result is
+  `wrong_mutation` beside `mutation` in `result.json`, for base and mutation configurations
+  alike.
+- **Tool comparison, no agent** (pylint-4492, every mutant against the developer's test
+  and five earlier agent tests; a local helper script):
+
+  | Tool | Mutants run | Developer kills | Exit-code-only tests (p7 / mut-p9) | Killed by no test |
+  |---|---|---|---|---|
+  | mutmut | 60 of 109 | 34 (3 by assertion) | 21 / 23 | 24 |
+  | cosmic-ray (changed lines) | 47 | 30 (4 by assertion) | 21 / 23 | 14 |
+  | model-written wrong versions | 12 | 6 (2 by assertion) | 2 / 2 | 6 |
+  | model-written correct alternatives | 6 | 0 | 0 | -- |
+
+  mutmut and cosmic-ray behave alike: most kills are crashes, and a test that checks only
+  the exit code catches two-thirds of what the developer's test catches. The wrong
+  versions order the tests as a reader would (developer > p2 > p7 = mut-p9 > p9 > p10).
+  The correct alternatives (a should-survive check) flagged nothing, not even a test on a
+  private attribute: they never renamed what the tests read. PyTation has no public code;
+  Mutahunter needs Python 3.11+ and the images run 3.9; mutatest is unmaintained.
 - **Agent feedback** (the mutation stage of `verify`, `--add-mutation-tool`): it ran the
   whole shown half -- up to 20 mutants per call (`probe_mutants` was the measurement's
   size) -- which is why base+mutation runs took half again as long. Now at most 6
