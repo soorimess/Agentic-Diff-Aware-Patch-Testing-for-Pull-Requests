@@ -1577,8 +1577,10 @@ class SandboxCompareTool(ToolDefinition[CompareAction, CompareObservation]):
             description=("Run a short Python script on the code before the change and again "
                          "with the change applied, and show what it printed each time. Use it "
                          "to see what the changed code returns or writes once the change is "
-                         "in -- the exact values -- and assert those in your test. Reverts the "
-                         "change afterwards."),
+                         "in -- the exact values -- and assert those in your test. Print what the "
+                         "calls produce, not only that they ran: the objects they return or build "
+                         "(`type(x).__name__`, `vars(x)`), files they write, text they print. "
+                         "Reverts the change afterwards."),
             action_type=CompareAction,
             observation_type=CompareObservation,
             annotations=ToolAnnotations(readOnlyHint=False),

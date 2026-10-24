@@ -1330,7 +1330,15 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                                                    or n.func.id in ("raises", "warns")))
             or (isinstance(n.func, _ast.Attribute) and n.func.attr in asserting)
             or (isinstance(n.func, _ast.Name) and n.func.id in asserting))]
-        if not asserts and not helpers:
+        # `assert True` after a call checks only that the call did not crash (2026-10-24):
+        # pylint-4492 (base-p4) ran `load_default_plugins()` with two output formats and
+        # asserted `True` -- all its coverage and caught mutants came from that.
+        constant = [a for a in asserts if isinstance(a.test, _ast.Constant) and a.test.value]
+        if constant and len(constant) == len(asserts) and not helpers:
+            why.append(f"its only assertion (line {constant[0].lineno}) is a constant -- "
+                       f"`assert {_ast.unparse(constant[0].test)}` -- so it checks only that the "
+                       f"code above it did not crash, not what it did")
+        elif not asserts and not helpers:
             why.append("it asserts nothing: it runs code and checks no result")
         elif asserts and not helpers and all(_existence_only(a.test) for a in asserts):
             why.append(f"its only assertions (line {', '.join(str(a.lineno) for a in asserts[:4])}) "
@@ -1369,9 +1377,12 @@ def trick_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
             "They do not count -- not for fail-to-pass, not for coverage. Make each one call the "
             "changed code with real input and assert on what it returns, writes or raises -- the "
             "exact value, the output, the exception and its message -- with no `try`/`except` "
-            "around it: an error should fail the test. To see those exact values, run the call "
-            "with `compare`: it shows what it prints before the change and with the change "
-            "applied. A test you cannot make check something, delete. Then call `verify` again.")
+            "around it: an error should fail the test. To see those exact values, run the same "
+            "calls with `compare` and print what they produce, not just that they ran: the "
+            "object they return or build (`print(type(x).__name__, vars(x))`, and the same for "
+            "the objects inside it), the contents of any file they write, the text they print. "
+            "`compare` shows that before the change and with it applied; assert what it shows "
+            "after. A test you cannot make check something, delete. Then call `verify` again.")
 
 
 def swallow_note(test_text: str | None) -> str:

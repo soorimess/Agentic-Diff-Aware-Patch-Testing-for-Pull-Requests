@@ -1264,6 +1264,18 @@ only (0 against 0) and kept it, though a version with a real flip existed. Itera
   version with a real flip (`real_flips`); `result.json` records the handed-in file's
   `trick_tests` and `real_flips`.
 
+Run `base-p4`: the seed came in at the first `tricks_open` refusal; after two more the
+agent's tests were clean and the coverage loop ran -- 54.5%, 9 of 20 mutants, four real
+flips (`_reporter_names == "json:output.json,colorized,text:report.txt"` and the like). The
+coverage and the caught mutants come from `test_load_reporters_integration`, which calls
+`load_default_plugins()` with two output formats and then `assert True`: it checks only
+that the call does not crash. The agent called `compare` twice, printing only
+`hasattr(...)` and the option string -- never what the change builds (`linter.reporter`) or
+writes (`output.json`). Iteration 5: a constant assertion (`assert True`) counts as checking
+nothing ("only that the code above it did not crash"); the refusal and `compare`'s
+description say what to print -- the objects the calls return or build (`vars(x)`), files
+they write, text they print.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of
