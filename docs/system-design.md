@@ -1358,7 +1358,20 @@ TestForge" -- change the methods). Built:
   Recorded values are made comparable across processes first: memory addresses
   (` at 0x…`) are dropped and sets are printed sorted, since string hashing changes from
   one run to the next; without that, every wrong version "differed" in
-  `_optik_option_attrs`.
+  `_optik_option_attrs`. Temporary directories are written `<tmp>` for the same reason
+  (pytest numbers them `pytest-1`, `pytest-2`, ... per run, which made calls under a wrong
+  version look as if they "never ran").
+- The trace also records the files the code writes during a test: `open` is wrapped
+  while the test runs, and each file opened for writing is read back when it is closed,
+  or flushed and read at the end of the test (pylint leaves its output file open until
+  garbage collection). "What the change did" lists them first -- "the run wrote the file
+  `output.json` (317 bytes): `[{"type": "warning", ...`" -- and a wrong version that
+  leaves it empty now shows as "the file `output.json` held `''` instead of ...". On
+  pylint-4492 the agent's tests had run the feature end to end for rounds without ever
+  asserting what it wrote; the trace could not see files either.
+- A test failing on both sides is told the line it fails at and pytest's `where` values
+  (`where 0 = len([])`), and, when the new side ends in `SystemExit`, that this is how the
+  program finishes: catch it and assert its code and what the run wrote.
 - The trace section lists calls that return something first and says to prefer public
   results over private attributes (`_name`), which another correct implementation may not
   have.

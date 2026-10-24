@@ -1431,12 +1431,25 @@ def _trace_diff(fix: list, wrong: list, limit: int = 2) -> list[str]:
     a = {key(r): r for r in fix}
     b = {key(r): r for r in wrong}
     said = []
-    for k, r in a.items():
+    # a file the code wrote is the plainest thing to assert, so its differences go first
+    for k, r in sorted(a.items(), key=lambda kv: kv[1].get("func") != "wrote"):
         test = (r.get("test") or "?").split("::")[-1]
         args = ", ".join(f"{x}={v}" for x, v in (r.get("args") or {}).items())
         call = f"`{r['func']}({args if len(args) <= 80 else args[:80] + '...'})`"
         w = b.get(k)
-        if w is None:
+        if r.get("func") == "wrote":
+            file = (r.get("args") or {}).get("file", "?")
+            if w is None:
+                said.append(f"in `{test}`, the file `{file}` was never written")
+            elif (w.get("ret"), w.get("size")) != (r.get("ret"), r.get("size")):
+                got, want = str(w.get("ret")), str(r.get("ret"))
+                if got[:150] == want[:150]:   # same start: only the length shows it
+                    said.append(f"in `{test}`, the file `{file}` held {w.get('size')} bytes instead "
+                                f"of {r.get('size')}, starting the same: `{want[:100]}`")
+                else:
+                    said.append(f"in `{test}`, the file `{file}` held `{got[:150]}` instead of "
+                                f"`{want[:150]}`")
+        elif w is None:
             said.append(f"in `{test}`, {call} never ran")
         elif w.get("ret") != r.get("ret"):
             said.append(f"in `{test}`, {call} returned `{w.get('ret')}` instead of `{r.get('ret')}`")
@@ -1665,10 +1678,77 @@ _NAMES = {n for _, n in _SPEC}
 _REC, _CUR, _SEEN, _STACK = [], {"test": None}, {}, {}
 
 
+import tempfile
+_BASES = "|".join(re.escape(b) for b in sorted({tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())}, key=len, reverse=True))
+_TMP = re.compile(rf"(?:{_BASES})/(?:pytest-of-[^/\s'\"]+/pytest-\d+|tmp[\w-]+)")
+
+
 def _short(v, depth=0):
-    # Memory addresses differ from run to run; without this, the same call under the fix
-    # and under a wrong version read as two different calls.
-    return re.sub(r" at 0x[0-9a-fA-F]+", "", _short_raw(v, depth))
+    # Memory addresses and temporary directories (pytest-1, pytest-2, ...) differ from run
+    # to run; without this, the same call under the fix and under a wrong version read as
+    # two different calls.
+    return _TMP.sub("<tmp>", re.sub(r" at 0x[0-9a-fA-F]+", "", _short_raw(v, depth)))
+
+
+# Files the code writes during a test: the output of a command-line tool is often a file,
+# not a return value (pylint-4492's `--output-format=json:out.json`), and a wrong version
+# that leaves it empty showed no difference in the calls alone.
+import builtins, io
+_REAL_OPEN = builtins.open
+_WROTE, _OPEN = {}, []
+
+
+def _wrote(path):
+    try:
+        if _CUR["test"] is None or any(s in path for s in ("site-packages", "__pycache__", ".coverage")):
+            return
+        with _REAL_OPEN(path, errors="replace") as f:
+            text = f.read(600)
+        text = (os.path.getsize(path), text)
+        name = _TMP.sub("<tmp>", os.path.relpath(path) if not os.path.isabs(path) or path.startswith(os.getcwd()) else path)
+        _WROTE[(_CUR["test"], name)] = text
+    except Exception:
+        pass
+
+
+class _Watched:
+    def __init__(self, f, path):
+        object.__setattr__(self, "_f", f)
+        object.__setattr__(self, "_p", path)
+
+    def __getattr__(self, n):
+        return getattr(self._f, n)
+
+    def __setattr__(self, n, v):
+        setattr(self._f, n, v)
+
+    def __iter__(self):
+        return iter(self._f)
+
+    def __enter__(self):
+        self._f.__enter__()
+        return self
+
+    def __exit__(self, *a):
+        r = self._f.__exit__(*a)
+        _wrote(self._p)
+        return r
+
+    def close(self):
+        self._f.close()
+        _wrote(self._p)
+
+
+def _open(file, mode="r", *args, **kwargs):
+    f = _REAL_OPEN(file, mode, *args, **kwargs)
+    if isinstance(file, (str, bytes, os.PathLike)) and any(c in mode for c in "wax"):
+        try:
+            w = _Watched(f, os.fsdecode(file))
+            _OPEN.append(w)
+            return w
+        except Exception:
+            return f
+    return f
 
 
 def _short_raw(v, depth=0):
@@ -1731,10 +1811,27 @@ if pytest is not None:
         _CUR["test"] = item.nodeid
         old = sys.getprofile()
         sys.setprofile(_prof)
+        builtins.open = io.open = _open
         try:
             yield
         finally:
+            builtins.open = io.open = _REAL_OPEN
             sys.setprofile(old)
+            # pylint leaves its output file open until garbage collection: what it holds
+            # at the end of the test is read after a flush
+            for w in _OPEN:
+                try:
+                    if not w._f.closed:
+                        w._f.flush()
+                        _wrote(w._p)
+                except Exception:
+                    pass
+            del _OPEN[:]
+            for (test, name), text in list(_WROTE.items()):
+                if test == item.nodeid:
+                    _REC.append({"test": test, "func": "wrote", "args": {"file": name},
+                                 "ret": repr(text[1]), "size": text[0], "set": {}})
+            _CUR["test"] = None
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -1742,7 +1839,8 @@ def pytest_sessionfinish(session, exitstatus):
     if out:
         try:
             with open(out, "w") as f:
-                json.dump(_REC[:200], f)
+                wrote = [r for r in _REC if r["func"] == "wrote"][:40]
+                json.dump([r for r in _REC if r["func"] != "wrote"][:200] + wrote, f)
         except Exception:
             pass
 '''
@@ -1779,8 +1877,20 @@ def trace_said(rows: list, limit: int = 8, patch: str = "",
     # Calls that return something first: a public result is the thing to assert; a private
     # attribute (`_name`) only when nothing public shows the change (the user's mutation
     # briefing, 2026-10-24: a test on implementation details rejects valid alternatives).
-    rows = sorted(rows, key=lambda r: r.get("ret") in (None, "None"))
+    rows = sorted(rows, key=lambda r: (r.get("func") != "wrote", r.get("ret") in (None, "None")))
     for r in rows:
+        if r.get("func") == "wrote":
+            file = (r.get("args") or {}).get("file", "?")
+            if ("wrote", file, r.get("ret")) in seen:
+                continue
+            seen.add(("wrote", file, r.get("ret")))
+            text = str(r.get("ret"))
+            said.append(f"* the run wrote the file `{file}` ({r.get('size', '?')} bytes): "
+                        f"`{text if len(text) <= 300 else text[:300] + '...'}`"
+                        f" -- in `{(r.get('test') or '?').split('::')[-1]}`")
+            if len(said) >= limit:
+                break
+            continue
         if named and r.get("set"):
             r = dict(r, set={k: v for k, v in r["set"].items() if k in named})
         key = (r.get("func"), tuple(sorted((r.get("args") or {}).items())), tuple(sorted((r.get("set") or {}).items())), r.get("ret"))
