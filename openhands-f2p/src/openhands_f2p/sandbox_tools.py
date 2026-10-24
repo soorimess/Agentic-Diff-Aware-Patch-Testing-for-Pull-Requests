@@ -1426,6 +1426,152 @@ def pytest_sessionfinish(session, exitstatus):
 '''
 
 
+# What the changed functions did while the agent's tests ran with the change applied
+# (2026-10-24, user: useful tests). pylint-4492 wrote test after test that only checked
+# names, option strings or "does not raise": it never saw what the change builds -- its
+# checkout is the code before the change, `verify` says pass or fail, and it called
+# `compare` to print `hasattr(...)`. This records, for each changed function its tests
+# ran, the arguments, the return value and the attributes it set on `self`, so the answer
+# can say "`PyLinter._load_reporters()` set `self.reporter = MultiReporter(...)`".
+TRACE_PLUGIN = r'''"""Records what the changed functions did during each test (F2P harness)."""
+import json, os, sys
+try:
+    import pytest
+except Exception:  # pragma: no cover
+    pytest = None
+try:
+    _SPEC = [tuple(x) for x in json.load(open(os.environ.get("F2P_TRACE_SPEC", "")))]
+except Exception:
+    _SPEC = []
+_NAMES = {n for _, n in _SPEC}
+_REC, _CUR, _SEEN, _STACK = [], {"test": None}, {}, {}
+
+
+def _short(v, depth=0):
+    try:
+        if isinstance(v, (list, tuple, set)) and depth < 2:
+            items = [_short(x, depth + 1) for x in list(v)[:5]]
+            o, c = ("[", "]") if isinstance(v, list) else ("(", ")") if isinstance(v, tuple) else ("{", "}")
+            return (o + ", ".join(items) + (", ..." if len(v) > 5 else "") + c)[:240]
+        if isinstance(v, dict) and depth < 2:
+            items = [f"{k!r}: {_short(x, depth + 1)}" for k, x in list(v.items())[:5]]
+            return ("{" + ", ".join(items) + (", ..." if len(v) > 5 else "") + "}")[:240]
+        r = repr(v)
+        if " object at 0x" in r or (r.startswith("<") and r.endswith(">")):
+            name = type(v).__name__
+            if depth == 0 and hasattr(v, "__dict__"):
+                parts = [f"{k}={_short(x, 1)}" for k, x in list(vars(v).items())[:6]]
+                return f"{name}({', '.join(parts)})"[:240]
+            return name
+        return r[:160]
+    except Exception:
+        return "<unrepresentable>"
+
+
+def _prof(frame, event, arg):
+    code = frame.f_code
+    if code.co_name not in _NAMES or event not in ("call", "return"):
+        return
+    if not any(code.co_filename.endswith(p) and code.co_name == n for p, n in _SPEC):
+        return
+    key = id(frame)
+    me = frame.f_locals.get("self")
+    if event == "call":
+        _STACK[key] = ({k: _short(x, 1) for k, x in vars(me).items()}
+                       if me is not None and hasattr(me, "__dict__") else None)
+        return
+    snap = _STACK.pop(key, None)
+    seen = (_CUR["test"], code.co_name)
+    if _SEEN.get(seen, 0) >= 2:
+        return
+    _SEEN[seen] = _SEEN.get(seen, 0) + 1
+    changed = {}
+    if snap is not None and me is not None and hasattr(me, "__dict__"):
+        for k, x in vars(me).items():
+            if snap.get(k) != _short(x, 1):
+                changed[k] = _short(x)
+    names = code.co_varnames[:code.co_argcount + code.co_kwonlyargcount]
+    args = {k: _short(frame.f_locals[k], 1) for k in names if k != "self" and k in frame.f_locals}
+    qual = (type(me).__name__ + "." if me is not None else "") + code.co_name
+    _REC.append({"test": _CUR["test"], "func": qual, "args": args,
+                 "ret": _short(arg), "set": changed})
+
+
+if pytest is not None:
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_call(item):
+        _CUR["test"] = item.nodeid
+        old = sys.getprofile()
+        sys.setprofile(_prof)
+        try:
+            yield
+        finally:
+            sys.setprofile(old)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    out = os.environ.get("F2P_TRACE_OUT")
+    if out:
+        try:
+            with open(out, "w") as f:
+                json.dump(_REC[:200], f)
+        except Exception:
+            pass
+'''
+
+
+def watched_functions(box: Sandbox, patch: str) -> list[list[str]]:
+    """`[path, name]` for each function holding a line the change adds or alters, read at
+    head -- call it with the change applied."""
+    out: list[list[str]] = []
+    for path, lines in E.changed_lines(patch).items():
+        if not path.endswith(".py") or E.is_test_file(path):
+            continue
+        try:
+            tree = ast.parse(box.read(path) or "")
+        except SyntaxError:
+            continue
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
+                    any(n.lineno <= ln <= (n.end_lineno or n.lineno) for ln in lines):
+                if [path, n.name] not in out:
+                    out.append([path, n.name])
+    return out
+
+
+def trace_said(rows: list, limit: int = 8) -> str:
+    """The section of a `verify` answer that says what the changed functions did."""
+    said, seen = [], set()
+    for r in rows:
+        key = (r.get("func"), tuple(sorted((r.get("args") or {}).items())), tuple(sorted((r.get("set") or {}).items())), r.get("ret"))
+        # A call that set nothing and returned nothing says nothing to assert.
+        if key in seen or (not r.get("set") and r.get("ret") in (None, "None")):
+            continue
+        seen.add(key)
+
+        def cut(v: str, n: int = 120) -> str:
+            v = str(v).replace("\n", " ")
+            return v if len(v) <= n else v[:n] + "..."
+        args = ", ".join(f"{k}={cut(v, 60)}" for k, v in (r.get("args") or {}).items())
+        line = f"* `{r['func']}({args})`"
+        if r.get("set"):
+            line += " set " + ", ".join(f"`self.{k} = {cut(v)}`" for k, v in list(r["set"].items())[:3])
+        if r.get("ret") not in (None, "None"):
+            line += (" and" if r.get("set") else "") + f" returned `{cut(r['ret'])}`"
+        line += f" -- in `{(r.get('test') or '?').split('::')[-1]}`"
+        said.append(line.replace("\n", " "))
+        if len(said) >= limit:
+            break
+    if not said:
+        return ""
+    return ("\n\n## What the change did while your tests ran (with it applied)\n\n"
+            + "\n".join(said)
+            + "\n\nThese are the values the changed code produced in your own tests. Assert "
+              "them -- the object and what it holds, the value returned -- not that the call "
+              "ran or that a name exists; a test that checks these fails on a wrong version of "
+              "the change.")
+
+
 def caught_differences(before: list, after: list, limit: int = 3) -> list[str]:
     """For tests whose `pytest.raises` / `pytest.warns` caught something different on the
     two sides -- another message, another type -- one line each."""
@@ -1844,12 +1990,19 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         if catch:
             if not getattr(self, "_catch_ready", False):
                 self.box.write(f"{CATCH_DIR}/f2p_catch.py", CATCH_PLUGIN)
+                self.box.write(f"{CATCH_DIR}/f2p_trace.py", TRACE_PLUGIN)
                 self._catch_ready = True
-            self.box.exec(f"rm -f {CATCH_DIR}/before.json {CATCH_DIR}/after.json", timeout=60)
+            self.box.exec(f"rm -f {CATCH_DIR}/before.json {CATCH_DIR}/after.json "
+                          f"{CATCH_DIR}/trace.json", timeout=60)
 
         def caught_cmd(side: str) -> str:
-            return (f"F2P_CATCH_OUT={CATCH_DIR}/{side}.json PYTHONPATH={CATCH_DIR}${{PYTHONPATH:+:$PYTHONPATH}} "
-                    f"{cmd} -p f2p_catch") if catch else cmd
+            if not catch:
+                return cmd
+            # With the change applied, the trace plugin as well (`TRACE_PLUGIN`).
+            trace = (f"F2P_TRACE_SPEC={CATCH_DIR}/trace_spec.json F2P_TRACE_OUT={CATCH_DIR}/trace.json "
+                     if side == "after" else "")
+            return (f"{trace}F2P_CATCH_OUT={CATCH_DIR}/{side}.json PYTHONPATH={CATCH_DIR}${{PYTHONPATH:+:$PYTHONPATH}} "
+                    f"{cmd} -p f2p_catch" + (" -p f2p_trace" if side == "after" else ""))
         before = self.box.exec(caught_cmd("before"), timeout=3600)
         base_out = V.own_outcomes(E.parse_output(before.output), [action.target])
         self._base = E.base_texts(self.box, self.patch)
@@ -1857,6 +2010,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         cov: dict | None = None
         import_only = ""
         try:
+            if catch:
+                self.box.write(f"{CATCH_DIR}/trace_spec.json",
+                               json.dumps(watched_functions(self.box, self.patch)))
             after = self.box.exec(caught_cmd("after"), timeout=3600)
             head_out = V.own_outcomes(E.parse_output(after.output), [action.target])
             # A file that did not import at base and does now: its tests failed at base
@@ -2051,6 +2207,12 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
         # "That it flips, and what it reaches, are two of the three questions", with no
         # duty line. It scored NO having been told both things.
         ok = bool(flipped) and not still_failing
+        # What the changed functions did in the agent's own tests (`TRACE_PLUGIN`).
+        if catch:
+            try:
+                head += trace_said(json.loads(self.box.read(f"{CATCH_DIR}/trace.json") or "[]"))
+            except ValueError:
+                pass
         # The tests that do not count, said with every answer while there are any.
         if tricks and not only_tricks:
             unchecked = len((cov or {}).get("unchecked") or [])

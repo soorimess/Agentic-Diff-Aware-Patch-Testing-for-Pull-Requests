@@ -1276,6 +1276,25 @@ nothing ("only that the code above it did not crash"); the refusal and `compare`
 description say what to print -- the objects the calls return or build (`vars(x)`), files
 they write, text they print.
 
+Run `base-p5`: three tests of the form `try: linter.set_option("output-format",
+"json:output.json,text") except Exception: pytest.fail(...)` -- they check only that the
+call does not raise; 52.7%, 9 of 20, `compare` never called, no seed. Blocking one shape at
+a time is whack-a-mole: the agent finds the next cheapest shape that flips. What it lacks is
+the values: it never sees what the change builds. Iteration 6:
+
+- **What the change did while your tests ran.** `verify`'s run with the change applied
+  loads a second pytest plugin (`TRACE_PLUGIN`, pytest only) that profiles the functions
+  the change touches (`watched_functions`, from the diff, read at head) and records, per
+  test, each call's arguments, return value and the attributes it set on `self`, with
+  objects shown by their attributes. The answer lists them (`trace_said`) -- on
+  pylint-4492's p4 test: "`_load_reporter_by_name(reporter_name='json')` returned
+  `JSONReporter(...)`", "`MultiReporter.__init__(sub_reporters=[JSONReporter,
+  ColorizedTextReporter], ...)` set `self._sub_reporters = [JSONReporter,
+  ColorizedTextReporter]`" -- and says to assert those values. No reliance on the agent
+  calling `compare`.
+- `trick_tests`: a test whose only checks sit inside an `except` (`pytest.fail` when the
+  call raises) tests only that the call does not raise.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

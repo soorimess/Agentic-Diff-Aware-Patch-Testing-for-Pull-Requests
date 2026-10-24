@@ -1334,7 +1334,16 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
         # pylint-4492 (base-p4) ran `load_default_plugins()` with two output formats and
         # asserted `True` -- all its coverage and caught mutants came from that.
         constant = [a for a in asserts if isinstance(a.test, _ast.Constant) and a.test.value]
-        if constant and len(constant) == len(asserts) and not helpers:
+        # Checks only inside `except` -- `pytest.fail(...)` when the call raises -- test only
+        # that it does not raise (pylint-4492, base-p5: `try: set_option(...) except
+        # Exception: pytest.fail(...)`, three tests, 52.7% and nothing about the output).
+        in_except = {id(x) for t in _ast.walk(fn) if isinstance(t, _ast.Try)
+                     for h in t.handlers for x in _ast.walk(h)}
+        checks = asserts + helpers
+        if checks and all(id(c) in in_except for c in checks):
+            why.append(f"its only checks (line {checks[0].lineno}) are inside an `except`, so it "
+                       f"tests only that the call does not raise, not what it does")
+        elif constant and len(constant) == len(asserts) and not helpers:
             why.append(f"its only assertion (line {constant[0].lineno}) is a constant -- "
                        f"`assert {_ast.unparse(constant[0].test)}` -- so it checks only that the "
                        f"code above it did not crash, not what it did")
