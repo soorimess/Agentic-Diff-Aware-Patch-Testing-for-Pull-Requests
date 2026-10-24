@@ -463,7 +463,8 @@ def _seed_account(inst: dict, box: E.Sandbox, test_file: str, code: str, verdict
     return out
 
 
-def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list, patch: str) -> str:
+def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list, patch: str,
+          any_turn: bool = False) -> str:
     """Option 1 (user, 2026-10-21): when a target part's first turn ran none of its lines
     and a repository test file was measured to run at least half of them, the harness
     copies one of that file's tests into the agent's file, unchanged, renamed
@@ -479,7 +480,7 @@ def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list, patch: str) 
     target, blank, cov = got
     key = f"{target['path']}::{target['function']}"
     hit = (cov.get("related_by_part") or {}).get(key)
-    if (blank < 1 or not hit or 2 * hit["reached"] < hit["missed"]
+    if ((blank < 1 and not any_turn) or not hit or 2 * hit["reached"] < hit["missed"]
             or any(e.get("tool") == "seed" and e.get("part") == key for e in tool_log)):
         return ""
     current = box.read(rel) or ""
@@ -529,7 +530,8 @@ def _seed(box: E.Sandbox, tool_log: list, rel: str, injected: list, patch: str) 
             f"counted as your test. Keep it and its assertions, and add to it: an input or a "
             f"configuration value that goes through the changed lines, and assertions about what "
             f"this change does -- then call `verify`. Removing its assertions makes it test less, "
-            f"not more.")
+            f"not more. To know what to assert, run the same call with your new input through "
+            f"`compare`: it shows what it prints before the change and with it applied.")
 
 
 def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: int,
@@ -826,6 +828,12 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                 say += V.lost_flip(tool_log, rel, box.read(rel))
             if "duties_open[coverage]" in reason and "coverage-tool" in features:
                 say += _seed(box, tool_log, rel, injected, instance["patch"])
+            # A refusal for tests that check nothing gets the repository's own test as well
+            # (2026-10-24): pylint-4492 (base-p3) was refused six times for existence-only
+            # tests and wrote another each time; the coverage loop, where the seed came in
+            # (base-p2: 0 -> 67%, 1 -> 10 of 20 mutants), never started.
+            if "tricks_open" in reason and "coverage-tool" in features:
+                say += _seed(box, tool_log, rel, injected, instance["patch"], any_turn=True)
             if stuck(reason) and streak + 1 >= MAX_PASSES_AT_BASE_ROUNDS:
                 box._unscoreable_capped = True
             nudge = prompt.followup("second-chance", shortfall=say,
@@ -1157,8 +1165,13 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                 final_cov = verdict.changed_line_coverage or {}
                 # Seeds the last file dropped go back too (they pass on both sides).
                 seeded_last = V.with_seeds(code, run["tool_log"], test_file)
+                # A last file whose flips are all tests that check nothing is not a good
+                # result to keep (2026-10-24): pylint-4492 (base-p3) ended on
+                # `assert MultiReporter is not None` alone, scored YES at 0%, while a
+                # version with a real flip existed.
+                last_real = verdict.f2p == "YES" and bool(V.real_flips(verdict, code))
                 if best is not None and best[1].strip() != code.strip() and (
-                        verdict.f2p != "YES"
+                        verdict.f2p != "YES" or not last_real
                         or (best[2] is not None and final_cov.get("measured")
                             and final_cov["covered"] < best[2])):
                     best = (best[0], V.with_seeds(best[1], run["tool_log"], test_file), best[2])
@@ -1173,6 +1186,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                     again_cov = again.changed_line_coverage or {}
                     better = again.f2p == "YES" and (
                         verdict.f2p != "YES"
+                        or (not last_real and bool(V.real_flips(again, best[1])))
                         or (again_cov.get("covered") or 0) > (final_cov.get("covered") or 0))
                     run["restored"] = {
                         "from_call": V.call_number(run["tool_log"], best[0]),
@@ -1190,6 +1204,10 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                 # coverage without the ones it left as copied -- what its own tests reach.
                 # A record for deciding on option 1 (user, 2026-10-21); the file handed in
                 # is scored as it is.
+                # Which tests of the file handed in check nothing, and whether its flip rests on
+                # any other test -- the honest reading of a YES (2026-10-24).
+                run["trick_tests"] = V.trick_tests(code)
+                run["real_flips"] = V.real_flips(verdict, code)
                 seeds = [e for e in run["tool_log"] if e.get("tool") == "seed" and "error" not in e]
                 if seeds:
                     run["seeded"] = _seed_account(inst, box, test_file, code, verdict, seeds)
@@ -1363,6 +1381,8 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
               # Option 1: the repository tests the harness copied in, whether the agent
               # changed each, and coverage with and without the unchanged copies.
               "seeded": run.get("seeded"),
+              "trick_tests": run.get("trick_tests"),
+              "real_flips": run.get("real_flips"),
               # Edits to files that existed at base -- the guard's subject. Scratch
               # files the agent created for itself are listed separately.
               "files_edited_outside_test": checks["preexisting_written"],

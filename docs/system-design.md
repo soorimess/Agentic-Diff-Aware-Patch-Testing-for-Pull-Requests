@@ -1249,6 +1249,21 @@ Iteration 3:
   `x != ""`, `bool(x)` -- as checking nothing; and a call to a helper that asserts
   (`self._test_output(...)`) counts as an assertion. The refusals point to `compare`.
 
+Run `base-p3`: six `tricks_open` refusals in a row; each time the agent wrote another
+"the module exists" test (`assert MultiReporter is not None`), `verify` said it does not
+count, and the harness put back its best version -- whose three no-assertion tests the next
+refusal listed again. `compare` was never called, and the coverage loop -- where the seed
+came in during p2 -- never started. The run ended on `assert MultiReporter is not None`
+alone, scored YES at 0% and 0 of 20 mutants: the end-of-run choice compared covered lines
+only (0 against 0) and kept it, though a version with a real flip existed. Iteration 4:
+
+- A `tricks_open` refusal also seeds the measured repository test (no need for a blank
+  coverage turn first), so the agent is handed a working call to extend, not only a "no".
+  The seed message points to `compare` for the values to assert.
+- The end-of-run choice: a last file whose flips are all `trick_tests` loses to the best
+  version with a real flip (`real_flips`); `result.json` records the handed-in file's
+  `trick_tests` and `real_flips`.
+
 Everything the agent is told about how this repository tests comes from one place.
 `repo_facts(box, test_file)` in `runners` reads the checkout directly — runner, target
 directory, the project's own pytest configuration verbatim, and the names of

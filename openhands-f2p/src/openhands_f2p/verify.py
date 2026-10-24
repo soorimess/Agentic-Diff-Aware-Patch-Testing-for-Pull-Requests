@@ -1342,6 +1342,14 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
     return out
 
 
+def real_flips(verdict, text: str | None) -> list[str]:
+    """The tests that flip in `verdict` and are not `trick_tests` of `text`: a file scored
+    YES on these only is fail-to-pass on tests that check what the change does."""
+    tricks = trick_tests(text)
+    return [n for n in (getattr(verdict, "f2p_nodes", None) or [])
+            if n.split("::")[-1].split("[")[0] not in tricks]
+
+
 def trick_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
     """Refuse the stop while the file `verify` last checked holds tests that check nothing
     (`trick_tests`), when that file is still the one on disk."""
