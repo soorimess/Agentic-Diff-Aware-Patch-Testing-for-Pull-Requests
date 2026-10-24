@@ -1355,6 +1355,10 @@ TestForge" -- change the methods). Built:
   "in `test_x`, `f(...)` returned `B` instead of `A`" -- and asks whether a reviewer would
   call that behaviour part of the change before asserting it (the briefing's "do not encode
   bugs"). Survivors with no difference the tests can see are counted, not listed.
+  Recorded values are made comparable across processes first: memory addresses
+  (` at 0x…`) are dropped and sets are printed sorted, since string hashing changes from
+  one run to the next; without that, every wrong version "differed" in
+  `_optik_option_attrs`.
 - The trace section lists calls that return something first and says to prefer public
   results over private attributes (`_name`), which another correct implementation may not
   have.

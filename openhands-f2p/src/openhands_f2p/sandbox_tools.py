@@ -1378,7 +1378,8 @@ def _trace_diff(fix: list, wrong: list, limit: int = 2) -> list[str]:
     said = []
     for k, r in a.items():
         test = (r.get("test") or "?").split("::")[-1]
-        call = f"`{r['func']}({', '.join(f'{x}={v}' for x, v in (r.get('args') or {}).items())})`"
+        args = ", ".join(f"{x}={v}" for x, v in (r.get("args") or {}).items())
+        call = f"`{r['func']}({args if len(args) <= 80 else args[:80] + '...'})`"
         w = b.get(k)
         if w is None:
             said.append(f"in `{test}`, {call} never ran")
@@ -1582,7 +1583,7 @@ def pytest_sessionfinish(session, exitstatus):
 # ran, the arguments, the return value and the attributes it set on `self`, so the answer
 # can say "`PyLinter._load_reporters()` set `self.reporter = MultiReporter(...)`".
 TRACE_PLUGIN = r'''"""Records what the changed functions did during each test (F2P harness)."""
-import json, os, sys
+import json, os, re, sys
 try:
     import pytest
 except Exception:  # pragma: no cover
@@ -1596,10 +1597,20 @@ _REC, _CUR, _SEEN, _STACK = [], {"test": None}, {}, {}
 
 
 def _short(v, depth=0):
+    # Memory addresses differ from run to run; without this, the same call under the fix
+    # and under a wrong version read as two different calls.
+    return re.sub(r" at 0x[0-9a-fA-F]+", "", _short_raw(v, depth))
+
+
+def _short_raw(v, depth=0):
     try:
-        if isinstance(v, (list, tuple, set)) and depth < 2:
+        if isinstance(v, (set, frozenset)) and depth < 2:
+            # hash order changes between processes; sorted, the same set reads the same
+            items = sorted(_short(x, depth + 1) for x in v)[:5]
+            return ("{" + ", ".join(items) + (", ..." if len(v) > 5 else "") + "}")[:240]
+        if isinstance(v, (list, tuple)) and depth < 2:
             items = [_short(x, depth + 1) for x in list(v)[:5]]
-            o, c = ("[", "]") if isinstance(v, list) else ("(", ")") if isinstance(v, tuple) else ("{", "}")
+            o, c = ("[", "]") if isinstance(v, list) else ("(", ")")
             return (o + ", ".join(items) + (", ..." if len(v) > 5 else "") + c)[:240]
         if isinstance(v, dict) and depth < 2:
             items = [f"{k!r}: {_short(x, depth + 1)}" for k, x in list(v.items())[:5]]
