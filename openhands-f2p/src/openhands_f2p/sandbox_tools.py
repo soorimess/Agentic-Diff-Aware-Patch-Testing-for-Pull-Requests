@@ -2591,7 +2591,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     + " A test like that passes on any version of the change, right or wrong, so it "
                       "tests nothing. Call the changed code with real input and assert on what it "
                       "returns, writes or raises -- the exact value, the output, the exception and "
-                      "its message -- with no `try`/`except` around it.")
+                      "its message -- with no `try`/`except` around it."
+                    + V.asserting_helpers(self.box.read(action.target.split("::")[0]) or ""))
         elif inverted and not flipped:
             # The others that still fail are named too: requests-1142 (no-second-chance-
             # no-require-tools) had one failing on both sides beside the backwards one,
@@ -2735,7 +2736,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                         + ". Make each one assert on what the changed code returns, writes or "
                           "raises, with no `try`/`except` around it, or delete it -- `compare` "
                           "shows the exact values the changed code gives, to assert. You cannot "
-                          "finish while they are in the file."))
+                          "finish while they are in the file.")
+                     + V.asserting_helpers(self.box.read(action.target.split("::")[0]) or ""))
         # The file as it stood when `verify` said fail-to-pass, kept for the record only:
         # `f2p_history` in the result says whether the test the agent finally handed in
         # is still that one, or it edited a passing test into a failing one afterwards.

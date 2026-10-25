@@ -1315,6 +1315,30 @@ def _exit_only(call) -> bool:
             and isinstance(call.args[0], _ast.Name) and call.args[0].id == "SystemExit")
 
 
+def asserting_helpers(text: str | None, limit: int = 3) -> str:
+    """The helpers in the test file that assert themselves, as a sentence (2026-10-26):
+    mut-p16 never used the seed's `_runtest(args, code=...)` -- the helper that asserts the
+    exact exit status, which mut-p12/p13 built on -- and ended on `except SystemExit:
+    pass` tricks. Empty when there are none."""
+    import ast as _ast
+    try:
+        tree = _ast.parse(text or "")
+    except SyntaxError:
+        return ""
+    got = []
+    for f in _ast.walk(tree):
+        if isinstance(f, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and not f.name.startswith("test"):
+            a = next((n for n in _ast.walk(f) if isinstance(n, _ast.Assert)), None)
+            if a is not None:
+                args = ", ".join(x.arg for x in f.args.args if x.arg not in ("self", "cls"))
+                got.append(f"`{f.name}({args})` (line {f.lineno}, it asserts `{_ast.unparse(a.test)[:60]}`)")
+    if not got:
+        return ""
+    return ("\n\nThis file already has helpers that check a result: " + "; ".join(got[:limit])
+            + ". Call one with the value the change gives -- that is a check; catching the "
+              "error or the exit and passing is not.")
+
+
 def trick_tests(text: str | None) -> dict[str, list[str]]:
     """For each test that checks nothing about what the code does, why: an `except` that
     throws the error away, no assertion at all, or assertions that only check that names
@@ -1390,6 +1414,12 @@ def real_flips(verdict, text: str | None) -> list[str]:
             if n.split("::")[-1].split("[")[0] not in tricks]
 
 
+def _last_text(tool_log: list, i: int, rel: str) -> str:
+    """The test file as the `verify` at `i` checked it, when the log kept it."""
+    e = tool_log[i]
+    return e.get("f2p_test") or e.get("measured_text") or ""
+
+
 def trick_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
     """Refuse the stop while the file `verify` last checked holds tests that check nothing
     (`trick_tests`), when that file is still the one on disk."""
@@ -1414,7 +1444,8 @@ def trick_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
             "object they return or build (`print(type(x).__name__, vars(x))`, and the same for "
             "the objects inside it), the contents of any file they write, the text they print. "
             "`compare` shows that before the change and with it applied; assert what it shows "
-            "after. A test you cannot make check something, delete. Then call `verify` again.")
+            "after. A test you cannot make check something, delete. Then call `verify` again."
+            + asserting_helpers(_last_text(tool_log, i, rel)))
 
 
 def unread_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
