@@ -1272,6 +1272,10 @@ def _existence_only(expr) -> bool:
         return True                                   # assert Thing
     if isinstance(expr, _ast.Call) and isinstance(expr.func, _ast.Name):
         return expr.func.id in _EXISTENCE_CALLS
+    # A file that exists, not what it holds (mut-p14: `assert os.path.exists(json_file)`).
+    if isinstance(expr, _ast.Call) and isinstance(expr.func, _ast.Attribute) and \
+            expr.func.attr in ("exists", "isfile", "isdir", "is_file", "is_dir"):
+        return True
     if isinstance(expr, _ast.Compare) and len(expr.ops) == 1:
         op, right = expr.ops[0], expr.comparators[0]
         if isinstance(op, (_ast.IsNot, _ast.Is)) and isinstance(right, _ast.Constant) and right.value is None:
@@ -1291,7 +1295,7 @@ def _existence_only(expr) -> bool:
         sized = isinstance(left, _ast.Call) and isinstance(left.func, _ast.Name) and left.func.id == "len"
         if sized and isinstance(right, _ast.Constant) and right.value in (0, 1) and \
                 isinstance(op, (_ast.Gt, _ast.GtE, _ast.NotEq)):
-            return True                               # assert len(x) > 0
+            return True                               # assert len(x) > 0, len(x) >= 0
         if isinstance(op, _ast.NotEq) and isinstance(right, (_ast.Constant, _ast.List, _ast.Dict, _ast.Tuple)) \
                 and (getattr(right, "value", None) in ("", 0, None) or not getattr(right, "elts", getattr(right, "keys", [1]))):
             return True                               # assert x != "" / != []

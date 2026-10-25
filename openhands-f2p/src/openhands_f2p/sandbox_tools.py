@@ -1709,7 +1709,10 @@ _REC, _CUR, _SEEN, _STACK = [], {"test": None}, {}, {}
 
 import tempfile
 _BASES = "|".join(re.escape(b) for b in sorted({tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())}, key=len, reverse=True))
-_TMP = re.compile(rf"(?:{_BASES})/(?:pytest-of-[^/\s'\"]+/pytest-\d+|tmp[\w-]+)")
+_TMP = re.compile(rf"(?:{_BASES})/(?:pytest-of-[^/\s'\"]+/pytest-\d+|tmp[\w-]+)"
+                  # and a bare `tempfile` name -- the module pylint names after a
+                  # NamedTemporaryFile, `tmp9yztff7a` (mut-p14: every wrong version "never ran")
+                  rf"|\btmp[a-z0-9_]{{8}}\b")
 
 
 def _short(v, depth=0):
