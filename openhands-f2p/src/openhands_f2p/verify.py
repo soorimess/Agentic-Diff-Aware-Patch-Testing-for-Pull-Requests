@@ -1413,6 +1413,26 @@ def trick_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
             "after. A test you cannot make check something, delete. Then call `verify` again.")
 
 
+def unread_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
+    """Refuse the stop while the last `verify` of the file on disk found output the changed
+    code wrote in a flipping test that the test never reads back (`unread_outputs`)."""
+    got = _last(tool_log, "verify", rel)
+    if got is None:
+        return None
+    i, e = got
+    unread = e.get("unread") or []
+    if not unread or wrote_test_after(tool_log, i, rel):
+        return None
+    lines = [f"* `{u['test']}` made the code write `{u['file']}` ({u['size']} bytes): `{u['content']}`"
+             for u in unread]
+    return ("outputs_unread",
+            f"`{rel}` runs the change and never looks at what it wrote:\n\n" + "\n".join(lines)
+            + "\n\nAn exit code or the absence of an error is true of a version of the change "
+              "that writes that file empty or wrong. Give the run a path under `tmp_path`, read "
+              "the file back (`json.load(open(path))`, `path.read_text()`) and assert what it "
+              "holds -- the entries and their fields, the lines of text. Then call `verify` again.")
+
+
 def swallow_note(test_text: str | None) -> str:
     """A note when the test catches every exception and ignores it, naming the lines."""
     lines = [test_text.count("\n", 0, m.start()) + 1

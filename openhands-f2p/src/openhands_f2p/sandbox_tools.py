@@ -1071,6 +1071,35 @@ def _shared_words(source: str, diff_words: set[str]) -> int:
     return len(_words(source) & diff_words)
 
 
+# Reading a file back: `open(...)` without a write mode, `.read()`, `read_text()`,
+# `json.load(...)`, `readlines()`.
+_READS = re.compile(r"\.read(?:lines)?\(|read_text\(|read_bytes\(|json\.load\(|\bopen\((?![^)\n]*['\"][wax]b?['\"])")
+
+
+def unread_outputs(rows: list, text: str, flipped: list[str], limit: int = 3) -> list[dict]:
+    """Files the changed code wrote during a flipping test that the test never reads back
+    (2026-10-25): pylint-4492 (mut-p12) ran `-f json:output.json` and `-f json,text` with an
+    exact exit code and never opened the file; the judge: "treats exit status as proof of
+    output behaviour". Read off the trace's `wrote` rows and the test function's source."""
+    names = {n.split("::")[-1].split("[")[0] for n in flipped}
+    out, seen = [], set()
+    for r in rows or []:
+        if r.get("func") != "wrote":
+            continue
+        test = (r.get("test") or "").split("::")[-1].split("[")[0]
+        file = (r.get("args") or {}).get("file", "")
+        if test not in names or (test, file) in seen or any(
+                s in file for s in (".pytest_cache", "__pycache__", ".coverage", "f2p_")):
+            continue
+        seen.add((test, file))
+        if _READS.search(_test_source(text, test)):
+            continue
+        out.append({"test": test, "file": file, "size": r.get("size"), "content": str(r.get("ret"))[:300]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
     """Before the agent starts (2026-10-24, user: useful tests): the repository test that
     runs the most changed lines, with the change applied, copied into the agent's test
@@ -1698,15 +1727,18 @@ _REAL_OPEN = builtins.open
 _WROTE, _OPEN = {}, []
 
 
-def _wrote(path):
+def _wrote(path, test=None):
+    # `test`: the test that opened the file -- pylint's output file is closed by garbage
+    # collection, often while the next test runs, and was put down to that one.
+    test = test or _CUR["test"]
     try:
-        if _CUR["test"] is None or any(s in path for s in ("site-packages", "__pycache__", ".coverage")):
+        if test is None or any(s in path for s in ("site-packages", "__pycache__", ".coverage")):
             return
         with _REAL_OPEN(path, errors="replace") as f:
             text = f.read(600)
         text = (os.path.getsize(path), text)
         name = _TMP.sub("<tmp>", os.path.relpath(path) if not os.path.isabs(path) or path.startswith(os.getcwd()) else path)
-        _WROTE[(_CUR["test"], name)] = text
+        _WROTE[(test, name)] = text
     except Exception:
         pass
 
@@ -1715,6 +1747,7 @@ class _Watched:
     def __init__(self, f, path):
         object.__setattr__(self, "_f", f)
         object.__setattr__(self, "_p", path)
+        object.__setattr__(self, "_t", _CUR["test"])
 
     def __getattr__(self, n):
         return getattr(self._f, n)
@@ -1731,17 +1764,29 @@ class _Watched:
 
     def __exit__(self, *a):
         r = self._f.__exit__(*a)
-        _wrote(self._p)
+        _wrote(self._p, self._t)
         return r
 
     def close(self):
         self._f.close()
-        _wrote(self._p)
+        _wrote(self._p, self._t)
+
+
+_STDLIB = os.path.dirname(os.__file__)
+
+
+def _by_test():
+    # The first frame outside the standard library: when it is the test file itself, the
+    # test is writing its own input (a module to lint), not the code under test its output.
+    f = sys._getframe(2)
+    while f is not None and f.f_code.co_filename.startswith(_STDLIB):
+        f = f.f_back
+    return f is not None and os.path.abspath(f.f_code.co_filename) == _CUR.get("file")
 
 
 def _open(file, mode="r", *args, **kwargs):
     f = _REAL_OPEN(file, mode, *args, **kwargs)
-    if isinstance(file, (str, bytes, os.PathLike)) and any(c in mode for c in "wax"):
+    if isinstance(file, (str, bytes, os.PathLike)) and any(c in mode for c in "wax") and not _by_test():
         try:
             w = _Watched(f, os.fsdecode(file))
             _OPEN.append(w)
@@ -1809,6 +1854,7 @@ if pytest is not None:
     @pytest.hookimpl(hookwrapper=True)
     def pytest_runtest_call(item):
         _CUR["test"] = item.nodeid
+        _CUR["file"] = os.path.abspath(str(item.fspath))
         old = sys.getprofile()
         sys.setprofile(_prof)
         builtins.open = io.open = _open
@@ -1823,7 +1869,7 @@ if pytest is not None:
                 try:
                     if not w._f.closed:
                         w._f.flush()
-                        _wrote(w._p)
+                        _wrote(w._p, w._t)
                 except Exception:
                     pass
             del _OPEN[:]
@@ -2638,6 +2684,20 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                                    watched=json.loads(self.box.read(f"{CATCH_DIR}/trace_spec.json") or "[]"))
             except ValueError:
                 pass
+        # Output the code wrote in a flipping test that the test never reads back.
+        if ok and fix_trace:
+            unread = unread_outputs(fix_trace, self.box.read(action.target.split("::")[0]) or "",
+                                    flipped)
+            if unread:
+                self.log[-1]["unread"] = unread
+                head += ("\n\n## Output your tests never read\n\n"
+                         + "\n".join(f"* `{u['test']}` made the changed code write `{u['file']}` "
+                                      f"({u['size']} bytes): `{u['content']}`" for u in unread)
+                         + "\n\nThat file is what the change produces, and the test passes "
+                           "whatever is in it -- an exit code or \"no error\" is true of a version "
+                           "that writes it empty or wrong. Read it back in the test (give the "
+                           "run a path under `tmp_path`, then `json.load`/`read_text` it) and "
+                           "assert what it holds: the entries, their fields, the text.")
         # The tests that do not count, said with every answer while there are any.
         if tricks and not only_tricks:
             unchecked = len((cov or {}).get("unchecked") or [])

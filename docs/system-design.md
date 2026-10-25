@@ -1400,6 +1400,17 @@ TestForge" -- change the methods). Built:
   leaves it empty now shows as "the file `output.json` held `''` instead of ...". On
   pylint-4492 the agent's tests had run the feature end to end for rounds without ever
   asserting what it wrote; the trace could not see files either.
+- Output written and never read (2026-10-25): mut-p12 ran pylint with `-f json:output.json`
+  and `-f json,text`, asserted the exact exit code, and never opened the file (89.1%, mutmut
+  15/20 like the developer's; the judge: "treats exit status as proof of output behaviour").
+  `unread_outputs` reads the trace's `wrote` rows for each flipping test and the test's own
+  source: a file the changed code wrote that the test never reads back (`open` without a
+  write mode, `.read()`, `read_text`, `json.load`) is named in `verify` ("Output your tests
+  never read", with its content) and refused at the stop (`unread_gap`, reason
+  `outputs_unread`, at most twice so it cannot refuse a run into a NO). Writes the test
+  makes itself (its input files) are not recorded: the first frame outside the standard
+  library is the test file. A write is put down to the test that opened the file, not the
+  one running when garbage collection closes it.
 - A test failing on both sides is told the line it fails at and pytest's `where` values
   (`where 0 = len([])`), and, when the new side ends in `SystemExit`, that this is how the
   program finishes: catch it and assert its code and what the run wrote.

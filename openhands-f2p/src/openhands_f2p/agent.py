@@ -745,6 +745,11 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                          # Tests that check nothing (2026-10-24, user): refused before the
                          # coverage loop, whose lines they would otherwise make.
                          or V.trick_gap(tool_log, rel)
+                         # Output written and never read back (2026-10-25): asked at most
+                         # twice, so a test that cannot read it is not refused into a NO.
+                         or (V.unread_gap(tool_log, rel)
+                             if sum("outputs_unread" in (m.get("reason") or "") for m in injected) < 2
+                             else None)
                          or V.duty_gap(tool_log, instruments(features), rel,
                                        refused=_first_refusals(injected),
                                        last_refused=_last_refusals(injected),
