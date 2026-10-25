@@ -1734,9 +1734,12 @@ def _wrote(path, test=None):
     try:
         if test is None or any(s in path for s in ("site-packages", "__pycache__", ".coverage")):
             return
+        # Temporary directories inside the content too (pylint's JSON names the linted
+        # file by its path): measured after that, or the same output under the fix and a
+        # wrong version read "578 bytes instead of 578" (mut-p13).
         with _REAL_OPEN(path, errors="replace") as f:
-            text = f.read(600)
-        text = (os.path.getsize(path), text)
+            whole = _TMP.sub("<tmp>", f.read(1 << 20))
+        text = (len(whole), whole[:600])
         name = _TMP.sub("<tmp>", os.path.relpath(path) if not os.path.isabs(path) or path.startswith(os.getcwd()) else path)
         _WROTE[(test, name)] = text
     except Exception:
