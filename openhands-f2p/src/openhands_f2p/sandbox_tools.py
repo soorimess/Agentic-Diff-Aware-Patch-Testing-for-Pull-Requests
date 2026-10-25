@@ -1730,9 +1730,11 @@ _REAL_OPEN = builtins.open
 _WROTE, _OPEN = {}, []
 
 
-def _wrote(path, test=None):
+def _wrote(path, test=None, copy=None):
     # `test`: the test that opened the file -- pylint's output file is closed by garbage
     # collection, often while the next test runs, and was put down to that one.
+    # `copy`: what was written through the file object, for a file the test deleted
+    # before it ended (mut-p15 unlinked its JSON and text outputs: nothing was recorded).
     test = test or _CUR["test"]
     try:
         if test is None or any(s in path for s in ("site-packages", "__pycache__", ".coverage")):
@@ -1740,8 +1742,14 @@ def _wrote(path, test=None):
         # Temporary directories inside the content too (pylint's JSON names the linted
         # file by its path): measured after that, or the same output under the fix and a
         # wrong version read "578 bytes instead of 578" (mut-p13).
-        with _REAL_OPEN(path, errors="replace") as f:
-            whole = _TMP.sub("<tmp>", f.read(1 << 20))
+        if os.path.exists(path):
+            with _REAL_OPEN(path, errors="replace") as f:
+                whole = f.read(1 << 20)
+        elif copy is not None:
+            whole = "".join(x if isinstance(x, str) else x.decode("utf-8", "replace") for x in copy)
+        else:
+            return
+        whole = _TMP.sub("<tmp>", whole)
         text = (len(whole), whole[:600])
         name = _TMP.sub("<tmp>", os.path.relpath(path) if not os.path.isabs(path) or path.startswith(os.getcwd()) else path)
         _WROTE[(test, name)] = text
@@ -1754,6 +1762,16 @@ class _Watched:
         object.__setattr__(self, "_f", f)
         object.__setattr__(self, "_p", path)
         object.__setattr__(self, "_t", _CUR["test"])
+        object.__setattr__(self, "_c", [])
+
+    def write(self, s):
+        if sum(len(x) for x in self._c) < (1 << 20):
+            self._c.append(s)
+        return self._f.write(s)
+
+    def writelines(self, lines):
+        for s in lines:
+            self.write(s)
 
     def __getattr__(self, n):
         return getattr(self._f, n)
@@ -1770,12 +1788,12 @@ class _Watched:
 
     def __exit__(self, *a):
         r = self._f.__exit__(*a)
-        _wrote(self._p, self._t)
+        _wrote(self._p, self._t, self._c)
         return r
 
     def close(self):
         self._f.close()
-        _wrote(self._p, self._t)
+        _wrote(self._p, self._t, self._c)
 
 
 _STDLIB = os.path.dirname(os.__file__)
@@ -1875,7 +1893,7 @@ if pytest is not None:
                 try:
                     if not w._f.closed:
                         w._f.flush()
-                        _wrote(w._p, w._t)
+                        _wrote(w._p, w._t, w._c)
                 except Exception:
                     pass
             del _OPEN[:]
