@@ -189,6 +189,12 @@ applies to SWE-bench as well:
   after is the test's own mistake; when they match, that the change does not touch what
   fails (`sandbox_tools._why_both`). SciPy 22549 failed at base on the missing `workers`
   keyword and after on its own `hess=None`, and ran `verify` ten more times unchanged.
+  When the failure after the change is only the expected value (`assert 4 == 0` on a line
+  `assert pylint_code == 0`), it names the value the code gave and says to put it on that
+  line and keep the input as it is (`_one_value`, 2026-10-26). pylint 4492 (mut-p23) had the
+  right test on its first try -- the multi-reporter input failed before the change on the
+  ImportError the change removes -- dropped that input on "fix that and keep the rest",
+  and never flipped a real test in 25 more `verify` calls.
 - **The goal prompt says to simulate a situation the container lacks** -- a missing
   optional package, another library version -- for example with `monkeypatch`
   (2026-10-12). pandas 60196 (jinja2 missing) and Qiskit 13251 (another symengine

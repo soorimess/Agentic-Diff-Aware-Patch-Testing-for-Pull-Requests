@@ -255,12 +255,36 @@ def _why_both(before: str, after: str, nodes: list[str]) -> str:
                         + ". The first can be the right failure -- what the change "
                         "fixes; the second is a mistake in the test itself: fix that and "
                         "keep the rest.")
+            one = _one_value(a, at)
+            if one:
+                said.append(one)
             if a.startswith("SystemExit"):
                 said.append(f"With the change applied the code still ends by raising `{a}` "
                             f"-- that is how it finishes, not an error: catch it with "
                             f"`pytest.raises(SystemExit)` and assert its code and what the "
                             f"run wrote.")
     return (" " + " ".join(said)) if said else ""
+
+
+_LITERAL = r"-?\d+(?:\.\d+)?|'[^']*'|\"[^\"]*\"|True|False|None"
+
+
+def _one_value(err: str, at: tuple[int, str] | None) -> str:
+    """When the test fails after the change only on the value it expects: name that value.
+
+    pylint-4492 (mut-p23, 2026-10-26) ran pylint with `--output-format=json:...,text:...`,
+    failed before the change on the ImportError the change removes and after it on
+    `assert 4 == 0` (`assert pylint_code == 0`; 4 = a warning was issued). Told "fix that and
+    keep the rest", it dropped the new input instead and never flipped a test again.
+    """
+    m = re.fullmatch(rf"(?:AssertionError: )?assert ({_LITERAL}) == ({_LITERAL})", err.strip())
+    s = re.fullmatch(rf"assert (.+?) == ({_LITERAL})(?:, .*)?", at[1].strip()) if at else None
+    if not (m and s and m.group(2) == s.group(2)) or m.group(1) == m.group(2):
+        return ""
+    return (f"With the change applied `{s.group(1)}` is `{m.group(1)}`, where line {at[0]} "
+            f"expects `{s.group(2)}`. If `{m.group(1)}` is the right result for this input, "
+            f"put `{m.group(1)}` on line {at[0]} and change nothing else: the input is what "
+            f"makes the test fail before the change, so keep it exactly as it is.")
 
 
 def _where(output: str, node: str) -> list[str]:
