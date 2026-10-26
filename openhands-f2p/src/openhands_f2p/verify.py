@@ -1339,6 +1339,25 @@ def asserting_helpers(text: str | None, limit: int = 3) -> str:
               "error or the exit and passing is not.")
 
 
+def _private_only(expr) -> bool:
+    """Whether an assertion reads only private attributes (`obj._name`, not dunders) besides
+    constants (2026-10-26): pylint-4492 runs that flipped on `linter._reporter_names == "..."`
+    (p10, p16, p19, p20) scored 27-53%, never ran pylint, and the judge called them
+    implementation detail; the user's mutation briefing: a test on private attributes
+    rejects other correct implementations."""
+    import ast as _ast
+    names = [n for n in _ast.walk(expr) if isinstance(n, (_ast.Attribute, _ast.Name, _ast.Call))]
+    private = [n for n in names if isinstance(n, _ast.Attribute) and n.attr.startswith("_")
+               and not n.attr.startswith("__")]
+    if not private:
+        return False
+    # every attribute read on the way is private, or the object it is read from
+    attrs = [n for n in _ast.walk(expr) if isinstance(n, _ast.Attribute)]
+    calls = [n for n in _ast.walk(expr) if isinstance(n, _ast.Call)
+             and not (isinstance(n.func, _ast.Name) and n.func.id in ("isinstance", "len", "str", "type"))]
+    return not calls and all(a.attr.startswith("_") for a in attrs)
+
+
 def trick_tests(text: str | None) -> dict[str, list[str]]:
     """For each test that checks nothing about what the code does, why: an `except` that
     throws the error away, no assertion at all, or assertions that only check that names
@@ -1395,6 +1414,14 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                        f"code above it did not crash, not what it did")
         elif not asserts and not helpers:
             why.append("it asserts nothing: it runs code and checks no result")
+        elif asserts and not helpers and all(_existence_only(a.test) or _private_only(a.test)
+                                             for a in asserts) \
+                and any(_private_only(a.test) for a in asserts):
+            why.append(f"its only assertions (line {', '.join(str(a.lineno) for a in asserts[:4])}) "
+                       f"read private attributes (`obj._name`) or check that names exist -- "
+                       f"implementation detail another correct version of the change may not "
+                       f"have, and nothing a user of the code sees. Assert what the code returns, "
+                       f"prints or writes when it is used")
         elif asserts and not helpers and all(_existence_only(a.test) for a in asserts):
             why.append(f"its only assertions (line {', '.join(str(a.lineno) for a in asserts[:4])}) "
                        f"check that names exist or that something came out -- `hasattr`, "
