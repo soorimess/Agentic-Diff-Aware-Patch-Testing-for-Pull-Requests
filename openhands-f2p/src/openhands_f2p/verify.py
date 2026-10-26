@@ -1286,6 +1286,13 @@ def _existence_only(expr) -> bool:
         # Any of several outcomes (2026-10-24): pylint-4492 (mut-p11) parsed the JSON its
         # run wrote, then asserted `isinstance(parsed, list)` and `pylint_code in [0, 1, 2]`
         # -- true of a right version and a wrong one alike.
+        # Or only what it is not (2026-10-27): pylint-4492 (mut-p24) flipped two tests whose
+        # only assertions were `pylint_code != 2` and `pylint_code != 1`.
+        if isinstance(op, _ast.NotEq) and isinstance(right, _ast.Constant):
+            return True                               # assert code != 2
+        if isinstance(op, _ast.NotIn) and isinstance(right, (_ast.List, _ast.Tuple, _ast.Set)) and \
+                all(isinstance(e, _ast.Constant) for e in right.elts):
+            return True                               # assert code not in (1, 2)
         if isinstance(op, _ast.In) and isinstance(right, (_ast.List, _ast.Tuple, _ast.Set)) and \
                 len(right.elts) >= 2 and all(isinstance(e, _ast.Constant) for e in right.elts):
             return True                               # assert code in [0, 1, 2]
@@ -1430,7 +1437,7 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
             why.append(f"its only assertions (line {', '.join(str(a.lineno) for a in asserts[:4])}) "
                        f"check that names exist or that something came out -- `hasattr`, "
                        f"`is not None`, `isinstance`, a bare name, `len(...) > 0`, one of "
-                       f"several values (`x in [0, 1, 2]`) -- not what it is, which any "
+                       f"several values (`x in [0, 1, 2]`), what it is not (`x != 2`) -- not what it is, which any "
                        f"version of the change passes, right or wrong")
         if why:
             out[fn.name] = why

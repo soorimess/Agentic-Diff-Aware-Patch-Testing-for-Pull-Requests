@@ -1417,6 +1417,15 @@ TestForge" -- change the methods). Built:
   makes itself (its input files) are not recorded: the first frame outside the standard
   library is the test file. A write is put down to the test that opened the file, not the
   one running when garbage collection closes it.
+  Files under a hidden directory (`/root/.pylint.d/*.stats`) or holding NUL bytes are the
+  tool's own cache, not output: left out of the trace and the unread list, and the files
+  the test names come first (mut-p24 was shown the stats pickle as its read-back example,
+  2026-10-27). For a file still open at the end, the class whose constructor took the
+  change's closer is named (`closer_holder`: "the run built a `MultiReporter` that holds
+  `close_output_files`").
+- An assertion only of what a value is not (`x != 2`, `x not in (1, 2)`) is existence-only
+  (2026-10-27): mut-p24 flipped two tests whose only checks were `pylint_code != 2` and
+  `!= 1`.
 - Rounds 14-22 on pylint-4492 (laptop, 2026-10-25/26), each fix from a trajectory:
   - The trace's file records gave false differences until temp paths inside the content and
     bare `tempfile` names (`tmp9yztff7a`) were normalised; a file the test deletes is kept

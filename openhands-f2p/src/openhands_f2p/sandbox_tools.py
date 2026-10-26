@@ -1124,12 +1124,43 @@ def read_back_example(u: dict) -> str:
         first = next((ln.strip() for ln in content.strip("'\"").split("\\n") if ln.strip()), "")[:50]
         check = f"assert {first!r} in out_file.read_text()" if first else "assert out_file.read_text() == ..."
         read = ""
+    holder = u.get("closer") or ""
     shut = (" The code had not closed this file when the test ended -- a read inside the test "
-            "sees it empty until the code closes it, so make the code close it first (its close "
-            "or cleanup call on the object that writes it)." if u.get("open") else "")
+            "sees it empty until the code closes it, so make the code close it first ("
+            + (f"the run built a `{holder.split('.')[0]}` that holds `{holder.split('.')[1]}`: get "
+               f"that object from what your test holds and call `.{holder.split('.')[1]}()` on it "
+               f"before the read)." if holder else
+               "its close or cleanup call on the object that writes it).") if u.get("open") else "")
     return (f"For example: `out_file = tmp_path / \"{name}\"`, pass `out_file` to the run where "
             f"it now writes `{u.get('file')}`, then " + (f"`{read}` and " if read else "")
             + f"`{check}` -- with the values the change really writes, shown above." + shut)
+
+
+def _closers(patch: str) -> list[str]:
+    """What the change adds for closing things (`close_output_files` on pylint-4492)."""
+    return sorted({c for c in re.findall(r"\b(\w*close\w*)\b", "\n".join(
+        ln[1:] for ln in (patch or "").splitlines() if ln.startswith("+") and not ln.startswith("+++")))
+        if c not in ("close", "closed")})[:2]
+
+
+def closer_holder(rows: list, patch: str) -> str:
+    """`MultiReporter.close_output_files`: the class whose constructor took or set one of the
+    change's closers in the trace, or "" (2026-10-27). pylint-4492 (mut-p24) was told nine
+    times to close the file "with its close or cleanup call" and never found which object
+    had it."""
+    for c in _closers(patch):
+        for r in rows or []:
+            func = r.get("func") or ""
+            if func.endswith(".__init__") and (c in (r.get("args") or {}) or c in (r.get("set") or {})):
+                return f"{func.rsplit('.', 2)[-2]}.{c}"
+    return ""
+
+
+def _tool_cache(file: str, content: str) -> bool:
+    """A file the tool keeps for itself, not its output (2026-10-27): pylint-4492 (mut-p24) was
+    told to read back `/root/.pylint.d/test_module1.stats`, a pickle, ahead of the
+    `output.json` its test asked for -- with the pickle's bytes as the example."""
+    return bool(re.search(r"/\.[^/<]+/", file)) or "\\x00" in content
 
 
 def unread_outputs(rows: list, text: str, flipped: list[str], limit: int = 3) -> list[dict]:
@@ -1148,13 +1179,16 @@ def unread_outputs(rows: list, text: str, flipped: list[str], limit: int = 3) ->
                 s in file for s in (".pytest_cache", "__pycache__", ".coverage", "f2p_")):
             continue
         seen.add((test, file))
+        content = str(r.get("ret"))
+        if _tool_cache(file, content):
+            continue
         if _READS.search(_test_source(text, test)):
             continue
-        out.append({"test": test, "file": file, "size": r.get("size"), "content": str(r.get("ret"))[:300],
+        out.append({"test": test, "file": file, "size": r.get("size"), "content": content[:300],
                     "open": bool(r.get("open"))})
-        if len(out) >= limit:
-            break
-    return out
+    # The files the test itself names first: the output it asked for.
+    out.sort(key=lambda u: Path(u["file"]).name not in _test_source(text, u["test"]))
+    return out[:limit]
 
 
 def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
@@ -2034,14 +2068,12 @@ def trace_said(rows: list, limit: int = 8, patch: str = "",
     # briefing, 2026-10-24: a test on implementation details rejects valid alternatives).
     # What the change adds for closing things (`close_output_files` on pylint-4492): named
     # beside a file that was still open when the test ended.
-    closers = sorted({c for c in re.findall(r"\b(\w*close\w*)\b", "\n".join(
-        ln[1:] for ln in (patch or "").splitlines() if ln.startswith("+") and not ln.startswith("+++")))
-        if c not in ("close", "closed")})[:2]
+    closers, holder = _closers(patch), closer_holder(rows, patch)
     rows = sorted(rows, key=lambda r: (r.get("func") != "wrote", r.get("ret") in (None, "None")))
     for r in rows:
         if r.get("func") == "wrote":
             file = (r.get("args") or {}).get("file", "?")
-            if ("wrote", file, r.get("ret")) in seen:
+            if ("wrote", file, r.get("ret")) in seen or _tool_cache(file, str(r.get("ret"))):
                 continue
             seen.add(("wrote", file, r.get("ret")))
             text = str(r.get("ret"))
@@ -2050,7 +2082,9 @@ def trace_said(rows: list, limit: int = 8, patch: str = "",
                         + (" -- STILL OPEN when the test ended: the code had not closed it, so a "
                            "read inside your test sees only what was flushed so far (often "
                            "nothing). Close it the way the code does -- its close or cleanup call"
-                           + (" (the change adds " + ", ".join(f"`{c}`" for c in closers) + ")"
+                           + (f" (the run built a `{holder.split('.')[0]}` that holds "
+                              f"`{holder.split('.')[1]}`: call it on that object)" if holder else
+                              " (the change adds " + ", ".join(f"`{c}`" for c in closers) + ")"
                               if closers else "")
                            + " -- before you read it" if r.get("open") else "")
                         + f" -- in `{(r.get('test') or '?').split('::')[-1]}`")
@@ -2810,6 +2844,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             unread = unread_outputs(fix_trace, self.box.read(action.target.split("::")[0]) or "",
                                     flipped)
             if unread:
+                holder = closer_holder(fix_trace, self.patch)
+                unread = [dict(u, closer=holder) if u.get("open") and holder else u for u in unread]
                 self.log[-1]["unread"] = unread
                 head += ("\n\n## Output your tests never read\n\n"
                          + "\n".join(f"* `{u['test']}` made the changed code write `{u['file']}` "
