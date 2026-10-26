@@ -1426,6 +1426,10 @@ TestForge" -- change the methods). Built:
 - An assertion only of what a value is not (`x != 2`, `x not in (1, 2)`) is existence-only
   (2026-10-27): mut-p24 flipped two tests whose only checks were `pylint_code != 2` and
   `!= 1`.
+- A `try` whose body only removes or closes things (`os.unlink`, `shutil.rmtree`, `.close()`),
+  or any `try` inside a `finally:`, is cleanup, not an `except: pass` trick (2026-10-27):
+  mut-p25 asserted `exc_info.value.code == 4` on the multi-format run and was refused 17
+  times for `try: os.unlink("output.json") except OSError: pass` in its `finally:`.
 - Rounds 14-22 on pylint-4492 (laptop, 2026-10-25/26), each fix from a trajectory:
   - The trace's file records gave false differences until temp paths inside the content and
     bare `tempfile` names (`tmp9yztff7a`) were normalised; a file the test deletes is kept

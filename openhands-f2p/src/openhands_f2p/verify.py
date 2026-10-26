@@ -1365,6 +1365,18 @@ def _private_only(expr) -> bool:
     return not calls and all(a.attr.startswith("_") for a in attrs)
 
 
+_CLEANUP = {"unlink", "remove", "rmtree", "rmdir", "removedirs", "close", "cleanup", "kill",
+            "terminate", "shutdown", "chdir"}
+
+
+def _cleanup_only(body: list) -> bool:
+    """Whether a `try` body only removes or closes things (`os.unlink(path)`)."""
+    import ast as _ast
+    return all(isinstance(b, _ast.Expr) and isinstance(b.value, _ast.Call) and (
+        getattr(b.value.func, "attr", None) or getattr(b.value.func, "id", "")) in _CLEANUP
+        for b in body)
+
+
 def trick_tests(text: str | None) -> dict[str, list[str]]:
     """For each test that checks nothing about what the code does, why: an `except` that
     throws the error away, no assertion at all, or assertions that only check that names
@@ -1384,8 +1396,13 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
         if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)) or not fn.name.startswith("test"):
             continue
         why = []
+        # Cleanup is not the code under test (2026-10-27): pylint-4492 (mut-p25) asserted
+        # `exc_info.value.code == 4` and was refused 23 times for the `try: os.unlink(
+        # "output.json") except OSError: pass` in its `finally:`.
+        in_finally = {id(t) for n in _ast.walk(fn) if isinstance(n, _ast.Try)
+                      for b in n.finalbody for t in _ast.walk(b) if isinstance(t, _ast.Try)}
         for node in _ast.walk(fn):
-            if isinstance(node, _ast.Try):
+            if isinstance(node, _ast.Try) and id(node) not in in_finally and not _cleanup_only(node.body):
                 for h in node.handlers:
                     if all(isinstance(b, _ast.Pass) or (isinstance(b, _ast.Expr) and isinstance(b.value, _ast.Constant))
                            for b in h.body):
