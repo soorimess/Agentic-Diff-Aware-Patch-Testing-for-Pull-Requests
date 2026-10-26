@@ -1100,9 +1100,12 @@ def read_back_example(u: dict) -> str:
         first = next((ln.strip() for ln in content.strip("'\"").split("\\n") if ln.strip()), "")[:50]
         check = f"assert {first!r} in out_file.read_text()" if first else "assert out_file.read_text() == ..."
         read = ""
+    shut = (" The code had not closed this file when the test ended -- a read inside the test "
+            "sees it empty until the code closes it, so make the code close it first (its close "
+            "or cleanup call on the object that writes it)." if u.get("open") else "")
     return (f"For example: `out_file = tmp_path / \"{name}\"`, pass `out_file` to the run where "
             f"it now writes `{u.get('file')}`, then " + (f"`{read}` and " if read else "")
-            + f"`{check}` -- with the values the change really writes, shown above.")
+            + f"`{check}` -- with the values the change really writes, shown above." + shut)
 
 
 def unread_outputs(rows: list, text: str, flipped: list[str], limit: int = 3) -> list[dict]:
@@ -1123,7 +1126,8 @@ def unread_outputs(rows: list, text: str, flipped: list[str], limit: int = 3) ->
         seen.add((test, file))
         if _READS.search(_test_source(text, test)):
             continue
-        out.append({"test": test, "file": file, "size": r.get("size"), "content": str(r.get("ret"))[:300]})
+        out.append({"test": test, "file": file, "size": r.get("size"), "content": str(r.get("ret"))[:300],
+                    "open": bool(r.get("open"))})
         if len(out) >= limit:
             break
     return out
@@ -1171,7 +1175,9 @@ def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
                 # many tests reach the same lines (every `Run(...)` test on pylint); the tie
                 # went to set order, a different seed each run -- the one that shares the
                 # change's words (output, reporter, ...) is the one worth building from
-                key = (n, writes and _reads_back(text, t), _shared_words(_test_source(text, t), diff_words), t)
+                # `writes and _reads_back(...)` was tried (mut-p18): the seed it chose asserts
+                # exact output through a helper, the agent never matched it and got no flip.
+                key = (n, _shared_words(_test_source(text, t), diff_words), t)
                 if best is None or key > best[4]:
                     best = (f, t, n, got.get("executable_changed_lines"), key)
     finally:
@@ -1763,7 +1769,7 @@ _REAL_OPEN = builtins.open
 _WROTE, _OPEN = {}, []
 
 
-def _wrote(path, test=None, copy=None):
+def _wrote(path, test=None, copy=None, still_open=False):
     # `test`: the test that opened the file -- pylint's output file is closed by garbage
     # collection, often while the next test runs, and was put down to that one.
     # `copy`: what was written through the file object, for a file the test deleted
@@ -1783,7 +1789,7 @@ def _wrote(path, test=None, copy=None):
         else:
             return
         whole = _TMP.sub("<tmp>", whole)
-        text = (len(whole), whole[:600])
+        text = (len(whole), whole[:600], still_open)
         name = _TMP.sub("<tmp>", os.path.relpath(path) if not os.path.isabs(path) or path.startswith(os.getcwd()) else path)
         _WROTE[(test, name)] = text
     except Exception:
@@ -1925,15 +1931,19 @@ if pytest is not None:
             for w in _OPEN:
                 try:
                     if not w._f.closed:
+                        # still open when the test ended: what a read inside the test saw is
+                        # only what had been flushed -- pylint's output file read back as ''
+                        # (mut-p18); flushed here so the record shows what it will hold
                         w._f.flush()
-                        _wrote(w._p, w._t, w._c)
+                        _wrote(w._p, w._t, w._c, still_open=True)
                 except Exception:
                     pass
             del _OPEN[:]
             for (test, name), text in list(_WROTE.items()):
                 if test == item.nodeid:
                     _REC.append({"test": test, "func": "wrote", "args": {"file": name},
-                                 "ret": repr(text[1]), "size": text[0], "set": {}})
+                                 "ret": repr(text[1]), "size": text[0], "set": {},
+                                 "open": bool(text[2])})
             _CUR["test"] = None
 
 
@@ -1980,6 +1990,11 @@ def trace_said(rows: list, limit: int = 8, patch: str = "",
     # Calls that return something first: a public result is the thing to assert; a private
     # attribute (`_name`) only when nothing public shows the change (the user's mutation
     # briefing, 2026-10-24: a test on implementation details rejects valid alternatives).
+    # What the change adds for closing things (`close_output_files` on pylint-4492): named
+    # beside a file that was still open when the test ended.
+    closers = sorted({c for c in re.findall(r"\b(\w*close\w*)\b", "\n".join(
+        ln[1:] for ln in (patch or "").splitlines() if ln.startswith("+") and not ln.startswith("+++")))
+        if c not in ("close", "closed")})[:2]
     rows = sorted(rows, key=lambda r: (r.get("func") != "wrote", r.get("ret") in (None, "None")))
     for r in rows:
         if r.get("func") == "wrote":
@@ -1990,7 +2005,13 @@ def trace_said(rows: list, limit: int = 8, patch: str = "",
             text = str(r.get("ret"))
             said.append(f"* the run wrote the file `{file}` ({r.get('size', '?')} bytes): "
                         f"`{text if len(text) <= 300 else text[:300] + '...'}`"
-                        f" -- in `{(r.get('test') or '?').split('::')[-1]}`")
+                        + (" -- STILL OPEN when the test ended: the code had not closed it, so a "
+                           "read inside your test sees only what was flushed so far (often "
+                           "nothing). Close it the way the code does -- its close or cleanup call"
+                           + (" (the change adds " + ", ".join(f"`{c}`" for c in closers) + ")"
+                              if closers else "")
+                           + " -- before you read it" if r.get("open") else "")
+                        + f" -- in `{(r.get('test') or '?').split('::')[-1]}`")
             if len(said) >= limit:
                 break
             continue
