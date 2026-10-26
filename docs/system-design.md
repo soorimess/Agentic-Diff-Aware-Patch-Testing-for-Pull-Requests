@@ -1423,6 +1423,13 @@ TestForge" -- change the methods). Built:
   2026-10-27). For a file still open at the end, the class whose constructor took the
   change's closer is named (`closer_holder`: "the run built a `MultiReporter` that holds
   `close_output_files`").
+  When the test's run sits in `pytest.raises(SystemExit)`, the test never holds what the run
+  built, so it has nothing to close: `exit_entry` reads the callee's real signature in the
+  box and names its exit parameter ("`Run(args, reporter=None, exit=True, ...)`: `exit=False`
+  makes it return instead -- keep what it returns, reach the `MultiReporter` from it, close
+  it, then read the file"). mut-p26 was told the holder eleven times and wrote "the file
+  closing is complex to test" (2026-10-27). Checked by hand in the image:
+  `Run(..., exit=False).linter.reporter.close_output_files()` turns `''` into the JSON.
 - An assertion only of what a value is not (`x != 2`, `x not in (1, 2)`) is existence-only
   (2026-10-27): mut-p24 flipped two tests whose only checks were `pylint_code != 2` and
   `!= 1`.

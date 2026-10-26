@@ -1130,7 +1130,8 @@ def read_back_example(u: dict) -> str:
             + (f"the run built a `{holder.split('.')[0]}` that holds `{holder.split('.')[1]}`: get "
                f"that object from what your test holds and call `.{holder.split('.')[1]}()` on it "
                f"before the read)." if holder else
-               "its close or cleanup call on the object that writes it).") if u.get("open") else "")
+               "its close or cleanup call on the object that writes it).")
+            + str(u.get("reach") or "") if u.get("open") else "")
     return (f"For example: `out_file = tmp_path / \"{name}\"`, pass `out_file` to the run where "
             f"it now writes `{u.get('file')}`, then " + (f"`{read}` and " if read else "")
             + f"`{check}` -- with the values the change really writes, shown above." + shut)
@@ -1154,6 +1155,54 @@ def closer_holder(rows: list, patch: str) -> str:
             if func.endswith(".__init__") and (c in (r.get("args") or {}) or c in (r.get("set") or {})):
                 return f"{func.rsplit('.', 2)[-2]}.{c}"
     return ""
+
+
+def exit_entry(box: Sandbox, text: str, holder: str) -> str:
+    """How to keep the object that must be closed, when the test's run ends in `SystemExit`
+    (2026-10-27). pylint-4492 (mut-p26) was told eleven times that a `MultiReporter` holds
+    `close_output_files`, said "the file closing is complex to test", and dropped it: its
+    `Run(args)` sat in `pytest.raises(SystemExit)`, so the test never held the run.
+    `Run(..., exit=False)` returns it. The callee's real signature is read in the box."""
+    import ast as _ast
+    try:
+        tree = _ast.parse(text or "")
+    except SyntaxError:
+        return ""
+    imported = {}
+    for n in _ast.walk(tree):
+        if isinstance(n, _ast.ImportFrom) and n.module and not n.level:
+            for a in n.names:
+                imported[a.asname or a.name] = f"from {n.module} import {a.name}" + (f" as {a.asname}" if a.asname else "")
+    callee = ""
+    for w in _ast.walk(tree):
+        if not isinstance(w, _ast.With) or not any(
+                isinstance(i.context_expr, _ast.Call) and getattr(i.context_expr.func, "attr", "") == "raises"
+                and any(getattr(a, "id", "") == "SystemExit" for a in i.context_expr.args) for i in w.items):
+            continue
+        for c in (c for b in w.body for c in _ast.walk(b) if isinstance(c, _ast.Call)):
+            if isinstance(c.func, _ast.Name) and c.func.id in imported:
+                callee = c.func.id
+                break
+        if callee:
+            break
+    if not callee:
+        return ""
+    r = box.exec(f"python -c {shlex.quote(imported[callee] + '; import inspect; print(inspect.signature(' + callee + '))')}",
+                 timeout=60)
+    sig = (r.stdout or "").strip().splitlines()[-1:] if r.returncode == 0 else []
+    if not sig:
+        return ""
+    sig = re.sub(r"<[^<>]* at 0x[0-9a-f]+>", "...", f"{callee}{sig[0]}")[:200]
+    exits = re.findall(r"\b(\w*exit\w*)=", sig)
+    what = f"the `{holder.split('.')[0]}`" if holder else "the object that holds the file"
+    return (f" Your test gets nothing back to close it with: `{callee}(...)` ends by raising "
+            f"`SystemExit` inside `pytest.raises`, so what the run built is gone when the test "
+            f"reads. Its signature is `{sig}`"
+            + (f": `{exits[0]}=False` makes it return instead -- keep what it returns "
+               f"(`run = {callee}([...], {exits[0]}=False)`), reach {what} from it, close it, "
+               f"then read the file." if exits else
+               f": find a way to keep {what} (a parameter, or calling one level lower), close "
+               f"it, then read the file."))
 
 
 def _tool_cache(file: str, content: str) -> bool:
@@ -2845,7 +2894,9 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                                     flipped)
             if unread:
                 holder = closer_holder(fix_trace, self.patch)
-                unread = [dict(u, closer=holder) if u.get("open") and holder else u for u in unread]
+                reach = exit_entry(self.box, self.box.read(action.target.split("::")[0]) or "", holder) \
+                    if any(u.get("open") for u in unread) else ""
+                unread = [dict(u, closer=holder, reach=reach) if u.get("open") else u for u in unread]
                 self.log[-1]["unread"] = unread
                 head += ("\n\n## Output your tests never read\n\n"
                          + "\n".join(f"* `{u['test']}` made the changed code write `{u['file']}` "
