@@ -1430,6 +1430,13 @@ TestForge" -- change the methods). Built:
   it, then read the file"). mut-p26 was told the holder eleven times and wrote "the file
   closing is complex to test" (2026-10-27). Checked by hand in the image:
   `Run(..., exit=False).linter.reporter.close_output_files()` turns `''` into the JSON.
+  mut-p27 was told all that and never wrote `exit=False`. Now the trace plugin keeps the
+  instances of that entry point (`F2P_TRACE_ROOTS=Run`) while the test runs and, at its end,
+  walks their attributes to the object holding one of the change's closers
+  (`F2P_TRACE_CLOSERS`), recording a `reach` row (`linter.reporter`, `MultiReporter`,
+  `close_output_files`) for the same test as the open file. The message then gives the
+  lines whole: `run = Run([...], exit=False)`, `run.linter.reporter.close_output_files()`,
+  `data = json.loads(out_file.read_text())` (2026-10-27).
 - An assertion only of what a value is not (`x != 2`, `x not in (1, 2)`) is existence-only
   (2026-10-27): mut-p24 flipped two tests whose only checks were `pylint_code != 2` and
   `!= 1`.

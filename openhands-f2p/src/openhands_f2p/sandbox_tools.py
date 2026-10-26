@@ -1157,23 +1157,19 @@ def closer_holder(rows: list, patch: str) -> str:
     return ""
 
 
-def exit_entry(box: Sandbox, text: str, holder: str) -> str:
-    """How to keep the object that must be closed, when the test's run ends in `SystemExit`
-    (2026-10-27). pylint-4492 (mut-p26) was told eleven times that a `MultiReporter` holds
-    `close_output_files`, said "the file closing is complex to test", and dropped it: its
-    `Run(args)` sat in `pytest.raises(SystemExit)`, so the test never held the run.
-    `Run(..., exit=False)` returns it. The callee's real signature is read in the box."""
+def exit_callee(text: str) -> tuple[str, str]:
+    """The imported name a test calls inside `pytest.raises(SystemExit)` (`Run`), with the
+    import line that binds it; ("", "") when there is none."""
     import ast as _ast
     try:
         tree = _ast.parse(text or "")
     except SyntaxError:
-        return ""
+        return "", ""
     imported = {}
     for n in _ast.walk(tree):
         if isinstance(n, _ast.ImportFrom) and n.module and not n.level:
             for a in n.names:
                 imported[a.asname or a.name] = f"from {n.module} import {a.name}" + (f" as {a.asname}" if a.asname else "")
-    callee = ""
     for w in _ast.walk(tree):
         if not isinstance(w, _ast.With) or not any(
                 isinstance(i.context_expr, _ast.Call) and getattr(i.context_expr.func, "attr", "") == "raises"
@@ -1181,13 +1177,22 @@ def exit_entry(box: Sandbox, text: str, holder: str) -> str:
             continue
         for c in (c for b in w.body for c in _ast.walk(b) if isinstance(c, _ast.Call)):
             if isinstance(c.func, _ast.Name) and c.func.id in imported:
-                callee = c.func.id
-                break
-        if callee:
-            break
+                return c.func.id, imported[c.func.id]
+    return "", ""
+
+
+def exit_entry(box: Sandbox, text: str, holder: str, reach: dict | None = None) -> str:
+    """How to keep the object that must be closed, when the test's run ends in `SystemExit`
+    (2026-10-27). pylint-4492 (mut-p26) was told eleven times that a `MultiReporter` holds
+    `close_output_files`, said "the file closing is complex to test", and dropped it: its
+    `Run(args)` sat in `pytest.raises(SystemExit)`, so the test never held the run.
+    `Run(..., exit=False)` returns it. The callee's real signature is read in the box.
+    `reach` is the trace's path from that callee's object to the holder (mut-p27 was told
+    all of the above and still never wrote `exit=False`): with it the lines are given whole."""
+    callee, line = exit_callee(text)
     if not callee:
         return ""
-    r = box.exec(f"python -c {shlex.quote(imported[callee] + '; import inspect; print(inspect.signature(' + callee + '))')}",
+    r = box.exec(f"python -c {shlex.quote(line + '; import inspect; print(inspect.signature(' + callee + '))')}",
                  timeout=60)
     sig = (r.stdout or "").strip().splitlines()[-1:] if r.returncode == 0 else []
     if not sig:
@@ -1195,6 +1200,15 @@ def exit_entry(box: Sandbox, text: str, holder: str) -> str:
     sig = re.sub(r"<[^<>]* at 0x[0-9a-f]+>", "...", f"{callee}{sig[0]}")[:200]
     exits = re.findall(r"\b(\w*exit\w*)=", sig)
     what = f"the `{holder.split('.')[0]}`" if holder else "the object that holds the file"
+    if exits and reach and reach.get("root") == callee:
+        return (f" Your test gets nothing back to close it with: `{callee}(...)` ends by raising "
+                f"`SystemExit` inside `pytest.raises`. Its signature is `{sig}`. Write it like "
+                f"this instead -- the same arguments, no `pytest.raises`:\n\n"
+                f"    run = {callee}([...the same arguments...], {exits[0]}=False)\n"
+                f"    run.{reach['path']}.{reach['closer']}()\n"
+                f"    data = json.loads(out_file.read_text())\n\n"
+                f"`run.{reach['path']}` is the `{reach['holder']}` your run built (read off the run "
+                f"itself); after `{reach['closer']}()` the file holds what is shown above.")
     return (f" Your test gets nothing back to close it with: `{callee}(...)` ends by raising "
             f"`SystemExit` inside `pytest.raises`, so what the run built is gone when the test "
             f"reads. Its signature is `{sig}`"
@@ -1621,8 +1635,8 @@ def _trace_diff(fix: list, wrong: list, limit: int = 2) -> list[str]:
     version: the observable difference a test could assert. Empty when none showed."""
     def key(r):
         return (r.get("test"), r.get("func"), json.dumps(r.get("args") or {}, sort_keys=True))
-    a = {key(r): r for r in fix}
-    b = {key(r): r for r in wrong}
+    a = {key(r): r for r in fix if r.get("func") != "reach"}
+    b = {key(r): r for r in wrong if r.get("func") != "reach"}
     said = []
     # a file the code wrote is the plainest thing to assert, so its differences go first
     for k, r in sorted(a.items(), key=lambda kv: kv[1].get("func") != "wrote"):
@@ -1869,6 +1883,14 @@ except Exception:
     _SPEC = []
 _NAMES = {n for _, n in _SPEC}
 _REC, _CUR, _SEEN, _STACK = [], {"test": None}, {}, {}
+# The entry point a test runs inside `pytest.raises(SystemExit)` (`Run`) and the change's
+# close functions (`close_output_files`): instances of the first are kept while the test runs,
+# and at its end the attribute path from one to an object with a closer is recorded
+# (`run.linter.reporter`). mut-p26/p27 were told the holder and how to keep the run, and
+# never found the path between them.
+_ROOTS = {x for x in os.environ.get("F2P_TRACE_ROOTS", "").split(",") if x}
+_CLOSERS = [x for x in os.environ.get("F2P_TRACE_CLOSERS", "").split(",") if x]
+_KEPT = []
 
 
 import tempfile
@@ -2009,8 +2031,34 @@ def _short_raw(v, depth=0):
         return "<unrepresentable>"
 
 
+def _reach():
+    import types
+    skip = (types.ModuleType, type, types.FunctionType, types.MethodType, types.BuiltinFunctionType,
+            str, bytes, int, float, bool, list, tuple, dict, set, frozenset, type(None))
+    seen, level = set(), [(o, type(o).__name__, "") for o in _KEPT]
+    for _ in range(4):
+        nxt = []
+        for o, root, p in level:
+            if id(o) in seen:
+                continue
+            seen.add(id(o))
+            for c in _CLOSERS:
+                if p and callable(getattr(o, c, None)):
+                    return {"root": root, "path": p, "closer": c, "holder": type(o).__name__}
+            d = getattr(o, "__dict__", None)
+            if isinstance(d, dict):
+                nxt += [(v, root, f"{p}.{k}" if p else k) for k, v in list(d.items())
+                        if not k.startswith("__") and not isinstance(v, skip)]
+        level = nxt
+    return None
+
+
 def _prof(frame, event, arg):
     code = frame.f_code
+    if _ROOTS and event == "call" and code.co_name == "__init__":
+        me = frame.f_locals.get("self")
+        if me is not None and type(me).__name__ in _ROOTS and len(_KEPT) < 20:
+            _KEPT.append(me)
     if code.co_name not in _NAMES or event not in ("call", "return"):
         return
     if not any(code.co_filename.endswith(p) and code.co_name == n for p, n in _SPEC):
@@ -2063,6 +2111,14 @@ if pytest is not None:
                         _wrote(w._p, w._t, w._c, still_open=True)
                 except Exception:
                     pass
+            if _KEPT and _CLOSERS:
+                try:
+                    got = _reach()
+                    if got:
+                        _REC.append({"test": item.nodeid, "func": "reach", "args": got, "ret": None, "set": {}})
+                except Exception:
+                    pass
+            del _KEPT[:]
             del _OPEN[:]
             for (test, name), text in list(_WROTE.items()):
                 if test == item.nodeid:
@@ -2077,8 +2133,8 @@ def pytest_sessionfinish(session, exitstatus):
     if out:
         try:
             with open(out, "w") as f:
-                wrote = [r for r in _REC if r["func"] == "wrote"][:40]
-                json.dump([r for r in _REC if r["func"] != "wrote"][:200] + wrote, f)
+                wrote = [r for r in _REC if r["func"] in ("wrote", "reach")][:60]
+                json.dump([r for r in _REC if r["func"] not in ("wrote", "reach")][:200] + wrote, f)
         except Exception:
             pass
 '''
@@ -2118,7 +2174,8 @@ def trace_said(rows: list, limit: int = 8, patch: str = "",
     # What the change adds for closing things (`close_output_files` on pylint-4492): named
     # beside a file that was still open when the test ended.
     closers, holder = _closers(patch), closer_holder(rows, patch)
-    rows = sorted(rows, key=lambda r: (r.get("func") != "wrote", r.get("ret") in (None, "None")))
+    rows = sorted((r for r in rows if r.get("func") != "reach"),
+                  key=lambda r: (r.get("func") != "wrote", r.get("ret") in (None, "None")))
     for r in rows:
         if r.get("func") == "wrote":
             file = (r.get("args") or {}).get("file", "?")
@@ -2665,7 +2722,10 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
             if not catch:
                 return cmd
             # With the change applied, the trace plugin as well (`TRACE_PLUGIN`).
+            callee = exit_callee(self.box.read(action.target.split("::")[0]) or "")[0]
+            closers = ",".join(_closers(self.patch))
             trace = (f"F2P_TRACE_SPEC={CATCH_DIR}/trace_spec.json F2P_TRACE_OUT={CATCH_DIR}/trace.json "
+                     + (f"F2P_TRACE_ROOTS={callee} F2P_TRACE_CLOSERS={closers} " if callee and closers else "")
                      if side == "after" else "")
             return (f"{trace}F2P_CATCH_OUT={CATCH_DIR}/{side}.json PYTHONPATH={CATCH_DIR}${{PYTHONPATH:+:$PYTHONPATH}} "
                     f"{cmd} -p f2p_catch" + (" -p f2p_trace" if side == "after" else ""))
@@ -2894,7 +2954,10 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                                     flipped)
             if unread:
                 holder = closer_holder(fix_trace, self.patch)
-                reach = exit_entry(self.box, self.box.read(action.target.split("::")[0]) or "", holder) \
+                opened = {u["test"] for u in unread if u.get("open")}
+                path = next((r.get("args") for r in fix_trace if r.get("func") == "reach"
+                             and (r.get("test") or "").split("::")[-1].split("[")[0] in opened), None)
+                reach = exit_entry(self.box, self.box.read(action.target.split("::")[0]) or "", holder, path) \
                     if any(u.get("open") for u in unread) else ""
                 unread = [dict(u, closer=holder, reach=reach) if u.get("open") else u for u in unread]
                 self.log[-1]["unread"] = unread
