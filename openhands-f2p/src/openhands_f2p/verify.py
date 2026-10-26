@@ -1405,6 +1405,10 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
         in_except = {id(x) for t in _ast.walk(fn) if isinstance(t, _ast.Try)
                      for h in t.handlers for x in _ast.walk(h)}
         checks = asserts + helpers
+        # `pytest.fail(...)` in an `except` checks only that the call did not raise; beside
+        # existence or private-attribute asserts it hid them (mut-p21: `try: assert hasattr(
+        # linter, "_reporter_names") ... except AttributeError: pytest.fail(...)`)
+        helpers = [h for h in helpers if id(h) not in in_except]
         if checks and all(id(c) in in_except for c in checks):
             why.append(f"its only checks (line {checks[0].lineno}) are inside an `except`, so it "
                        f"tests only that the call does not raise, not what it does")

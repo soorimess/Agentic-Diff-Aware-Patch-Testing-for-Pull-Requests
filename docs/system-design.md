@@ -1411,6 +1411,24 @@ TestForge" -- change the methods). Built:
   makes itself (its input files) are not recorded: the first frame outside the standard
   library is the test file. A write is put down to the test that opened the file, not the
   one running when garbage collection closes it.
+- Rounds 14-22 on pylint-4492 (laptop, 2026-10-25/26), each fix from a trajectory:
+  - The trace's file records gave false differences until temp paths inside the content and
+    bare `tempfile` names (`tmp9yztff7a`) were normalised; a file the test deletes is kept
+    from an in-memory copy of what was written; a file still open at the end of the test is
+    flagged -- pylint keeps its output file empty until `close_output_files()`, so every read
+    inside the agent's tests saw `''`, which is why no round ever asserted its content. The
+    trace now says so and names the change's own close functions.
+  - The unread-output section and refusal end with a read-back example built from the real
+    content (`out_file = tmp_path / "output.json"`, `json.loads(out_file.read_text())`,
+    `assert data[0]["type"] == "warning"`).
+  - Every trick message names the file's own asserting helpers (`asserting_helpers`): the good
+    rounds built on the seed's `_runtest(args, code=N)`; the bad ones never used it.
+  - Asserts that read only private attributes (`obj._name`) count as checking nothing (the
+    user's mutation briefing: they reject other correct implementations); the bad rounds
+    (27-53%) flipped on `linter._reporter_names`, the good ones (84-89%, judged meaningful)
+    ran pylint end to end. A `pytest.fail` inside an `except` handler no longer shields them.
+  - Tried and reverted: seeding with a test that reads its output back -- its helper asserts
+    exact output and left the agent without a flip.
 - A test failing on both sides is told the line it fails at and pytest's `where` values
   (`where 0 = len([])`), and, when the new side ends in `SystemExit`, that this is how the
   program finishes: catch it and assert its code and what the run wrote.
