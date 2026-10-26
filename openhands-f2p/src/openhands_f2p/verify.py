@@ -1448,6 +1448,11 @@ def trick_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
             + asserting_helpers(_last_text(tool_log, i, rel)))
 
 
+def _read_back_example(u: dict) -> str:
+    from openhands_f2p.sandbox_tools import read_back_example
+    return read_back_example(u)
+
+
 def unread_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
     """Refuse the stop while the last `verify` of the file on disk found output the changed
     code wrote in a flipping test that the test never reads back (`unread_outputs`)."""
@@ -1465,7 +1470,8 @@ def unread_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
             + "\n\nAn exit code or the absence of an error is true of a version of the change "
               "that writes that file empty or wrong. Give the run a path under `tmp_path`, read "
               "the file back (`json.load(open(path))`, `path.read_text()`) and assert what it "
-              "holds -- the entries and their fields, the lines of text. Then call `verify` again.")
+              "holds -- the entries and their fields, the lines of text. "
+            + _read_back_example(unread[0]) + " Then call `verify` again.")
 
 
 def swallow_note(test_text: str | None) -> str:

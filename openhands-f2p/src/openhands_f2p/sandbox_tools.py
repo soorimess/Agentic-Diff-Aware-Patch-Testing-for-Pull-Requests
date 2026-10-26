@@ -1076,6 +1076,35 @@ def _shared_words(source: str, diff_words: set[str]) -> int:
 _READS = re.compile(r"\.read(?:lines)?\(|read_text\(|read_bytes\(|json\.load\(|\bopen\((?![^)\n]*['\"][wax]b?['\"])")
 
 
+def _reads_back(text: str, name: str) -> bool:
+    """Whether test `name` reads a file back, in its body or in a helper of the same file it
+    calls (pylint's `self._test_output_file(...)`)."""
+    src = _test_source(text, name)
+    if _READS.search(src):
+        return True
+    return any(_READS.search(_test_source(text, h)) for h in set(re.findall(r"\b(\w+)\(", src))
+               if h != name and not h.startswith("test"))
+
+
+def read_back_example(u: dict) -> str:
+    """How to read one unread output back, built from what the code wrote (2026-10-26):
+    "read it back and assert what it holds" alone moved nothing in five rounds."""
+    content = str(u.get("content") or "")
+    name = Path(str(u.get("file") or "output")).name.replace("<tmp>", "out") or "output"
+    m = re.search(r'"([A-Za-z][\w-]*)":\s*"([^"\\]{1,40})"', content)
+    if content.lstrip("'\"").startswith(("[", "{")) and m:
+        index = "[0]" if content.lstrip("'\"").startswith("[") else ""
+        check = f'assert data{index}["{m.group(1)}"] == "{m.group(2)}"'
+        read = "data = json.loads(out_file.read_text())"
+    else:
+        first = next((ln.strip() for ln in content.strip("'\"").split("\\n") if ln.strip()), "")[:50]
+        check = f"assert {first!r} in out_file.read_text()" if first else "assert out_file.read_text() == ..."
+        read = ""
+    return (f"For example: `out_file = tmp_path / \"{name}\"`, pass `out_file` to the run where "
+            f"it now writes `{u.get('file')}`, then " + (f"`{read}` and " if read else "")
+            + f"`{check}` -- with the values the change really writes, shown above.")
+
+
 def unread_outputs(rows: list, text: str, flipped: list[str], limit: int = 3) -> list[dict]:
     """Files the changed code wrote during a flipping test that the test never reads back
     (2026-10-25): pylint-4492 (mut-p12) ran `-f json:output.json` and `-f json,text` with an
@@ -1116,8 +1145,12 @@ def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
     if not files:
         return ""
     base = E.base_texts(box, patch)
-    diff_words = _words("\n".join(l[1:] for l in patch.splitlines()
-                                  if l.startswith("+") and not l.startswith("+++")))
+    added = "\n".join(l[1:] for l in patch.splitlines() if l.startswith("+") and not l.startswith("+++"))
+    diff_words = _words(added)
+    # A change that writes files is best seeded by a test that reads its output back
+    # (2026-10-26): the agent copies the seed's pattern, and on pylint-4492 it never read
+    # `output.json` while the seed it got only parsed stdout.
+    writes = bool(re.search(r"open\([^)\n]*['\"][wa]", added) or "write_text(" in added)
     best = None
     box.apply_patch(patch)
     try:
@@ -1138,7 +1171,7 @@ def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
                 # many tests reach the same lines (every `Run(...)` test on pylint); the tie
                 # went to set order, a different seed each run -- the one that shares the
                 # change's words (output, reporter, ...) is the one worth building from
-                key = (n, _shared_words(_test_source(text, t), diff_words), t)
+                key = (n, writes and _reads_back(text, t), _shared_words(_test_source(text, t), diff_words), t)
                 if best is None or key > best[4]:
                     best = (f, t, n, got.get("executable_changed_lines"), key)
     finally:
@@ -2722,7 +2755,8 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                            "whatever is in it -- an exit code or \"no error\" is true of a version "
                            "that writes it empty or wrong. Read it back in the test (give the "
                            "run a path under `tmp_path`, then `json.load`/`read_text` it) and "
-                           "assert what it holds: the entries, their fields, the text.")
+                           "assert what it holds: the entries, their fields, the text. "
+                         + read_back_example(unread[0]))
         # The tests that do not count, said with every answer while there are any.
         if tricks and not only_tricks:
             unchecked = len((cov or {}).get("unchecked") or [])
