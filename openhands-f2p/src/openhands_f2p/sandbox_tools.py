@@ -1217,7 +1217,25 @@ def start_seed(box: Sandbox, patch: str, rel: str, log: list) -> str:
             f"objects, the output, the files written. `compare` shows those exact values before "
             f"and after the change, and `verify` lists what the changed functions did in your "
             f"tests. Where it checks what the code wrote -- a file it reads back, the output it "
-            f"captures -- check the same way in your tests.")
+            f"captures -- check the same way in your tests."
+            + _seed_entry(text))
+
+
+def _seed_entry(text: str) -> str:
+    """The seed's own asserting helper, named in the opening message (2026-10-26): every
+    pylint-4492 run the judge called meaningful (p12, p13, p17) tested the change through the
+    seed's `_runtest(args, code=N)` end to end; the runs that did not (27-53%) drifted into
+    private attributes and `hasattr`. Both kinds started from the same message."""
+    from openhands_f2p import verify as V
+    helpers = V.asserting_helpers(text, limit=2)
+    if not helpers:
+        return ""
+    return ("\n\nThe quickest real test of the change is the seed's own call with the change's "
+            "new input: " + helpers.strip().replace(
+                "This file already has helpers that check a result: ", "")
+            + " Run the code the way a user does through it, with input only the changed code "
+              "accepts, and assert the exact result and what it writes -- not that a name or "
+              "an attribute exists.")
 
 
 def related_example(text: str, names: list[str], max_lines: int = 18,
