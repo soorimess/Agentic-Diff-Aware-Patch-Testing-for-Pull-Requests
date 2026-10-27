@@ -1492,6 +1492,21 @@ TestForge" -- change the methods). Built:
     a sample of 10 were all echo.
     Also an attribute the test assigns a constant to and reads back (`app.config.x = "all";
     assert app.config.x == "all"`): sphinx-10807 mut5-a flipped only on that (judge level 1).
+  - Hierarchy checks (2026-10-27, `_structural`): membership in `__mro__`, `__bases__`,
+    `__subclasses__()` / `mro()`, directly or through a name bound from one, counts as
+    existence. pylint-5136 mut5-b flipped only on `"MessagesHandlerMixIn" not in [c.__name__
+    for c in PyLinter.__mro__]` -- 0% coverage. Membership only: `base.__name__ == "Module"`
+    on a class read from `__bases__` (sphinx-9658) checks what the class is and is kept.
+  - Conditional swallow (2026-10-27, `_swallows_on_branch`): an `except` ending in an `if`
+    with a branch that does nothing (`if "scipy>=1.8.0" in str(e): pass else: raise`) lets
+    the error go, so the asserts in the `try` may never run. sklearn-24145 mut5-b: the image's
+    scipy raises exactly that on `sparse_output=True`, both "real" flips passed on it. Not
+    when the `try` ends by failing (`pytest.fail("expected ...")`, `assert False`, `raise`):
+    that is the expected-error idiom (mut-p12's `InvalidReporterError` test).
+    Both rules over 2966 saved files: 24 tests newly flagged, 0 unflagged; all checked weak.
+  - `test_leaf` (2026-10-27): trick names are matched to flips by the bare function name,
+    for django's `test_x (module.Class)` ids too. Before, `real_flips` split on `::` only, so
+    django-13207 mut5-b counted its 2 echo tricks as real flips.
   - Tried and reverted: seeding with a test that reads its output back -- its helper asserts
     exact output and left the agent without a flip.
 - A test failing on both sides is told the line it fails at and pytest's `where` values

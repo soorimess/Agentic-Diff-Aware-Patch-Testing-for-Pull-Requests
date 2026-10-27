@@ -1338,7 +1338,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                     diagnosis = ("It does not count: none of the tests that flip checks what "
                                  "the changed code does. " + " ".join(
                                      f"`{n}`: {'; '.join(w)}." for n, w in reasons.items()
-                                     if any(n == f.split("::")[-1].split("[")[0]
+                                     if any(n == V.test_leaf(f)
                                             for f in verdict.f2p_nodes or [])))
                 note = _restart_note(run, verdict, test_file, code, max_iterations,
                                      remaining, diagnosis)

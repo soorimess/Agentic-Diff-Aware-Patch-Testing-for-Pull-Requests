@@ -696,7 +696,7 @@ def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, st
             # (round 18) deleted the failing seed, was shown "fix `test_seeded_...`" seven
             # times, searched its file for a hidden test and never called `verify` again.
             have = tests_now(tool_log, rel)
-            gone = sorted({n.split("::")[-1].split("[")[0] for n in still}
+            gone = sorted({test_leaf(n) for n in still}
                           - set(have)) if have is not None else []
             if last_said and gone:
                 quoted += (f"That answer is about a version that is gone: "
@@ -1369,6 +1369,36 @@ def _private_read(n, aliases=frozenset()) -> bool:
     return isinstance(n, _ast.Name) and n.id in aliases
 
 
+_STRUCTURE_ATTRS = ("__mro__", "__bases__", "__subclasses__", "mro")
+
+
+def _structure_aliases(fn) -> set:
+    """Names a test binds from a class's hierarchy (`mro = [c.__name__ for c in
+    PyLinter.__mro__]`), so an assert on the name is an assert on the hierarchy."""
+    import ast as _ast
+    return {t.id for a in _ast.walk(fn) if isinstance(a, _ast.Assign) and any(
+                isinstance(x, _ast.Attribute) and x.attr in _STRUCTURE_ATTRS for x in _ast.walk(a.value))
+            for t in a.targets if isinstance(t, _ast.Name)}
+
+
+def _structural(expr, names=frozenset()) -> bool:
+    """Whether an assertion checks only where a class sits in the hierarchy (2026-10-27):
+    pylint-5136 (mut5-b) flipped on `"MessagesHandlerMixIn" not in [c.__name__ for c in
+    PyLinter.__mro__]` alone -- 0% coverage, nothing about what `disable`/`enable` do, and
+    any version that drops the base class passes it, right or wrong."""
+    import ast as _ast
+    if isinstance(expr, _ast.BoolOp):
+        return all(_structural(v, names) or _existence_only(v) for v in expr.values)
+    if isinstance(expr, _ast.UnaryOp) and isinstance(expr.op, _ast.Not):
+        return _structural(expr.operand, names)
+    # Membership only: `base.__name__ == "Module"` on a class read from `__bases__` checks
+    # what the class is (sphinx-9658's mocked base names), not just that it is there.
+    return isinstance(expr, _ast.Compare) and len(expr.ops) == 1 and \
+        isinstance(expr.ops[0], (_ast.In, _ast.NotIn)) and any(
+        (isinstance(x, _ast.Attribute) and x.attr in _STRUCTURE_ATTRS)
+        or (isinstance(x, _ast.Name) and x.id in names) for x in _ast.walk(expr))
+
+
 def _private_aliases(fn) -> set:
     """Names a test binds from a private read (`names = getattr(linter, "_reporter_names",
     None)`, mut-p30), so an assert on the name is an assert on the private attribute."""
@@ -1457,6 +1487,39 @@ def _helper_compare(call):
     return None
 
 
+def _swallows_on_branch(body) -> bool:
+    """An `except` body that ends in an `if` one branch of which falls through doing nothing
+    (2026-10-27): sklearn-24145 (mut5-b) wrapped `fit_transform` and its shape asserts in
+    `try:` and ended `except ValueError as e: if "scipy>=1.8.0" in str(e): pass else: raise`
+    -- the image's scipy raises that, so the asserts never ran and the test passed anyway."""
+    import ast as _ast
+    if not body or not isinstance(body[-1], _ast.If):
+        return False
+    def quiet(stmts):
+        return not stmts or all(isinstance(b, _ast.Pass) or (isinstance(b, _ast.Expr)
+                                and isinstance(b.value, _ast.Constant)) for b in stmts) or \
+            (isinstance(stmts[-1], _ast.If) and _swallows_on_branch(stmts))
+    last = body[-1]
+    return all(isinstance(b, (_ast.Pass, _ast.Expr, _ast.Assign)) for b in body[:-1]) and \
+        (quiet(last.body) or quiet(last.orelse))
+
+
+def _fails_at_end(body) -> bool:
+    """A `try` body that ends by failing -- `pytest.fail("expected ...")`, `self.fail(...)`,
+    `assert False`, `raise` -- is the expected-error idiom: the `except` that accepts the
+    error is the passing path (pylint-4492 mut-p12's `InvalidReporterError` test)."""
+    import ast as _ast
+    if not body:
+        return False
+    last = body[-1]
+    if isinstance(last, _ast.Raise):
+        return True
+    if isinstance(last, _ast.Assert) and isinstance(last.test, _ast.Constant) and not last.test.value:
+        return True
+    return isinstance(last, _ast.Expr) and isinstance(last.value, _ast.Call) and (
+        getattr(last.value.func, "attr", None) == "fail" or getattr(last.value.func, "id", None) == "fail")
+
+
 def trick_tests(text: str | None) -> dict[str, list[str]]:
     """For each test that checks nothing about what the code does, why: an `except` that
     throws the error away, no assertion at all, or assertions that only check that names
@@ -1490,8 +1553,15 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                            for b in h.body):
                         why.append(f"line {h.lineno}: `except ...: pass` throws away whatever the "
                                    f"code above it raises, so that code is run, not tested")
+                    elif _swallows_on_branch(h.body) and not _fails_at_end(node.body):
+                        why.append(f"line {h.lineno}: the `except` lets the error go on one branch "
+                                   f"(`if ...: pass`), so when the code raises it the checks in the "
+                                   f"`try` never run and the test still passes -- it accepts the "
+                                   f"error and the result alike. If that error is what the code does "
+                                   f"here, assert it: `with pytest.raises(Error, match=...)`")
         asserts = [n for n in _ast.walk(fn) if isinstance(n, _ast.Assert)]
         aliases = _private_aliases(fn)
+        structure = _structure_aliases(fn)
         # Assertion helpers and expected-error blocks: `self.assertEqual`, `assert_node`,
         # `np.testing.assert_allclose`, `pytest.raises`/`warns`, `self.assertRaises`.
         helpers = [n for n in _ast.walk(fn) if isinstance(n, _ast.Call) and (
@@ -1538,11 +1608,13 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                        f"implementation detail another correct version of the change may not "
                        f"have, and nothing a user of the code sees. Assert what the code returns, "
                        f"prints or writes when it is used")
-        elif asserts and not helpers and all(_existence_only(a.test) for a in asserts):
+        elif asserts and not helpers and all(_existence_only(a.test) or _structural(a.test, structure)
+                                             for a in asserts):
             why.append(f"its only assertions (line {', '.join(str(a.lineno) for a in asserts[:4])}) "
                        f"check that names exist or that something came out -- `hasattr`, "
                        f"`is not None`, `isinstance`, a bare name, `len(...) > 0`, one of "
-                       f"several values (`x in [0, 1, 2]`), what it is not (`x != 2`) -- not what it is, which any "
+                       f"several values (`x in [0, 1, 2]`), what it is not (`x != 2`), which "
+                       f"classes it inherits from (`__mro__`, `__bases__`) -- not what it is or does, which any "
                        f"version of the change passes, right or wrong")
         elif checks and (built := {t.id for a in _ast.walk(fn) if isinstance(a, _ast.Assign)
                                    and _class_call(a.value) for t in a.targets
@@ -1588,12 +1660,19 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
     return out
 
 
+def test_leaf(node: str) -> str:
+    """The bare test function name in a node id: pytest's `path::Class::test[param]` or
+    django's `test (module.Class)`. Splitting on `::` alone left django's whole id, so no
+    django trick was ever matched to its flip (mut5-b django-13207, 2026-10-27)."""
+    return node.split("::")[-1].split("[")[0].split(" (")[0].strip()
+
+
 def real_flips(verdict, text: str | None) -> list[str]:
     """The tests that flip in `verdict` and are not `trick_tests` of `text`: a file scored
     YES on these only is fail-to-pass on tests that check what the change does."""
     tricks = trick_tests(text)
     return [n for n in (getattr(verdict, "f2p_nodes", None) or [])
-            if n.split("::")[-1].split("[")[0] not in tricks]
+            if test_leaf(n) not in tricks]
 
 
 def _last_text(tool_log: list, i: int, rel: str) -> str:
