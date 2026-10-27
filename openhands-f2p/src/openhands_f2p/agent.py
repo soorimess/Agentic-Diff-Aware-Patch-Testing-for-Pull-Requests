@@ -750,6 +750,10 @@ def run_agent(instance: dict, box: E.Sandbox, test_file: str, max_iterations: in
                          or (V.unread_gap(tool_log, rel)
                              if sum("outputs_unread" in (m.get("reason") or "") for m in injected) < 2
                              else None)
+                         # Output read back but empty of results (2026-10-27): once.
+                         or (V.empty_gap(tool_log, rel)
+                             if not any("outputs_empty" in (m.get("reason") or "") for m in injected)
+                             else None)
                          or V.duty_gap(tool_log, instruments(features), rel,
                                        refused=_first_refusals(injected),
                                        last_refused=_last_refusals(injected),

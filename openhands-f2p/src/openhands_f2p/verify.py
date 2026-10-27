@@ -1529,6 +1529,28 @@ def unread_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
             + _read_back_example(unread[0]) + " Then call `verify` again.")
 
 
+def empty_gap(tool_log: list, rel: str) -> tuple[str, str] | None:
+    """Refuse the stop once while the last `verify` of the file on disk found a flipping test
+    whose only output files hold no results (2026-10-27): mut-p28 read its JSON back and
+    asserted `'[]' in json_content` -- its input had nothing to report, so the reporters never
+    handled a message (17 changed lines unrun) and a version that drops every message passes."""
+    got = _last(tool_log, "verify", rel)
+    if got is None:
+        return None
+    i, e = got
+    empty = e.get("empty") or []
+    if not empty or wrote_test_after(tool_log, i, rel):
+        return None
+    lines = [f"* `{u['test']}`: `{u['file']}` holds `{u['content']}`" for u in empty]
+    return ("outputs_empty",
+            f"`{rel}` checks output that holds no results:\n\n" + "\n".join(lines)
+            + "\n\nThe run had nothing to report, so the code that handles each result never "
+              "ran, and a version of the change that drops every result passes this test. Give "
+              "the run input that produces results (for a linter: a file with problems in it), "
+              "keep reading the file back, and assert the entries and their fields. Then call "
+              "`verify` again.")
+
+
 def swallow_note(test_text: str | None) -> str:
     """A note when the test catches every exception and ignores it, naming the lines."""
     lines = [test_text.count("\n", 0, m.start()) + 1

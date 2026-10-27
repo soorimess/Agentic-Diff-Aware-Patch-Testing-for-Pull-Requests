@@ -1437,6 +1437,14 @@ TestForge" -- change the methods). Built:
   `close_output_files`) for the same test as the open file. The message then gives the
   lines whole: `run = Run([...], exit=False)`, `run.linter.reporter.close_output_files()`,
   `data = json.loads(out_file.read_text())` (2026-10-27).
+  mut-p28 then wrote exactly that -- `Run(args, exit=False)`, `close_output_files()`,
+  `json.loads` of the file -- the first round to read the output back (judge: meaningful).
+- Output read back but empty of results (2026-10-27): mut-p28's input had nothing to report,
+  so it asserted `'[]' in json_content` and the reporters' message handling stayed unrun (17
+  changed lines). A written file holding only `''`, `[]` or `{}` is marked EMPTY in the trace
+  and the read-back example says to give the run input that produces results; a flipping test
+  whose output files are all empty is refused once at the stop (`empty_gap`, reason
+  `outputs_empty`).
 - An assertion only of what a value is not (`x != 2`, `x not in (1, 2)`) is existence-only
   (2026-10-27): mut-p24 flipped two tests whose only checks were `pylint_code != 2` and
   `!= 1`.

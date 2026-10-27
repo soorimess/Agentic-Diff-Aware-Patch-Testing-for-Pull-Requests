@@ -1115,6 +1115,13 @@ def read_back_example(u: dict) -> str:
     "read it back and assert what it holds" alone moved nothing in five rounds."""
     content = str(u.get("content") or "")
     name = Path(str(u.get("file") or "output")).name.replace("<tmp>", "out") or "output"
+    # mut-p28 read back `[]` and asserted `'[]' in json_content`, the example's own words:
+    # its input had no problems, and the reporters never handled a message.
+    if _empty_output(content):
+        return (f"The file holds no results (`{content.strip()[:20]}`): the run had nothing to "
+                f"report. Give it input that produces results first (for a linter: a file with "
+                f"problems in it), then read `{name}` back and assert its entries and their "
+                f"fields." + (str(u.get("reach") or "") if u.get("open") else ""))
     m = re.search(r'"([A-Za-z][\w-]*)":\s*"([^"\\]{1,40})"', content)
     if content.lstrip("'\"").startswith(("[", "{")) and m:
         index = "[0]" if content.lstrip("'\"").startswith("[") else ""
@@ -1217,6 +1224,17 @@ def exit_entry(box: Sandbox, text: str, holder: str, reach: dict | None = None) 
                f"then read the file." if exits else
                f": find a way to keep {what} (a parameter, or calling one level lower), close "
                f"it, then read the file."))
+
+
+def _empty_output(content: str) -> bool:
+    """An output file with no results in it: `''`, `'[]\\n'`, `'{}'`."""
+    return content.strip("'\"").replace("\\n", "").strip() in ("", "[]", "{}")
+
+
+_EMPTY_NOTE = (" -- EMPTY of results: the run had nothing to report, so the code that handles "
+               "each result never ran and a version that drops results passes. Give it input "
+               "that produces results (for a linter: a file with problems in it) and assert "
+               "the entries")
 
 
 def _tool_cache(file: str, content: str) -> bool:
@@ -2193,6 +2211,7 @@ def trace_said(rows: list, limit: int = 8, patch: str = "",
                               " (the change adds " + ", ".join(f"`{c}`" for c in closers) + ")"
                               if closers else "")
                            + " -- before you read it" if r.get("open") else "")
+                        + (_EMPTY_NOTE if _empty_output(text) else "")
                         + f" -- in `{(r.get('test') or '?').split('::')[-1]}`")
             if len(said) >= limit:
                 break
@@ -2970,6 +2989,19 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                            "run a path under `tmp_path`, then `json.load`/`read_text` it) and "
                            "assert what it holds: the entries, their fields, the text. "
                          + read_back_example(unread[0]))
+        # Flipping tests whose output files all hold no results (`V.empty_gap`).
+        if ok and fix_trace:
+            names = {n.split("::")[-1].split("[")[0] for n in flipped}
+            files: dict = {}
+            for r in fix_trace:
+                file, text = (r.get("args") or {}).get("file", ""), str(r.get("ret"))
+                test = (r.get("test") or "").split("::")[-1].split("[")[0]
+                if r.get("func") == "wrote" and test in names and not _tool_cache(file, text):
+                    files.setdefault(test, []).append((file, text))
+            empty = [{"test": t, "file": fs[0][0], "content": fs[0][1][:20]} for t, fs in files.items()
+                     if all(_empty_output(x) for _, x in fs)]
+            if empty:
+                self.log[-1]["empty"] = empty
         # The tests that do not count, said with every answer while there are any.
         if tricks and not only_tricks:
             unchecked = len((cov or {}).get("unchecked") or [])
