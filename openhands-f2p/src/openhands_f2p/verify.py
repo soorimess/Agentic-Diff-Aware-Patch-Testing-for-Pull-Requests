@@ -1346,21 +1346,38 @@ def asserting_helpers(text: str | None, limit: int = 3) -> str:
               "error or the exit and passing is not.")
 
 
-def _private_only(expr) -> bool:
+def _private_read(n, aliases=frozenset()) -> bool:
+    """`obj._name`, `getattr(obj, "_name", ...)`, or a name bound from one of those."""
+    import ast as _ast
+    if isinstance(n, _ast.Attribute):
+        return n.attr.startswith("_") and not n.attr.startswith("__")
+    if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name) and n.func.id == "getattr" \
+            and len(n.args) >= 2 and isinstance(n.args[1], _ast.Constant) \
+            and isinstance(n.args[1].value, str):
+        return n.args[1].value.startswith("_") and not n.args[1].value.startswith("__")
+    return isinstance(n, _ast.Name) and n.id in aliases
+
+
+def _private_aliases(fn) -> set:
+    """Names a test binds from a private read (`names = getattr(linter, "_reporter_names",
+    None)`, mut-p30), so an assert on the name is an assert on the private attribute."""
+    import ast as _ast
+    return {t.id for a in _ast.walk(fn) if isinstance(a, _ast.Assign) and _private_read(a.value)
+            for t in a.targets if isinstance(t, _ast.Name)}
+
+
+def _private_only(expr, aliases=frozenset()) -> bool:
     """Whether an assertion reads only private attributes (`obj._name`, not dunders) besides
     constants (2026-10-26): pylint-4492 runs that flipped on `linter._reporter_names == "..."`
     (p10, p16, p19, p20) scored 27-53%, never ran pylint, and the judge called them
     implementation detail; the user's mutation briefing: a test on private attributes
     rejects other correct implementations."""
     import ast as _ast
-    names = [n for n in _ast.walk(expr) if isinstance(n, (_ast.Attribute, _ast.Name, _ast.Call))]
-    private = [n for n in names if isinstance(n, _ast.Attribute) and n.attr.startswith("_")
-               and not n.attr.startswith("__")]
-    if not private:
+    if not any(_private_read(n, aliases) for n in _ast.walk(expr)):
         return False
     # every attribute read on the way is private, or the object it is read from
     attrs = [n for n in _ast.walk(expr) if isinstance(n, _ast.Attribute)]
-    calls = [n for n in _ast.walk(expr) if isinstance(n, _ast.Call)
+    calls = [n for n in _ast.walk(expr) if isinstance(n, _ast.Call) and not _private_read(n)
              and not (isinstance(n.func, _ast.Name) and n.func.id in ("isinstance", "len", "str", "type"))]
     return not calls and all(a.attr.startswith("_") for a in attrs)
 
@@ -1409,6 +1426,7 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                         why.append(f"line {h.lineno}: `except ...: pass` throws away whatever the "
                                    f"code above it raises, so that code is run, not tested")
         asserts = [n for n in _ast.walk(fn) if isinstance(n, _ast.Assert)]
+        aliases = _private_aliases(fn)
         # Assertion helpers and expected-error blocks: `self.assertEqual`, `assert_node`,
         # `np.testing.assert_allclose`, `pytest.raises`/`warns`, `self.assertRaises`.
         helpers = [n for n in _ast.walk(fn) if isinstance(n, _ast.Call) and (
@@ -1442,9 +1460,9 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                        f"code above it did not crash, not what it did")
         elif not asserts and not helpers:
             why.append("it asserts nothing: it runs code and checks no result")
-        elif asserts and not helpers and all(_existence_only(a.test) or _private_only(a.test)
+        elif asserts and not helpers and all(_existence_only(a.test) or _private_only(a.test, aliases)
                                              for a in asserts) \
-                and any(_private_only(a.test) for a in asserts):
+                and any(_private_only(a.test, aliases) for a in asserts):
             why.append(f"its only assertions (line {', '.join(str(a.lineno) for a in asserts[:4])}) "
                        f"read private attributes (`obj._name`) or check that names exist -- "
                        f"implementation detail another correct version of the change may not "

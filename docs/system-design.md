@@ -1473,6 +1473,9 @@ TestForge" -- change the methods). Built:
     user's mutation briefing: they reject other correct implementations); the bad rounds
     (27-53%) flipped on `linter._reporter_names`, the good ones (84-89%, judged meaningful)
     ran pylint end to end. A `pytest.fail` inside an `except` handler no longer shields them.
+    A private read also counts through `getattr(obj, "_name", None)` and through a name
+    bound from one (`names = getattr(linter, "_reporter_names", None); assert names ==
+    ...`): mut-p30 flipped on exactly that and scored 27.3% / mutmut 6 / wrong 0.
   - Tried and reverted: seeding with a test that reads its output back -- its helper asserts
     exact output and left the agent without a flip.
 - A test failing on both sides is told the line it fails at and pytest's `where` values
