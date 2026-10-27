@@ -1414,13 +1414,14 @@ def _class_call(node) -> str:
     return name if name[:1].isupper() else ""
 
 
-def _echo(expr, built: dict, kws: set, sig: set) -> bool:
+def _echo(expr, built: dict, kws: set, sig: set, stored: frozenset = frozenset()) -> bool:
     """Whether a check only reads back what the test gave a constructor (2026-10-27):
     `t = SplineTransformer(sparse_output=True); assert t.sparse_output is True`, the same
     attribute's default, the keyword's name in a list (`"sparse_output" in params`), or a
     signature read (`sig.parameters["sparse_output"].default is False`). sklearn-24145 and
     django-13207 (mut5-a) flipped on these: the judge called them parameter storage, and
-    they caught none of the wrong versions."""
+    they caught none of the wrong versions. Also an attribute the test itself assigns a
+    constant to (`app.config.x = "all"; assert app.config.x == "all"`, sphinx-10807)."""
     import ast as _ast
     names = {n.id for n in _ast.walk(expr) if isinstance(n, _ast.Name)}
     if names and names <= sig:
@@ -1435,6 +1436,9 @@ def _echo(expr, built: dict, kws: set, sig: set) -> bool:
     for x, c in ((a, b), (b, a)):
         if isinstance(c, _ast.Constant) and isinstance(x, _ast.Attribute) \
                 and isinstance(x.value, _ast.Name) and x.value.id in built and x.attr in kws:
+            return True
+        if isinstance(c, _ast.Constant) and isinstance(x, _ast.Attribute) \
+                and _ast.unparse(x) in stored:
             return True
     return False
 
@@ -1547,15 +1551,19 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                         and ("signature(" in _ast.unparse(a.value)
                              or ".parameters" in _ast.unparse(a.value))
                         for t in a.targets if isinstance(t, _ast.Name)}) is not None and \
-                all(_echo(a.test, built, kws, sig) or _existence_only(a.test) for a in asserts) and \
+                (stored := frozenset(_ast.unparse(t) for a in _ast.walk(fn)
+                                     if isinstance(a, _ast.Assign) and isinstance(a.value, _ast.Constant)
+                                     for t in a.targets if isinstance(t, _ast.Attribute))) is not None and \
+                all(_echo(a.test, built, kws, sig, stored) or _existence_only(a.test) for a in asserts) and \
                 all((cmp := _helper_compare(h)) is not None
-                    and (_echo(cmp, built, kws, sig) or _existence_only(cmp)) for h in helpers) and \
-                any(_echo(a.test, built, kws, sig) for a in asserts) | any(
-                    (cmp := _helper_compare(h)) is not None and _echo(cmp, built, kws, sig)
+                    and (_echo(cmp, built, kws, sig, stored) or _existence_only(cmp)) for h in helpers) and \
+                any(_echo(a.test, built, kws, sig, stored) for a in asserts) | any(
+                    (cmp := _helper_compare(h)) is not None and _echo(cmp, built, kws, sig, stored)
                     for h in helpers):
             why.append(f"its checks (line {checks[0].lineno}) read back what it gave the "
-                       f"constructor -- the argument it passed, that argument's default, or its "
-                       f"name in the signature -- so they check that a value is stored, not what "
+                       f"code -- the argument it passed a constructor, that argument's default, "
+                       f"its name in the signature, or a setting it assigned itself -- so they "
+                       f"check that a value is stored, not what "
                        f"the code does with it. Use the object the way the change means it to "
                        f"be used (call, fit, transform, render it) and assert on that result")
         else:
