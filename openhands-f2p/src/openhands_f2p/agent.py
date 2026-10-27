@@ -1312,7 +1312,12 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
         # first verdict is kept in `second_chance`.
         restart = None
         remaining = max_iterations - run["actions"]
-        if ("second-chance" in features and verdict.f2p != "YES"
+        # A YES on tricks alone is not an answer either (2026-10-27): pylint-4492 (mut-p31)
+        # flipped only on a test that asserts nothing, was refused eight times, stopped
+        # acting with 57 actions left, and never got the restart a NO would have.
+        tricked = (verdict.f2p == "YES" and code is not None
+                   and not V.real_flips(verdict, code))
+        if ("second-chance" in features and (verdict.f2p != "YES" or tricked)
                 and not (run.get("error") and _outside_failure(run["error"]))):
             restart = {"first_verdict": verdict.f2p, "first_why": verdict.why,
                        "first_actions": run["actions"], "budget": max(remaining, 0),
@@ -1328,6 +1333,13 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                              if (code and "coverage-tool" in features
                                  and "passes before the fix" in (verdict.why or ""))
                              else "")
+                if tricked:
+                    reasons = V.trick_tests(code)
+                    diagnosis = ("It does not count: none of the tests that flip checks what "
+                                 "the changed code does. " + " ".join(
+                                     f"`{n}`: {'; '.join(w)}." for n, w in reasons.items()
+                                     if any(n == f.split("::")[-1].split("[")[0]
+                                            for f in verdict.f2p_nodes or [])))
                 note = _restart_note(run, verdict, test_file, code, max_iterations,
                                      remaining, diagnosis)
                 field("restart", f"{verdict.f2p} after {run['actions']} actions -- starting "

@@ -1537,6 +1537,11 @@ tests did after the fix (user decision, 2026-09-28). That is the one place the h
 reaches the agent directly -- the stop checks still say only what the agent could have
 established at base. With the `verify` tool the agent could have learned the same itself.
 
+A YES whose every flipping test is a trick (`verify.real_flips` empty) also gets the
+second chance (2026-10-27), and its note says which tests flip and why none counts:
+pylint-4492 mut-p31 flipped only on a test that asserts nothing, was refused eight times,
+stopped acting with 57 actions left and never got the restart a NO would have.
+
 Model limits, checked 2026-09-28: the gateway serves qwen3-coder with 262,144 input and
 235,929 output tokens; the harness asks for at most 32,000 output tokens per call. In the
 first live runs of this design (597 calls, restarts included) the largest prompt was
