@@ -1405,6 +1405,54 @@ def _cleanup_only(body: list) -> bool:
         for b in body)
 
 
+def _class_call(node) -> str:
+    """The class a call constructs (`SplineTransformer(...)`, `models.CharField(...)`), or ""."""
+    import ast as _ast
+    if not isinstance(node, _ast.Call):
+        return ""
+    name = node.func.attr if isinstance(node.func, _ast.Attribute) else getattr(node.func, "id", "")
+    return name if name[:1].isupper() else ""
+
+
+def _echo(expr, built: dict, kws: set, sig: set) -> bool:
+    """Whether a check only reads back what the test gave a constructor (2026-10-27):
+    `t = SplineTransformer(sparse_output=True); assert t.sparse_output is True`, the same
+    attribute's default, the keyword's name in a list (`"sparse_output" in params`), or a
+    signature read (`sig.parameters["sparse_output"].default is False`). sklearn-24145 and
+    django-13207 (mut5-a) flipped on these: the judge called them parameter storage, and
+    they caught none of the wrong versions."""
+    import ast as _ast
+    names = {n.id for n in _ast.walk(expr) if isinstance(n, _ast.Name)}
+    if names and names <= sig:
+        return True
+    if not (isinstance(expr, _ast.Compare) and len(expr.ops) == 1):
+        return False
+    op, a, b = expr.ops[0], expr.left, expr.comparators[0]
+    if isinstance(op, (_ast.In, _ast.NotIn)):
+        return isinstance(a, _ast.Constant) and a.value in kws
+    if not isinstance(op, (_ast.Eq, _ast.Is)):
+        return False
+    for x, c in ((a, b), (b, a)):
+        if isinstance(c, _ast.Constant) and isinstance(x, _ast.Attribute) \
+                and isinstance(x.value, _ast.Name) and x.value.id in built and x.attr in kws:
+            return True
+    return False
+
+
+def _helper_compare(call):
+    """`self.assertEqual(a, b)` / `assertIs` / `assertIsNone(a)` as the comparison it makes."""
+    import ast as _ast
+    f = call.func
+    name = f.attr if isinstance(f, _ast.Attribute) else getattr(f, "id", "")
+    if name in ("assertEqual", "assertIs") and len(call.args) >= 2:
+        return _ast.Compare(left=call.args[0], ops=[_ast.Eq()], comparators=[call.args[1]])
+    if name == "assertIsNone" and call.args:
+        return _ast.Compare(left=call.args[0], ops=[_ast.Is()], comparators=[_ast.Constant(None)])
+    if name == "assertTrue" and call.args:
+        return call.args[0]
+    return None
+
+
 def trick_tests(text: str | None) -> dict[str, list[str]]:
     """For each test that checks nothing about what the code does, why: an `except` that
     throws the error away, no assertion at all, or assertions that only check that names
@@ -1420,6 +1468,8 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
     asserting = {f.name for f in _ast.walk(tree)
                  if isinstance(f, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and not f.name.startswith("test")
                  and any(isinstance(n, _ast.Assert) for n in _ast.walk(f))}
+    # Keywords the file passes to constructors: reading one back is reading the argument.
+    kws = {k.arg for c in _ast.walk(tree) if _class_call(c) for k in c.keywords if k.arg}
     for fn in _ast.walk(tree):
         if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)) or not fn.name.startswith("test"):
             continue
@@ -1490,6 +1540,24 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                        f"`is not None`, `isinstance`, a bare name, `len(...) > 0`, one of "
                        f"several values (`x in [0, 1, 2]`), what it is not (`x != 2`) -- not what it is, which any "
                        f"version of the change passes, right or wrong")
+        elif checks and (built := {t.id for a in _ast.walk(fn) if isinstance(a, _ast.Assign)
+                                   and _class_call(a.value) for t in a.targets
+                                   if isinstance(t, _ast.Name)}) is not None and (
+                sig := {t.id for a in _ast.walk(fn) if isinstance(a, _ast.Assign)
+                        and ("signature(" in _ast.unparse(a.value)
+                             or ".parameters" in _ast.unparse(a.value))
+                        for t in a.targets if isinstance(t, _ast.Name)}) is not None and \
+                all(_echo(a.test, built, kws, sig) or _existence_only(a.test) for a in asserts) and \
+                all((cmp := _helper_compare(h)) is not None
+                    and (_echo(cmp, built, kws, sig) or _existence_only(cmp)) for h in helpers) and \
+                any(_echo(a.test, built, kws, sig) for a in asserts) | any(
+                    (cmp := _helper_compare(h)) is not None and _echo(cmp, built, kws, sig)
+                    for h in helpers):
+            why.append(f"its checks (line {checks[0].lineno}) read back what it gave the "
+                       f"constructor -- the argument it passed, that argument's default, or its "
+                       f"name in the signature -- so they check that a value is stored, not what "
+                       f"the code does with it. Use the object the way the change means it to "
+                       f"be used (call, fit, transform, render it) and assert on that result")
         else:
             # Real checks only under `if <result>:` (2026-10-27): pylint-4492 (mut-p29) read
             # its JSON back, asserted `!= ""`, `isinstance(parsed, list)`, `len(parsed) >= 0`,
@@ -1502,7 +1570,7 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                        if isinstance(a, _ast.Assert)}
             loose = [a for a in asserts if id(a) not in guarded]
             if guarded and not helpers and all(_existence_only(a.test) for a in loose):
-                g = next(g for g in guards if any(id(a) in guarded for b in g.body for a in _ast.walk(b)))
+                g = next(g for g in guards if any(id(a) in guarded for b in g.body + g.orelse for a in _ast.walk(b)))
                 why.append(f"its checks of values sit under `if {_ast.unparse(g.test)[:60]}:` (line "
                            f"{g.lineno}), so a version that produces nothing skips them, and the "
                            f"rest only check that something exists. Drop the `if` and assert the "

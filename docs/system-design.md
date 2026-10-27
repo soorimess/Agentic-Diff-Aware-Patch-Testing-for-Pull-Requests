@@ -1482,6 +1482,14 @@ TestForge" -- change the methods). Built:
     dropped before the rules run, so `try: import X; assert True / except ImportError:
     assert False` and `hasattr` asserts beside one are tricks. Over 2962 saved files every
     newly flagged test was checked weak (e.g. `hasattr(clf, 'cv_values_') or True`).
+  - Echo checks (2026-10-27, `_echo`): a check that reads back what the test gave a
+    constructor -- `t = SplineTransformer(sparse_output=True); assert t.sparse_output is True`,
+    that attribute's default, the keyword's name in a list (`"sparse_output" in params`), a
+    signature read, and `assertEqual`/`assertIs`/`assertIsNone` forms. A test whose every
+    check is echo or existence (one echo at least) is a trick. mut5-a: all 6 sklearn-24145
+    flips and 6 of 8 django-13207 flips were echo (judge: parameter storage; 0 wrong versions
+    caught); django keeps its 2 `deconstruct()` tests. Over 2962 saved files 217 tests change;
+    a sample of 10 were all echo.
   - Tried and reverted: seeding with a test that reads its output back -- its helper asserts
     exact output and left the agent without a flip.
 - A test failing on both sides is told the line it fails at and pytest's `where` values
