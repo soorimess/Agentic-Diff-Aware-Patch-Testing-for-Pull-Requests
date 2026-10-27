@@ -1381,6 +1381,59 @@ def _structure_aliases(fn) -> set:
             for t in a.targets if isinstance(t, _ast.Name)}
 
 
+def _source_aliases(fn) -> set:
+    """Names a test binds from the repository's own source text (2026-10-27): sphinx-10807
+    (mut5-c) read `sphinx/config.py` and asserted `"toc_object_entries_show_parents" in
+    config_content` -- true of any version that mentions the name, right or wrong. Only
+    `.py` files opened for reading: a file the code under test writes is its output, a file
+    the test writes is its input (mut-p28), and `inspect.getsource` of what `lambdify`
+    built is the code's output too (sympy-14976)."""
+    import ast as _ast
+
+    def py_path(c):
+        args = getattr(c, "args", [])
+        mode = [a.value for a in args[1:2] if isinstance(a, _ast.Constant)] + [
+            k.value.value for k in getattr(c, "keywords", [])
+            if k.arg == "mode" and isinstance(k.value, _ast.Constant)]
+        return any(isinstance(a, _ast.Constant) and isinstance(a.value, str)
+                   and a.value.endswith(".py") for a in args[:1]) and \
+            not any(isinstance(m, str) and set(m) & set("wax+") for m in mode)
+
+    def from_source(v):
+        if not isinstance(v, _ast.Call):
+            return False
+        f = v.func
+        name = f.attr if isinstance(f, _ast.Attribute) else getattr(f, "id", "")
+        return name in ("read_text", "read") and isinstance(f, _ast.Attribute) and (
+            (isinstance(f.value, _ast.Call) and py_path(f.value))
+            or (isinstance(f.value, _ast.Name) and f.value.id in handles))
+
+    handles = {i.optional_vars.id for w in _ast.walk(fn) if isinstance(w, (_ast.With, _ast.AsyncWith))
+               for i in w.items if isinstance(i.optional_vars, _ast.Name) and py_path(i.context_expr)}
+    assigns = [a for a in _ast.walk(fn) if isinstance(a, _ast.Assign)]
+    names = {t.id for a in assigns if from_source(a.value) for t in a.targets if isinstance(t, _ast.Name)}
+    # And what is computed from it: `match = re.search(pattern, config_content)`,
+    # `default_value = match.group(1)` -- a regex over the source is still the source.
+    while names:
+        more = {t.id for a in assigns if any(isinstance(x, _ast.Name) and x.id in names
+                                             for x in _ast.walk(a.value))
+                for t in a.targets if isinstance(t, _ast.Name)} - names
+        if not more:
+            break
+        names |= more
+    return names
+
+
+def _source_only(expr, names) -> bool:
+    """Whether an assertion reads only the source text bound in `names` (`_source_aliases`)."""
+    import ast as _ast
+    used = {x.id for x in _ast.walk(expr) if isinstance(x, _ast.Name)}
+    return bool(names) and bool(used & names) and not any(
+        isinstance(x, _ast.Call) and not (isinstance(x.func, _ast.Attribute) and isinstance(x.func.value, _ast.Name)
+                                          and x.func.value.id in names)
+        for x in _ast.walk(expr))
+
+
 def _structural(expr, names=frozenset()) -> bool:
     """Whether an assertion checks only where a class sits in the hierarchy (2026-10-27):
     pylint-5136 (mut5-b) flipped on `"MessagesHandlerMixIn" not in [c.__name__ for c in
@@ -1562,6 +1615,7 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
         asserts = [n for n in _ast.walk(fn) if isinstance(n, _ast.Assert)]
         aliases = _private_aliases(fn)
         structure = _structure_aliases(fn)
+        source = _source_aliases(fn)
         # Assertion helpers and expected-error blocks: `self.assertEqual`, `assert_node`,
         # `np.testing.assert_allclose`, `pytest.raises`/`warns`, `self.assertRaises`.
         helpers = [n for n in _ast.walk(fn) if isinstance(n, _ast.Call) and (
@@ -1609,12 +1663,13 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                        f"have, and nothing a user of the code sees. Assert what the code returns, "
                        f"prints or writes when it is used")
         elif asserts and not helpers and all(_existence_only(a.test) or _structural(a.test, structure)
-                                             for a in asserts):
+                                             or _source_only(a.test, source) for a in asserts):
             why.append(f"its only assertions (line {', '.join(str(a.lineno) for a in asserts[:4])}) "
                        f"check that names exist or that something came out -- `hasattr`, "
                        f"`is not None`, `isinstance`, a bare name, `len(...) > 0`, one of "
                        f"several values (`x in [0, 1, 2]`), what it is not (`x != 2`), which "
-                       f"classes it inherits from (`__mro__`, `__bases__`) -- not what it is or does, which any "
+                       f"classes it inherits from (`__mro__`, `__bases__`), text in a source file "
+                       f"(`\"name\" in open(\"x.py\").read()`) -- not what it is or does, which any "
                        f"version of the change passes, right or wrong")
         elif checks and (built := {t.id for a in _ast.walk(fn) if isinstance(a, _ast.Assign)
                                    and _class_call(a.value) for t in a.targets

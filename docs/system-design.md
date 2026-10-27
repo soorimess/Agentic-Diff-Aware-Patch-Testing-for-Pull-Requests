@@ -1504,6 +1504,13 @@ TestForge" -- change the methods). Built:
     when the `try` ends by failing (`pytest.fail("expected ...")`, `assert False`, `raise`):
     that is the expected-error idiom (mut-p12's `InvalidReporterError` test).
     Both rules over 2966 saved files: 24 tests newly flagged, 0 unflagged; all checked weak.
+  - Source-text checks (2026-10-27, `_source_aliases`/`_source_only`): an assert that reads
+    only text from a repository `.py` file opened for reading (`open("sphinx/config.py")
+    .read()`, `Path("x.py").read_text()`) and names computed from it (`re.search(...)`,
+    `.group(1)`) counts as existence. sphinx-10807 mut5-c flipped on `"toc_object_entries_
+    show_parents" in config_content` and a regex for its default. Not files opened for
+    writing (mut-p28 writes its own input module) and not `inspect.getsource` (sympy-14976
+    reads what `lambdify` generated -- the code's output). Sweep: 1 new flag in 2969 files.
   - `test_leaf` (2026-10-27): trick names are matched to flips by the bare function name,
     for django's `test_x (module.Class)` ids too. Before, `real_flips` split on `::` only, so
     django-13207 mut5-b counted its 2 echo tricks as real flips.
