@@ -1456,6 +1456,23 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
                        f"`is not None`, `isinstance`, a bare name, `len(...) > 0`, one of "
                        f"several values (`x in [0, 1, 2]`), what it is not (`x != 2`) -- not what it is, which any "
                        f"version of the change passes, right or wrong")
+        else:
+            # Real checks only under `if <result>:` (2026-10-27): pylint-4492 (mut-p29) read
+            # its JSON back, asserted `!= ""`, `isinstance(parsed, list)`, `len(parsed) >= 0`,
+            # and put every value check under `if len(parsed) > 0:` -- a version that writes
+            # `[]` skips them all. A condition on the platform or version is not such a guard.
+            guards = [g for g in _ast.walk(fn) if isinstance(g, _ast.If) and not any(
+                isinstance(x, _ast.Name) and x.id in ("sys", "platform", "os", "PY3", "PY2")
+                for x in _ast.walk(g.test))]
+            guarded = {id(a) for g in guards for b in g.body + g.orelse for a in _ast.walk(b)
+                       if isinstance(a, _ast.Assert)}
+            loose = [a for a in asserts if id(a) not in guarded]
+            if guarded and not helpers and all(_existence_only(a.test) for a in loose):
+                g = next(g for g in guards if any(id(a) in guarded for b in g.body for a in _ast.walk(b)))
+                why.append(f"its checks of values sit under `if {_ast.unparse(g.test)[:60]}:` (line "
+                           f"{g.lineno}), so a version that produces nothing skips them, and the "
+                           f"rest only check that something exists. Drop the `if` and assert the "
+                           f"values directly")
         if why:
             out[fn.name] = why
     return out

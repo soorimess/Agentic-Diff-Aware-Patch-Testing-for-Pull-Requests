@@ -1445,6 +1445,11 @@ TestForge" -- change the methods). Built:
   and the read-back example says to give the run input that produces results; a flipping test
   whose output files are all empty is refused once at the stop (`empty_gap`, reason
   `outputs_empty`).
+- Value checks only under `if <result>:` do not count (2026-10-27): mut-p29 read its JSON back,
+  asserted `!= ""`, `isinstance(parsed, list)` and `len(parsed) >= 0`, and put every value check
+  under `if len(parsed) > 0:` -- a version that writes `[]` skips them. When every assertion
+  outside such an `if` is existence-only, the test is a trick ("drop the `if` and assert the
+  values directly"); a condition on `sys`/`platform`/`os` is not a guard.
 - An assertion only of what a value is not (`x != 2`, `x not in (1, 2)`) is existence-only
   (2026-10-27): mut-p24 flipped two tests whose only checks were `pylint_code != 2` and
   `!= 1`.
