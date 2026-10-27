@@ -1283,6 +1283,15 @@ def _existence_only(expr) -> bool:
         if isinstance(op, (_ast.In, _ast.NotIn)) and isinstance(right, _ast.Call) and \
                 isinstance(right.func, _ast.Name) and right.func.id in ("dir", "vars"):
             return True                               # assert "name" in dir(obj)
+        # A name listed as exported, not what it does (2026-10-27): pylint-4492 (mut5-a)
+        # flipped on `assert "MultiReporter" in reporters_all` (`reporters.__all__`).
+        if isinstance(op, (_ast.In, _ast.NotIn)) and isinstance(left := expr.left, _ast.Constant) \
+                and isinstance(left.value, str) and (
+                    (isinstance(right, _ast.Attribute) and right.attr == "__all__")
+                    or (isinstance(right, _ast.Name) and right.id.endswith("_all"))
+                    or (isinstance(right, _ast.Call) and isinstance(right.func, _ast.Name)
+                        and right.func.id in ("globals", "locals"))):
+            return True                               # assert "Name" in mod.__all__
         # Any of several outcomes (2026-10-24): pylint-4492 (mut-p11) parsed the JSON its
         # run wrote, then asserted `isinstance(parsed, list)` and `pylint_code in [0, 1, 2]`
         # -- true of a right version and a wrong one alike.
@@ -1308,6 +1317,8 @@ def _existence_only(expr) -> bool:
             return True                               # assert x != "" / != []
     if isinstance(expr, _ast.Call) and isinstance(expr.func, _ast.Name) and expr.func.id == "bool":
         return True                                   # assert bool(x)
+    if isinstance(expr, _ast.Constant) and expr.value:
+        return True                                   # assert True, beside other existence checks
     return False
 
 
@@ -1451,6 +1462,11 @@ def trick_tests(text: str | None) -> dict[str, list[str]]:
         # existence or private-attribute asserts it hid them (mut-p21: `try: assert hasattr(
         # linter, "_reporter_names") ... except AttributeError: pytest.fail(...)`)
         helpers = [h for h in helpers if id(h) not in in_except]
+        # `assert False, "..."` in an `except ImportError:` is that same `pytest.fail`
+        # (mut5-a: `try: import X; assert True / except ImportError: assert False`, and
+        # `hasattr` asserts beside one); the asserts outside decide.
+        asserts = [a for a in asserts if not (id(a) in in_except and isinstance(a.test, _ast.Constant)
+                                              and not a.test.value)]
         if checks and all(id(c) in in_except for c in checks):
             why.append(f"its only checks (line {checks[0].lineno}) are inside an `except`, so it "
                        f"tests only that the call does not raise, not what it does")

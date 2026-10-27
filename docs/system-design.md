@@ -1476,6 +1476,12 @@ TestForge" -- change the methods). Built:
     A private read also counts through `getattr(obj, "_name", None)` and through a name
     bound from one (`names = getattr(linter, "_reporter_names", None); assert names ==
     ...`): mut-p30 flipped on exactly that and scored 27.3% / mutmut 6 / wrong 0.
+  - Also existence-only (2026-10-27, mut5-a pylint-4492, three "real" flips that were not):
+    `"Name" in mod.__all__` (or a `*_all` alias, `globals()`), and `assert True` beside other
+    existence checks. `assert False, ...` inside an `except` is `pytest.fail` there and is
+    dropped before the rules run, so `try: import X; assert True / except ImportError:
+    assert False` and `hasattr` asserts beside one are tricks. Over 2962 saved files every
+    newly flagged test was checked weak (e.g. `hasattr(clf, 'cv_values_') or True`).
   - Tried and reverted: seeding with a test that reads its output back -- its helper asserts
     exact output and left the agent without a flip.
 - A test failing on both sides is told the line it fails at and pytest's `where` values
