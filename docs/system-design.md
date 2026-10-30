@@ -1580,6 +1580,19 @@ second chance (2026-10-27), and its note says which tests flip and why none coun
 pylint-4492 mut-p31 flipped only on a test that asserts nothing, was refused eight times,
 stopped acting with 57 actions left and never got the restart a NO would have.
 
+A second chance never hands in less than the first attempt (2026-10-30). In the final
+experiment sympy-13236 (fin-B) ended its first conversation on a YES whose only flip was a
+trick, got the restart, and the restart ended NO. The YES was lost: the end-of-run restore
+(`V.best_f2p`) looks only at the agent's own `verify` calls, and that file had only been
+scored by the harness when the agent stopped. Now, when the first verdict was YES and the
+restart's is not, the first file is written back and verified again; if it still flips it
+is handed in (the restart's file is kept as `last_<test>.py`), the tree is audited again,
+and `second_chance` records `first_rechecked` and `handed_in: "first"`. The flow log says
+`second chance kept first`. The final experiment's batches 1 and 2 ran before this fix;
+the one run it touched was re-scored offline from its first file
+(a local helper script, `rescored.json` beside the untouched
+`result.json`) and both numbers are reported.
+
 Model limits, checked 2026-09-28: the gateway serves qwen3-coder with 262,144 input and
 235,929 output tokens; the harness asks for at most 32,000 output tokens per call. In the
 first live runs of this design (597 calls, restarts included) the largest prompt was

@@ -1344,6 +1344,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                                      remaining, diagnosis)
                 field("restart", f"{verdict.f2p} after {run['actions']} actions -- starting "
                                  f"again with {remaining} left")
+                first = (test_file, code)
                 again = run_agent(inst, box, default_path, remaining, d, features, n_mutants,
                                   model=model, provider=provider, temperature=temperature,
                                   restart_note=note, cap_total=max_iterations)
@@ -1352,6 +1353,28 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                 restart["final_verdict"] = verdict.f2p
                 flow.record(flow.AGENT, "second chance done",
                             f"{restart['first_verdict']} -> {verdict.f2p}")
+                # A second chance never hands in less than the first attempt (2026-10-30).
+                # sympy-13236 (final, fin-B): a YES on tricks alone got the restart, which
+                # ended NO; the YES was lost because `score`'s restore looks only at the
+                # agent's own `verify` calls, and that file had only been scored by the
+                # harness. The first file is checked again and handed in if it still flips.
+                if restart["first_verdict"] == "YES" and verdict.f2p != "YES" and first[1]:
+                    box.write(first[0], first[1])
+                    back = V.verify(inst, box, generated_test=first[1], quiet=True,
+                                    test_path=first[0])
+                    restart["first_rechecked"] = back.f2p
+                    if back.f2p == "YES":
+                        if code is not None:
+                            (d / f"last_{Path(test_file).name}").write_text(code)
+                        test_file, code, verdict = first[0], first[1], back
+                        (d / Path(test_file).name).write_text(code)
+                        checks = audit(box, run["tool_log"], test_file)
+                        run["trick_tests"] = V.trick_tests(code)
+                        run["real_flips"] = V.real_flips(verdict, code)
+                        restart["handed_in"] = "first"
+                    flow.record(flow.AGENT, "second chance kept first",
+                                f"first file re-verified {back.f2p}; handed in "
+                                f"{restart.get('handed_in', 'last')}")
 
         # Inside the sandbox, because every mutant has to be applied to the code and the
         # test run against it -- the container is gone a few lines below. After the final
