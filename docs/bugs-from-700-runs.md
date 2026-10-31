@@ -6,7 +6,7 @@ was whether that was variance or a defect. It was both, and the defects were fou
 reading tool logs, completions and the generated tests themselves, not by counting
 verdicts.
 
-The logic that produced the ten arms is preserved on branch `final-state-of-first-runs`.
+The logic that produced the ten arms is preserved on branch `snapshot/ten-arms-70-prs`.
 Everything below is fixed on `main` unless marked otherwise.
 
 ## Fixed
@@ -108,7 +108,7 @@ write.
 
 ## Found while testing the new system
 
-A 26-instance run of the new system (`experiments-tests/new-system-26`) checked every fix
+A 26-instance run of the new system (`take-two-retries-and-checks/new-system-26`) checked every fix
 above against what the model actually received. All held. It surfaced two more:
 
 - **django's summary line parsed as a test.** `FAILED (errors=1)` fits the pytest
@@ -137,7 +137,7 @@ That behaviour led to three more rules on the refusal loop (see "Refusing a stop
   reminded of an open coverage/mutation duty at most once. Replayed on the 26-PR run,
   these drop 25 of 55 rounds and lose none of its three conversions.
 
-The live check (`experiments-tests/diag-smoke`) showed both diagnoses reaching the model
+The live check (`take-two-retries-and-checks/diag-smoke`) showed both diagnoses reaching the model
 and the two-round stop firing. It also caught one gap: a test that never imports the
 changed file leaves no entry in the coverage report, the metric calls that
 *unmeasurable*, and the first refusal went out with no diagnosis at all -- the plainest
@@ -147,7 +147,7 @@ the changed lines". The published coverage metric is unchanged.
 ## Found in the temperature test (control-26, temp-0.3-26)
 
 Reading both runs' trajectories and completions (details in
-`experiments-tests/temperature-0.3.md`):
+`take-two-retries-and-checks/temperature-0.3.md`):
 
 - **Tool names did not match the prompt** -- `sandbox_verify` to the model, `verify` in every
   message. Fixed: tools are named as the prompt names them.
@@ -231,7 +231,7 @@ rule. Base's prompt is byte-identical after the change. `prompt.py` gained inlin
 (`...sentence.{?guard} Next sentence.{/guard}`), which keep or drop one sentence without
 disturbing the paragraph around it.
 
-## Found in experiments-v2's first pass (base and −second-chance, 140 runs)
+## Found in ten-arms-70-prs-take-two's first pass (base and −second-chance, 140 runs)
 
 The one fix round the v2 plan allows, after reading every trajectory of the first two arms.
 The OpenRouter key ran out of credit about two-thirds of the way through, which is what
@@ -263,7 +263,7 @@ which is uncapped by design; no refusal message named a missing tool; no YES rea
 coverage, mutation and judge were recorded on every YES but one, whose developer test does
 not pass on the fixed code.
 
-## Found reading all 700 experiments-v2 runs
+## Found reading all 700 ten-arms-70-prs-take-two runs
 
 Every trajectory of the ten arms was read (five readers, two arms each, flagged cases
 checked by hand). No crash, harness traceback, killed process or hung step in any run;
@@ -275,7 +275,7 @@ every run had its arm's tools, the model, temperature 0.3, a sealed network and
 `runners.parse_output` read a django result only as `name ... status` on one line. When a
 test printed something in between -- argparse usage, a coroutine warning -- the test was
 dropped. Three verdicts were wrong, and were re-scored offline from the saved logs by the
-harness's own `verify._decide` (`experiments-v2/rescore.py`; the runs keep their old
+harness's own `verify._decide` (`ten-arms-70-prs-take-two/rescore.py`; the runs keep their old
 verdict in `rescored_from`):
 
 | run | recorded | re-scored |
@@ -290,7 +290,7 @@ parses. No v1 verdict was affected.
 ### Fixed after the audit (2026-09-27; left in place for the v2 results)
 
 These reached the agent during the v2 runs, so the v2 results stand with them in place;
-the system as it ran is on branch `final-state-of-second-runs`. Every fix below was
+the system as it ran is on branch `snapshot/ten-arms-70-prs-take-two`. Every fix below was
 checked offline against the saved v1 and v2 runs; none of it has run live yet.
 
 **Verdict path**
@@ -482,7 +482,7 @@ Observed, not changed:
 ## Found in the final base run (36, 2026-09-30): 26/36 YES
 
 A proxy outage (~40 min) cut 13 first-wave agents off and a 14th hit the 2 h per-job
-ceiling after riding it out; all 14 were deleted and rerun (`out-v2/audit_outage.py`
+ceiling after riding it out; all 14 were deleted and rerun (`ablations-36-prs/audit_outage.py`
 classified every run; two others had waited out 9 timeouts and are valid). Model calls
 now retry 60 times and the per-job ceiling is 6 h.
 
@@ -742,8 +742,8 @@ Found reading no-coverage (2026-10-07):
     `cap` with the restart's own budget (e.g. "51 of the 74") after the restart said 125.
   None changed a verdict in the 36 runs read.
 
-Deferred wording, fixed after the out-v2 plan (2026-10-08; the state that ran it is the branch
-`out-v2-36prs`):
+Deferred wording, fixed after the ablations-36-prs plan (2026-10-08; the state that ran it is the branch
+`snapshot/ablations-36-prs`):
 
 - verify on a test passing at base: "does not test what this pull request changes" (was "does
   not exercise this pull request" -- a test can run the change and still pass before it).
@@ -773,7 +773,7 @@ Deferred wording, fixed after the out-v2 plan (2026-10-08; the state that ran it
   record; `--add-require-tools-with-score-report` adds scores to the duties; flags are
   `--add-<add-on>` / `--no-<input>`; model calls go through `LLM_PROXY` (the gateway resets
   direct connections from the laptop).
-- **2026-09-28, from the tool and gate analysis of experiments-v2** (details in
+- **2026-09-28, from the tool and gate analysis of ten-arms-70-prs-take-two** (details in
   system-design.md): the second chance is the stop gate (verify loop included) and a
   default-on feature; `require-tools` is only the coverage/mutation duties, and surviving
   mutants must now be answered; every configuration is scored on the same held-out mutant

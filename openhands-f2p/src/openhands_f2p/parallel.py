@@ -221,7 +221,7 @@ def _run_children(jobs: list[tuple], parallel: int,
         (out_dir / "child.log").write_text(
             proc.stdout + ("\n--- stderr ---\n" + proc.stderr
                            if proc.stderr.strip() else ""))
-        # OpenRouter's own wording when the key's credit is gone. experiments-v2's first
+        # OpenRouter's own wording when the key's credit is gone. ten-arms-70-prs-take-two's first
         # pass met it and, not recognising it, started every remaining job anyway.
         if any(m in (proc.stdout + proc.stderr)
                for m in ("Budget has been exceeded", "requires more credits")):

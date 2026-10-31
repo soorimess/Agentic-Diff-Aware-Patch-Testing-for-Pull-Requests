@@ -242,7 +242,7 @@ rule, the goal change and the mutation tool.
 
 **Question.** What does the reference corpus look like under the current system?
 
-**Why it is not optional forever.** `out/out_full_run/` predates the mutation tool,
+**Why it is not optional forever.** `first-runs-26-prs/out_full_run/` predates the mutation tool,
 `--repo-search`, the input-choice paragraph, the write-early rule, the goal change and the
 fixtures rule. Every "before" comparison against it silently attributes six changes to
 whichever one is being tested — which already cost one extra run during the goal-change

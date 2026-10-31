@@ -246,7 +246,7 @@ def compare(instance: dict[str, Any], generated: str,
         developer_test=clip_marked(added_lines(instance["test_patch"]), 12000),
         generated=clip_marked(generated, 12000))
     # Asked at most twice, with the identical prompt, and only when the answer cannot be
-    # read. One judgement in about fifty came back unparseable in experiments-v2's first
+    # read. One judgement in about fifty came back unparseable in ten-arms-70-prs-take-two's first
     # pass (django-14792), with nothing on disk to say why. Same model, same settings:
     # a re-ask, not a fallback. An answer that still cannot be read is kept whole in
     # `raw`, so the next one can be diagnosed.

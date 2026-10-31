@@ -79,7 +79,7 @@ def cli() -> str:
             order.append(title)
             rows[title] = []
         flag = ", ".join(f"`{o}`" for o in a.option_strings) or f"`{a.dest}`"
-        help_text = " ".join((a.help or "").split())
+        help_text = " ".join((a.help or "").replace("%%", "%").split())  # argparse escaping
         tail = help_text.rstrip()
         sep = "" if tail.endswith((".", "!", "?")) else "."
         if a.choices:

@@ -20,7 +20,7 @@ uv run python -m openhands_f2p.sources build chaco <ids>         # images
 uv run python -m openhands_f2p.sources validate chaco <ids>      # FAIL_TO_PASS, oracle -> runnable
 uv run python -m openhands_f2p.sources review chaco ablation     # a page per PR, to check by hand
 uv run python -m openhands_f2p.agent --dataset chaco <id> --model ...   # a run
-uv run python ../swe-bench-outs/out-v2/run_exp.py --dataset chaco --only <ids> <name>  # -> chaco-outs/<name>/
+uv run python ../scripts/run_exp.py --dataset chaco --only <ids> <name>  # -> chaco-outs/<name>/
 ```
 
 `<ids>` can be instance ids, `all`, or a list name of the dataset (ChaCo: `full`,

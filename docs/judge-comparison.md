@@ -2,7 +2,7 @@
 
 The concept judge has changed twice: the model moved from `gpt-5.5` to `gpt-5.6-luna`,
 and then the prompt was rewritten (`00f9210`). Both changes have now been measured on the
-same seventeen generated tests from `experiments-tests/no-require-tools`, one variable at
+same seventeen generated tests from `take-two-retries-and-checks/no-require-tools`, one variable at
 a time.
 
 | pass | field in `result.json` | model | prompt |

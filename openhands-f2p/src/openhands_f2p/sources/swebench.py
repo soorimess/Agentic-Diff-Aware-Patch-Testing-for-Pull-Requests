@@ -21,12 +21,10 @@ CANDIDATES = (
     PROJECT_ROOT / ".cache" / "swebench_verified.json",
 )
 
-HOW_TO_FETCH = """The dataset is not in the repository -- it is 8 MB of someone else's
-data and it is a download, not a source file. Fetch it once:
+HOW_TO_FETCH = """The dataset is not in the repository -- it is someone else's data and a
+download, not a source file. Fetch it once, from the repository root:
 
-    uv run python -c "from datasets import load_dataset; import json; \\
-      rows = list(load_dataset('princeton-nlp/SWE-bench_Verified', split='test')); \\
-      json.dump(rows, open('data/swebench_verified.json','w'))"
+    uv run --project openhands-f2p --with datasets python scripts/fetch_swebench.py
 
 or point F2P_DATASET at a copy you already have."""
 

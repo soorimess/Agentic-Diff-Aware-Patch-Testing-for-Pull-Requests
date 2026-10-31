@@ -229,9 +229,9 @@ _BUILTIN = [
 # same shape, so an evaluation set runs through exactly the same code with nothing
 # special-cased for it.
 #
-#     F2P_PRS_FILE=swe-bench-outs/evaluation/prs.json F2P_IMAGE_CACHE=image-cache-evaluation \
+#     F2P_PRS_FILE=datasets/swebench/evaluation-10-prs.json F2P_IMAGE_CACHE=image-cache-evaluation \
 #         uv run python -m openhands_f2p.agent all --model gpt-5-mini \
-#         --out-root swe-bench-outs/evaluation/out_gpt5mini --mutants 10 --parallel 10
+#         --out-root swe-bench-outs/my-runs/gpt5mini --mutants 10 --parallel 10
 def current() -> list[dict]:
     """The instances of this run: `F2P_PRS_FILE` if set, else the active dataset's
     runnable list (`openhands_f2p.sources`), else -- for SWE-bench -- the twenty-six above.

@@ -1,6 +1,6 @@
 """Scan finished runs for every failure signature found so far, so none repeats unseen.
 
-    uv run python -m openhands_f2p.sources.watch ../chaco-outs/base [--json]
+    uv run python -m openhands_f2p.sources.watch ../chaco-outs/coverage-tool-28-prs/base [--json]
 
 Read-only. Each finished run (a directory with result.json) is checked against the
 harness, environment and logic problems the ChaCo audits found (2026-10-09..11). A hit

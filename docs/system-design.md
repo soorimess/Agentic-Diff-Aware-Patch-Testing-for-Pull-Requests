@@ -525,7 +525,7 @@ section at all, so `-v` is passed as well and the per-test line is parsed; `--no
 arrived in pytest 6.0 and is a usage error in the 4.5 that pytest's own repository runs.
 
 **Reading what django and sympy print** (`runners.parse_output`, reworked after
-experiments-v2; every saved log of both series was replayed through the old and new
+ten-arms-70-prs-take-two; every saved log of both series was replayed through the old and new
 parser, 2,305 runs, and no YES verdict changed):
 
 - *A status on a later line.* A test that prints between `name ...` and its status --
@@ -587,7 +587,7 @@ reruns from scratch.
 `--temperature` sets the agent's sampling temperature (0 to 2; anything else is refused,
 not clamped). **The default is 0.3** (`models.DEFAULT_TEMPERATURE`, since 2026-09-26): on
 the 26-instance set it scored 20/26 against 16/26 with none sent, 15 genuine once a
-source-text test is discounted (`experiments-tests/temperature-0.3.md`). Every run
+source-text test is discounted (`take-two-retries-and-checks/temperature-0.3.md`). Every run
 before that -- the ten arms included -- sent none and the provider picked;
 `configure_llm(temperature=None)` still sends nothing at all rather than `None`, which
 is how those requests stay reproducible. It is the agent's only; the judge keeps its
@@ -617,64 +617,48 @@ That makes every shared resource a hazard, and two were real:
 - Two 3 GB image pulls sharing a slow link finished neither. Pulls are serialised behind
   a lock file, and one attempt gets the whole link.
 
-### On the server (since 2026-10-04)
+### Running experiments
 
-Runs moved to a server: 16 CPUs, 31 GB RAM, 287 GB disk, Docker logged in to Docker Hub,
-checkout at `<repo>`. `uv` is on the system PATH; `.env` is
-the laptop's without `LLM_PROXY` -- the server reaches the gateway directly (health in
-12 ms), so no proxy is set there. `run_exp.py` defaults to `--parallel 36` and six
-concurrent pulls (`F2P_PULL_CONCURRENCY`); every image used is archived to
-`image-cache/` in the checkout (git-ignored), so a later run loads it instead of pulling.
-
-Since 2026-10-04 every run has an action cap of 125 (was 100) and **no judge by default**:
-`run_exp.py` passes `--no-compare` unless `--with-judge` is given, and `--judge <exp>`
-grades the saved test of every unjudged YES of a finished experiment afterwards (threads,
-no containers), writing `concept`, `judge_usage` and `judge/completions/` into each run.
-The experiment plan is `out-v2/tool-experiments-out-v2-36-prs.md`.
-
-### On the laptop (2026-09-27 to 2026-10-03)
-
-Experiments go in **`out-v2/<name>/`**, one folder per experiment, named after the change
-it tests, run by `swe-bench-outs/out-v2/run_exp.py` (the 36 local instances, both caches, `--mutants 20`,
-the model and temperature fixed; see its docstring). `out-v2/base/` is the reference.
-
-The free-space guard reads the smaller of the Docker VM's free space and the host's:
-Docker Desktop's disk is a sparse file on the host, and on the laptop the VM reported
-79 GB free while the host had 52. A load needs 14 GB plus 1.5 GB for every `f2p-*`
-container running (`CONTAINER_RESERVE_GB`): those keep writing after their image is in,
-and the first 36-instance base run (2026-09-29, parallel 18, 27 GB free at launch) loaded
-its last images with room to spare and then wrote the host to 0 -- Docker Desktop
-stopped and every job hung. Short of room while jobs run, a load now waits for one to
-finish (its image becomes evictable) instead of falling through to a pull the laptop
-cannot make. Deleting an image frees VM space at once; the host's copy of it shrinks
-when Docker Desktop reclaims the sparse file (it did on restart: 49 GB -> 19 GB).
-
-There is no server any more. Runs are on the laptop at `--parallel 20`, over the 36
-instances whose images are cached locally: 26 in `image-cache/` (the development set) and
-10 in `image-cache-evaluation/` (the evaluation set). `F2P_IMAGE_CACHE` takes several
-directories separated like `PATH`, relative to the project root; archives are looked up in
-each and new ones go to the first. The combined list is `evaluation/local-36-prs.json`
-(each entry marks its `set`):
+Experiments are run by `scripts/run_exp.py`: one folder per configuration under `--results DIR`
+(default `swe-bench-outs/runs/`), named after what it changes, with the model,
+temperature and `--mutants 20` fixed so configurations differ only by their flags (see its
+docstring; `F2P_RUN_MODEL` names the model as another endpoint knows it). Every run has an
+action cap of 125 and **no judge by default**: `--judge` grades the saved test of every
+unjudged YES of a finished experiment afterwards (threads, no containers), writing `concept`,
+`judge_usage` and `judge/completions/` into each run. `--retry-broken` reruns only jobs an
+outside failure stopped.
 
 ```bash
 cd openhands-f2p
-uv run python ../swe-bench-outs/out-v2/run_exp.py --parallel 18 --dry-run base    # sets both variables
+uv run python ../scripts/run_exp.py --parallel 6 --dry-run base    # the 36 local instances
 ```
 
-Leave archiving on (no `F2P_NO_ARCHIVE`): the laptop link is what the cache exists for.
-Thirty-six paired instances detect less than seventy -- a gap of three or four runs between
-two arms is inside the noise on seventy already (see the v2 comparison), so a single arm
-pair on 36 should be read as direction, not effect.
+Images are archived to `image-cache/` (git-ignored) after use, so a later run loads an
+archive instead of pulling; `F2P_IMAGE_CACHE` takes several directories separated like
+`PATH`, and new archives go to the first. Leave archiving on unless the machine has a fast
+link to Docker Hub.
+
+**Disk decides the parallelism.** Each loaded image takes 3 to 8 GB, and Docker Desktop's
+disk is a sparse file on the host, so the free-space guard reads the smaller of the Docker
+VM's free space and the host's. A load needs 14 GB plus 1.5 GB for every `f2p-*` container
+running (`CONTAINER_RESERVE_GB`), because containers keep writing after their image is in;
+short of room, a load waits for a job to finish instead of pulling. A run that let the host
+reach 0 GB stopped Docker Desktop and hung every job. Deleting an image frees the VM's space
+at once; the host gets it back when Docker Desktop reclaims the sparse file.
+
+Thirty-six paired instances detect less than seventy: a gap of three or four runs between
+two arms is inside the noise on seventy already, so a single arm pair on 36 should be read
+as direction, not effect.
 
 ## Modules
 
 <!-- generated:modules -->
 | module | lines | what it is |
 |---|---|---|
-| `agent.py` | 1485 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
+| `agent.py` | 1803 | The agent arm: an OpenHands agent that writes fail-to-pass tests inside a container. |
 | `checks.py` | 167 | What the agent actually did, checked rather than assumed. |
 | `compare.py` | 293 | How does the generated test compare with the developer's, on concept, issue coverage and readability? |
-| `coverage_metric.py` | 608 | Of the lines this pull request changed, how many did the test execute? |
+| `coverage_metric.py` | 655 | Of the lines this pull request changed, how many did the test execute? |
 | `dataset.py` | 13 | One instance, from whichever dataset this run is over. |
 | `docs.py` | 168 | Refresh the generated blocks in `docs/system-design.md`. |
 | `features.py` | 337 | What the agent is given, as one registry that everything else reads. |
@@ -682,30 +666,31 @@ pair on 36 should be read as direction, not effect.
 | `image_build.py` | 125 | Images no registry has: built here, from the Dockerfile a dataset's adapter wrote. |
 | `image_cache.py` | 313 | Instance images kept on the host disk, so each one is pulled from the registry once. |
 | `images.py` | 480 | Instance images -- pulled from a registry or built (image_build.py) -- and the disk they compete for. |
-| `layout.py` | 41 | Where the project is on disk, and the environment it runs with. |
+| `layout.py` | 40 | Where the project is on disk, and the environment it runs with. |
 | `llm_adapters.py` | 184 | Adaptations that a configuration value cannot express. |
 | `llm_config.py` | 187 | One place the model connection is configured, shared by every caller. |
 | `models.py` | 343 | Which model answers, and what it needs, read from `models.json`. |
-| `mutants.py` | 710 | Does the test notice when the fix is subtly wrong? |
+| `mutants.py` | 787 | Does the test notice when the fix is subtly wrong? |
 | `oracle.py` | 105 | Oracle sweep: run the developer's own test through our verifier, on every PR. |
 | `parallel.py` | 262 | Running several pull requests at once, as separate processes. |
 | `prompt.py` | 346 | Assemble the agent's prompt from the pieces in prompts/. |
 | `prs.py` | 354 | The instances we develop against: twenty-six, spanning every repository and a decade. |
 | `runners.py` | 611 | Three test-runner conventions, and how to read what they print. |
-| `runs.py` | 653 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
+| `runs.py` | 656 | `RUNS.md` in a run folder -- the state of every instance, for someone who has just cloned this. |
 | `sandbox.py` | 369 | One container per instance, and the only door into it. |
-| `sandbox_tools.py` | 1031 | OpenHands tools whose executors run inside the SWE-bench container. |
+| `sandbox_tools.py` | 3267 | OpenHands tools whose executors run inside the SWE-bench container. |
 | `sources/__init__.py` | 119 | Where instances come from: one adapter per dataset, one standard row for the harness. |
 | `sources/__main__.py` | 162 | The datasets, and getting one ready to run. |
 | `sources/chaco.py` | 972 | ChaCo: the 145 pull requests of "Change And Cover" (Zhou et al., ICSE 2026). |
-| `sources/swebench.py` | 97 | SWE-bench Verified: the dataset the harness was built on, read as it always was. |
+| `sources/swebench.py` | 95 | SWE-bench Verified: the dataset the harness was built on, read as it always was. |
 | `sources/watch.py` | 163 | Scan finished runs for every failure signature found so far, so none repeats unseen. |
 | `statements.py` | 111 | Which statement a line belongs to. |
 | `swebench_env.py` | 94 | The SWE-bench environment, as one import. |
 | `trace.py` | 128 | Read back everything a run left behind, in the order it happened. |
 | `trajectory.py` | 437 | Export a run in the OpenHands trajectory format, for the trajectory visualizer. |
-| `verify.py` | 1479 | The F2P decision. One implementation, used by every arm. |
+| `verify.py` | 2283 | The F2P decision. One implementation, used by every arm. |
 | `wheels.py` | 118 | Packages the harness puts into a container, fetched on the host. |
+| `wrong_fixes.py` | 148 | Plausible wrong versions of the change, for the agent's feedback (2026-10-24, user). |
 <!-- /generated:modules -->
 
 ## The agent's tools
@@ -714,6 +699,7 @@ pair on 36 should be read as direction, not effect.
 - `run`
 - `write_file`
 - `run_tests`
+- `compare`
 - `verify`
 <!-- /generated:tools -->
 
@@ -1365,7 +1351,7 @@ TestForge" -- change the methods). Built:
   `wrong_mutation` beside `mutation` in `result.json`, for base and mutation configurations
   alike.
 - **Tool comparison, no agent** (pylint-4492, every mutant against the developer's test
-  and five earlier agent tests; a local helper script):
+  and five earlier agent tests):
 
   | Tool | Mutants run | Developer kills | Exit-code-only tests (p7 / mut-p9) | Killed by no test |
   |---|---|---|---|---|
@@ -1566,7 +1552,7 @@ about fail-to-pass, and "runs every line" had been read eight times as done.
 
 For one day (2026-09-28, first revision) the verify loop belonged to the second chance and
 require-tools held only the duties; before that require-tools held the verify loop and the
-duties while `--second-chance` added refusals that, in experiments-v2's base arm, always
+duties while `--second-chance` added refusals that, in ten-arms-70-prs-take-two's base arm, always
 fired together with the loop (40 of 40 rounds). The second chance is now what its name
 says: a second attempt, with the first one's record.
 
@@ -1581,17 +1567,15 @@ pylint-4492 mut-p31 flipped only on a test that asserts nothing, was refused eig
 stopped acting with 57 actions left and never got the restart a NO would have.
 
 A second chance never hands in less than the first attempt (2026-10-30). In the final
-experiment sympy-13236 (fin-B) ended its first conversation on a YES whose only flip was a
+experiment sympy-13236 (coverage-tool arm) ended its first conversation on a YES whose only flip was a
 trick, got the restart, and the restart ended NO. The YES was lost: the end-of-run restore
 (`V.best_f2p`) looks only at the agent's own `verify` calls, and that file had only been
 scored by the harness when the agent stopped. Now, when the first verdict was YES and the
 restart's is not, the first file is written back and verified again; if it still flips it
 is handed in (the restart's file is kept as `last_<test>.py`), the tree is audited again,
 and `second_chance` records `first_rechecked` and `handed_in: "first"`. The flow log says
-`second chance kept first`. The final experiment's batches 1 and 2 ran before this fix;
-the one run it touched was re-scored offline from its first file
-(a local helper script, `rescored.json` beside the untouched
-`result.json`) and both numbers are reported.
+`second chance kept first`. The final experiment's first two batches ran before this fix;
+one run there (sympy-13236, coverage-tool arm) lost its first fail-to-pass test this way.
 
 Model limits, checked 2026-09-28: the gateway serves qwen3-coder with 262,144 input and
 235,929 output tokens; the harness asks for at most 32,000 output tokens per call. In the
@@ -1612,7 +1596,7 @@ edit they never verified, 144 of them after the single refusal had fired. Every 
 written to `injected_messages.json` and appears in `trajectory.json` at the point it
 arrived; the export used to show the opening task alone.
 
-Three rules shape it, all from the first run of the loop (`experiments-tests/new-system-26`),
+Three rules shape it, all from the first run of the loop (`take-two-retries-and-checks/new-system-26`),
 where the model's pattern under refusal was *write → verify → finish* every round:
 
 - **A test that passes at base is told which mistake it is making.** "Passes on this code"
@@ -1636,7 +1620,7 @@ where the model's pattern under refusal was *write → verify → finish* every 
   `mutation` cannot change its verdict, and two tests were refused five times each while
   already passing.
 
-Four more, from reading all 700 experiments-v2 runs (2026-09-27):
+Four more, from reading all 700 ten-arms-70-prs-take-two runs (2026-09-27):
 
 - **Only answers about the scored file count.** `verify_gap`, `duty_gap` and
   `verify_settled` read the last `verify` / `coverage` / `mutation` *on the scored
@@ -2036,7 +2020,7 @@ uv run openhands-f2p --out-root out/nocov --add-verify-tool --add-mutation-tool 
 | `--recheck` | re-judge the saved tests under the current harness, without calling the model again |
 | `--retry-broken` | run only instances with no result, or whose result is BROKEN. A BROKEN verdict records that the harness or the connection failed and says nothing about the instance, so it is worth retrying; YES and NO are findings and are left alone |
 | `--parallel` | how many PRs to run at once (F2P_MAX_PARALLEL, default 5) |
-| `--out-root` | write results here instead of swe-bench-outs/out/default/ (<dataset>-outs/default/ for another dataset). `out/` is a container of run folders -- one per run, e.g. out/out_full_run/ -- which is how a series stays separable |
+| `--out-root` | write results here instead of swe-bench-outs/default/ (<dataset>-outs/default/ for another dataset); one folder per run keeps a series separable |
 | `--dataset` | which dataset the instances come from (F2P_DATASET_NAME, default swebench). `python -m openhands_f2p.sources list` shows each and what is prepared of it. Choices: `swebench`, `chaco`. |
 | `--label` | a name for this run, recorded in every result. Defaults to the configuration, e.g. no-coverage-tool |
 
@@ -2072,12 +2056,12 @@ uv run openhands-f2p --out-root out/nocov --add-verify-tool --add-mutation-tool 
 ## What a run leaves behind
 
 One directory per instance inside the run folder, indexed by that folder's `RUNS.md` --
-[`out/out_full_run/RUNS.md`](../swe-bench-outs/out/out_full_run/RUNS.md) for the twenty-six -- which is
+[`first-runs-26-prs/out_full_run/RUNS.md`](https://github.com/soorimess/Agentic-Diff-Aware-Patch-Testing-for-Pull-Requests/blob/checkpoint/1-first-system/out/out_full_run/RUNS.md) for the twenty-six -- which is
 regenerated from the results on disk at the end of every run.
 
-`out/` is a container, not a run: one subdirectory per run (`out/out_full_run/`,
-`out/out_compare_repo_search/`), and `out/default/` for a run given no `--out-root`.
-Evaluation runs live apart, under `evaluation/out_<model>/`.
+Each experiment series has its own folder under `swe-bench-outs/` with one subdirectory per run
+(`first-runs-26-prs/out_full_run/`, `first-runs-26-prs/out_compare_repo_search/`); a run given no
+`--out-root` lands in `swe-bench-outs/default/`. The model comparison is on `checkpoint/1-first-system`, under `evaluation/out_<model>/`.
 
 `tool_log.json` records what the executor *did*; `trajectory.json` records what the model
 *asked for*. When they disagree, the disagreement is the finding.
@@ -2128,14 +2112,14 @@ package it drives inside the container. `layout.py` holds `PROJECT_ROOT` and `OU
 
 ## The evaluation set
 
-`evaluation/prs.json` holds ten instances nobody looked at while the prompts were
+`datasets/swebench/evaluation-10-prs.json` holds ten instances nobody looked at while the prompts were
 written — one per repository, drawn by seed — and `F2P_PRS_FILE` points the same code at
 them with nothing special-cased. They are the only evidence here that the system works
 on instances it was not tuned against.
 
 `gpt-5-mini` passes **10/10** of them. Four models have been run over the set; the table
 and what it says about where a tool can still help are in
-[`evaluation/RUNS.md`](../swe-bench-outs/evaluation/RUNS.md) and [decisions.md](decisions.md).
+[`evaluation/RUNS.md`](https://github.com/soorimess/Agentic-Diff-Aware-Patch-Testing-for-Pull-Requests/blob/checkpoint/1-first-system/evaluation/RUNS.md) on `checkpoint/1-first-system` and [decisions.md](decisions.md).
 
 ## A line is not always a statement
 

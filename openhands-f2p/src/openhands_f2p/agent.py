@@ -378,7 +378,7 @@ MIN_USEFUL_ACTIONS = 3
 # left it after the first. `collects_nothing` joined after eval5-arms, where one run spent
 # five rounds on a file that never collected; the one collects_nothing conversion on
 # record left it after the second. A third identical refusal has not converted anything.
-# `skipped_at_base` joined after experiments-v2: the same state -- nothing fails at base.
+# `skipped_at_base` joined after ten-arms-70-prs-take-two: the same state -- nothing fails at base.
 MAX_PASSES_AT_BASE_ROUNDS = 2
 
 
@@ -1138,7 +1138,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
             # In every configuration, not only when the agent chose the directory: the
             # refusal loop and the agent's own `verify` already follow the file wherever
             # it was written, and scoring a different path made them disagree.
-            # django-14915 (experiments-v2) moved its test into tests/forms_tests/tests/,
+            # django-14915 (ten-arms-70-prs-take-two) moved its test into tests/forms_tests/tests/,
             # verified it there as fail-to-pass, had its stop accepted on that file -- and
             # was scored "wrote no test" at the path it had been given.
             # `test_path_default` keeps the path the harness named.
@@ -1248,7 +1248,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                 # a rate limit, a 5xx, a dropped connection. The test on disk is whatever
                 # the agent had when the call failed, and the stop was never checked, so
                 # scoring it records the outage as a finding about the instance.
-                # experiments-v2's first pass lost 35 runs this way to an exhausted
+                # ten-arms-70-prs-take-two's first pass lost 35 runs this way to an exhausted
                 # OpenRouter key (22 scored NO, 13 YES) before this line existed. BROKEN is
                 # what --retry-broken picks up. A context window overflow is not in this
                 # list: it is the run's own length, like the action cap, and keeps its
@@ -1354,7 +1354,7 @@ def do_pr(pr: dict, max_iterations: int, dry_run: bool,
                 flow.record(flow.AGENT, "second chance done",
                             f"{restart['first_verdict']} -> {verdict.f2p}")
                 # A second chance never hands in less than the first attempt (2026-10-30).
-                # sympy-13236 (final, fin-B): a YES on tricks alone got the restart, which
+                # sympy-13236 (new-system final, coverage-tool arm): a YES on tricks alone got the restart, which
                 # ended NO; the YES was lost because `score`'s restore looks only at the
                 # agent's own `verify` calls, and that file had only been scored by the
                 # harness. The first file is checked again and handed in if it still flips.
@@ -1582,10 +1582,9 @@ def build_parser() -> argparse.ArgumentParser:
                    default=int(os.getenv("F2P_MAX_PARALLEL") or 5),
                    help="how many PRs to run at once (F2P_MAX_PARALLEL, default 5)")
     p.add_argument("--out-root", default=None,
-                   help="write results here instead of swe-bench-outs/out/default/ "
-                        "(<dataset>-outs/default/ for another dataset). `out/` is a "
-                        "container of run folders -- one per run, e.g. "
-                        "out/out_full_run/ -- which is how a series stays separable")
+                   help="write results here instead of swe-bench-outs/default/ "
+                        "(<dataset>-outs/default/ for another dataset); one folder per run "
+                        "keeps a series separable")
     p.add_argument("--dataset", default=None, choices=sources.names(),
                    help="which dataset the instances come from (F2P_DATASET_NAME, "
                         "default swebench). `python -m openhands_f2p.sources list` "

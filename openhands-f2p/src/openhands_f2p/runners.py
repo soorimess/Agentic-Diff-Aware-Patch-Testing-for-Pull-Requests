@@ -318,7 +318,7 @@ def parse_output(output: str) -> dict[str, str]:
     FAIL_TO_PASS/PASS_TO_PASS contain -- docstrings included.
     """
     out = Outcomes()
-    # experiments-v2: django-16454 printed argparse usage between `name ...` and `ERROR`,
+    # ten-arms-70-prs-take-two: django-16454 printed argparse usage between `name ...` and `ERROR`,
     # the test was dropped, and a test still failing after the fix scored YES in two
     # arms; django-16136's coroutine warning did the same to a passing test and scored a
     # real YES as NO.

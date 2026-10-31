@@ -16,13 +16,12 @@ from dotenv import load_dotenv
 # src/openhands_f2p/layout.py -> src/openhands_f2p -> src -> openhands-f2p -> the root
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 # Results live per dataset (2026-10-09): everything run on SWE-bench under
-# `swe-bench-outs/` (out/, out-v2/, experiments*/, evaluation/), and a dataset added later
-# under `<dataset>-outs/` -- `chaco-outs/`. Inside, `out/` is a container of run folders,
-# not a run folder: one run per subdirectory, and a SWE-bench run with no `--out-root`
-# lands in `swe-bench-outs/out/default/` rather than scattering instance directories among
-# them.
+# `swe-bench-outs/` (one folder per experiment series, named for what it ran), and a dataset
+# added later under `<dataset>-outs/` -- `chaco-outs/`. A SWE-bench run with no `--out-root`
+# lands in `swe-bench-outs/default/` rather than scattering instance directories among the
+# series folders.
 SWEBENCH_OUTS = PROJECT_ROOT / "swe-bench-outs"
-OUT = SWEBENCH_OUTS / "out" / "default"
+OUT = SWEBENCH_OUTS / "default"
 
 
 def outs_for(dataset: str) -> Path:
