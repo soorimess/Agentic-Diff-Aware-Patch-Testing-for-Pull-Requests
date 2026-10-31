@@ -324,7 +324,7 @@ def add_arguments(parser: object) -> None:
     for f in FEATURES:
         (added if f.added else shown).add_argument(
             flag(f.name), *f.aliases, dest=dest(f.name), action="store_true",
-            help=f.summary)
+            help=f.summary.replace("%", "%%"))  # argparse formats help: "100%" would break --help
 
 
 def child_flags(features: FeatureSet) -> list[str]:

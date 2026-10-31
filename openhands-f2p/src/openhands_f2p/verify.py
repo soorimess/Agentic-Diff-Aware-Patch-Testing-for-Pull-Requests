@@ -235,7 +235,7 @@ def shortfall(box: Sandbox, instance: dict[str, Any], rel: str) -> tuple[str, st
 
 
 # What a refusal under --second-chance hands back. The refused runs rewrote their test a
-# median of five times after the refusal and converted 1 in 20 (experiments-v2): they
+# median of five times after the refusal and converted 1 in 20 (ten-arms-70-prs-take-two): they
 # were told what was wrong and asked to recall a file and a run from far up a long
 # context. Both are base-side facts the agent could fetch itself with one `cat` and one
 # `run_tests`, so giving them does not cross the line `shortfall` keeps; it saves the
@@ -568,7 +568,7 @@ def _verifies_of(tool_log: list, rel: str | None) -> list[tuple[int, dict]]:
     """The `verify` calls that ran, on `rel` when it is given.
 
     On `rel` because a verify on another file says nothing about the one that is scored:
-    in six experiments-v2 runs a `verify` on a side file closed the loop for the real one,
+    in six ten-arms-70-prs-take-two runs a `verify` on a side file closed the loop for the real one,
     and four of them ended NO -- no-second-chance sklearn-10297 verified `..._simple.py`
     as fail-to-pass while the scored file still failed after the fix. A call that could not
     run (tree not at base) answered nothing and is left out too."""
@@ -740,9 +740,9 @@ def verify_gap(tool_log: list, rel: str, coverage: bool = True) -> tuple[str, st
             return ("verify_open", f"`{rel}` was put back to your best fail-to-pass version "
                                    f"after its last `verify`.\n\n* {say}")
         elif edited:
-            say = (f"You edited the test after the last `verify`, so the fail-to-pass "
-                   f"result describes a file that no longer exists. Call `verify` again on "
-                   f"what is on disk now.")
+            say = ("You edited the test after the last `verify`, so the fail-to-pass "
+                   "result describes a file that no longer exists. Call `verify` again on "
+                   "what is on disk now.")
             # The headline below said "not fail-to-pass yet" here too, about a file whose
             # last answer *was* fail-to-pass (requests-1142, base at cap 125).
             return ("verify_open", f"`{rel}` has changed since its last `verify`, which "
@@ -1065,10 +1065,10 @@ def _rewind(tool_log: list, tool: str, rel: str, score, now: float | None,
             f"that version, exactly as `verify` measured it:\n\n```python\n"
             f"{text.rstrip()}\n```\n\nWrite it back with `write_file` -- keep a newer "
             f"assertion only if it loses nothing -- then call `verify`. "
-            + (f"You will be sent back while your test runs fewer changed lines than this "
-               f"version did.\n\n" if repeat else
-               f"It is offered once: after it, a lower score counts like any attempt that "
-               f"did not improve.\n\n"))
+            + ("You will be sent back while your test runs fewer changed lines than this "
+               "version did.\n\n" if repeat else
+               "It is offered once: after it, a lower score counts like any attempt that "
+               "did not improve.\n\n"))
 
 
 # A coverage regression is refused only when it is real (user, 2026-10-20): the best

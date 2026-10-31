@@ -266,7 +266,7 @@ def profile_for(model: str) -> ModelProfile:
 
 # The agent's sampling temperature when --temperature is not given. 0.3 since
 # 2026-09-26: on the 26-instance set it scored 20/26 against 16/26 with none sent
-# (experiments-tests/temperature-0.3.md). Every run before that sent none.
+# (take-two-retries-and-checks/temperature-0.3.md). Every run before that sent none.
 DEFAULT_TEMPERATURE = 0.3
 
 
@@ -317,8 +317,8 @@ def describe() -> str:
     lines = [f"Model profiles from {REGISTRY}, first match wins.",
              f"Defaults: agent {DEFAULT_MODEL}, judge {DEFAULT_JUDGE}, "
              f"judge timeout {DEFAULT_JUDGE_TIMEOUT}s",
-             f"Precedence: CLI flag, this file, FALLBACK_LLM_*, built in. "
-             f"* marks a value this file names.\n"]
+             "Precedence: CLI flag, this file, FALLBACK_LLM_*, built in. "
+             "* marks a value this file names.\n"]
     for p in MODELS:
         def show(name: str, unit: str = "") -> str:
             star = "*" if getattr(p, name) is not None else ""

@@ -2881,7 +2881,7 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                     + (f"{both[:3]} still fail after the change is applied: fix them or "
                        f"delete them.{explain(both)} "
                        if both else "") +
-                    f"Every test in the file has to pass once the change is in."
+                    "Every test in the file has to pass once the change is in."
                     + (f" {back[:3]} pass before the change and fail after: those assert "
                        f"the old side of the behaviour."
                        + (_backwards(after.output, back, wrong)
@@ -3129,14 +3129,14 @@ class VerifyExecutor(ToolExecutor[VerifyAction, VerifyObservation]):
                      f"{V.call_number(self.log, i)}{covered}"
                      + (", with the repository tests the harness copied in added back"
                         if seeds_back else "") + ". That is the file on disk now; "
-                     f"you do not need to write it back."
+                     "you do not need to write it back."
                      + (" It is byte for byte the file `verify` checked then, so that answer "
                         "stands -- it is fail-to-pass, and you need not call `verify` on it "
                         "before going on." if replayed else "")
-                     + f" Everything below is about the version "
-                     f"you wrote, so you can see what went wrong in it. To improve on the "
-                     f"restored file, change it in small steps -- keep its tests and add to "
-                     f"them, one new test at a time -- and call `verify` after each step.")
+                     + " Everything below is about the version "
+                     "you wrote, so you can see what went wrong in it. To improve on the "
+                     "restored file, change it in small steps -- keep its tests and add to "
+                     "them, one new test at a time -- and call `verify` after each step.")
             duty = ""
         # The version that flipped, when this one does not.
         elif not ok:
