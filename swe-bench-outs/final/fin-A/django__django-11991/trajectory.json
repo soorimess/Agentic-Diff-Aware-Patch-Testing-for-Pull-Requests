@@ -1,0 +1,702 @@
+[
+  {
+    "source": "user",
+    "action": "message",
+    "message": "task",
+    "args": {
+      "content": "# The task sent to the agent\n\n## Situation\n\nYou are in a checkout of django/django at the commit BEFORE a pull request was merged. Its change\nis not in this code: whatever it fixes is still broken here, and whatever it adds -- a\nfunction, an argument, a class, a module -- does not exist here yet.\n\nThere is no network here and no version control. You cannot look the answer up; you have\nto find it by reading the code.\n\n## How this project runs its tests\n\nRunner        ./tests/runtests.py --verbosity 2\n              (tests/runtests.py is in the checkout)\nTargets       a dotted label relative to the runner's directory -- `run_tests` converts the path for you\nYour test     tests/test_f2p_django__django_11991.py\n\nTests in and below that directory:\n  tests/absolute_url_overrides/tests.py\n  tests/admin_autodiscover/tests.py\n  tests/admin_changelist/tests.py\n\n**This runner only collects test methods on a `unittest.TestCase` subclass.** Put each test in a class that inherits from `unittest.TestCase` (or the project's own subclass of it, if the tests nearby use one), as a method whose name starts with `test`. A module-level `def test_...():` is never collected -- the run says `Ran 0 tests` and exits successfully, and your file counts as having no test at all.\n\nThis project does not run pytest -- it runs `./tests/runtests.py --verbosity 2`. Write for that runner: plain `assert`, no `import pytest`, no fixtures or decorators from it. pytest may not be installed here at all, and a file that imports it never runs.\n\n## What to produce\n\nA pull request changes how this library behaves. Your job is to write the regression tests\nthat pin that behaviour down, in `tests/test_f2p_django__django_11991.py`: enough to have shown what was wrong or\nmissing before the change, and to catch it if anyone undoes it. One test per behaviour the\nchange settles separately -- as many as the change has, and no more. A test is whatever\nthis project's runner collects: a function in some projects, a method on a test class\nin others. The briefing above says which, and a test the runner does not collect is\nnot a test.\n\nWork out what the code does *now*, what it will do *after* the change, and assert the\ndifference. That difference is the whole subject of the test -- not the surrounding\nfunction, and not some other property that happens to be broken at the same time.\n\nNot every pull request fixes a bug. A feature adds something that does not exist here\nyet; a refactor or a speed-up may change little that a caller can see. Look for what\ndoes change -- a result for some input, an error raised or no longer raised, a new\nargument or name that now works. A test that only checks that a private name exists\ntests the code's spelling, not its behaviour.\n\nWrite the first test around a call to the changed code. A test that only imports the new\ncode, checks that a name exists, inspects a signature, or catches the error a call raises\ncan flip from failing to passing without testing anything. Call the code with an input that\ngoes through what the change does, and assert on what it returns, raises or does.\n\nWhen a test that calls the changed code fails for a reason in its own setup -- an import\nerror, a missing argument, a mock that does not behave like the real object -- fix that\nsetup. Do not swap the test for a shallower one that passes: the deeper test is the one\nworth having. The repository's own tests show how this code is set up and called; read\none before you build the setup yourself.\n\nSome changes are about a situation this container does not have: an optional package\nthat is missing, another version of a library, another platform. Then create that\nsituation inside the test -- for example with pytest's `monkeypatch`, by hiding a module\n(`monkeypatch.setitem(sys.modules, \"name\", None)`) or replacing a value -- and assert\nwhat the change does there.\nThe report itself is not the subject. It describes a symptom somebody noticed; what you\nassert has to be the behaviour underneath it, not the wording of the complaint.\n\nWhat this pull request is about:\n\n---\nAdd support for adding non-key columns to indexes\nDescription\n\t \n\t\t(last modified by Hannes Ljungberg)\n\t \nPostgres got support for the INCLUDE clause in CREATE INDEX. This can be used to add non-key columns to the index. \nCREATE INDEX idx\n\tON t1 ( col1 )\n\tINCLUDE ( col2 );\nThis allows for Index Only Scans on queries like:\nSELECT col1, col2 FROM t1 WHERE t1 = 'foo';\nMore info:\n\u200bhttps://www.postgresql.org/docs/current/sql-createindex.html\n\u200bhttps://use-the-index-luke.com/blog/2019-04/include-columns-in-btree-indexes\n\u200bhttps://www.postgresql.org/docs/current/indexes-index-only-scans.html\nThe idea is to add an additional kwarg to Index to support this: \nIndex(\n\tname='some-idx',\n\tfields=['headline'],\n\tinclude=['pub_date']\n)\nOne of the biggest possibilities of this feature is to add included columns to unique indexes and use them to perform Index Only Scans. This would require adding the same kwarg to UniqueConstraint. The implementation would be a lot like the condition kwargs to both Index and UniqueConstraint. \nAt the moment the only Django-supported database that can use this feature is Postgres but it's also supported by Microsoft SQL Server and IBM Db2 with the same syntax. Because of this I think it shouldn't be implemented as a postgres only feature but exposed on BaseDatabaseSchemaEditor to ease the adding of support when/if sqlite or mariadb/mysql get it.\n---\n\n## What this pull request changes\n\n```diff\ndiff --git a/django/contrib/gis/db/backends/postgis/schema.py b/django/contrib/gis/db/backends/postgis/schema.py\n--- a/django/contrib/gis/db/backends/postgis/schema.py\n+++ b/django/contrib/gis/db/backends/postgis/schema.py\n@@ -45,6 +45,7 @@ def _create_index_sql(self, model, fields, **kwargs):\n             columns=field_column,\n             extra='',\n             condition='',\n+            include='',\n         )\n \n     def _alter_column_type_sql(self, table, old_field, new_field, new_type):\ndiff --git a/django/contrib/postgres/indexes.py b/django/contrib/postgres/indexes.py\n--- a/django/contrib/postgres/indexes.py\n+++ b/django/contrib/postgres/indexes.py\n@@ -180,6 +180,10 @@ def get_with_params(self):\n             with_params.append('fillfactor = %d' % self.fillfactor)\n         return with_params\n \n+    def check_supported(self, schema_editor):\n+        if self.include and not schema_editor.connection.features.supports_covering_gist_indexes:\n+            raise NotSupportedError('Covering GiST indexes requires PostgreSQL 12+.')\n+\n \n class HashIndex(PostgresIndex):\n     suffix = 'hash'\ndiff --git a/django/db/backends/base/features.py b/django/db/backends/base/features.py\n--- a/django/db/backends/base/features.py\n+++ b/django/db/backends/base/features.py\n@@ -277,6 +277,8 @@ class BaseDatabaseFeatures:\n     # Does the backend support partial indexes (CREATE INDEX ... WHERE ...)?\n     supports_partial_indexes = True\n     supports_functions_in_partial_indexes = True\n+    # Does the backend support covering indexes (CREATE INDEX ... INCLUDE ...)?\n+    supports_covering_indexes = False\n \n     # Does the database allow more than one constraint or index on the same\n     # field(s)?\ndiff --git a/django/db/backends/base/schema.py b/django/db/backends/base/schema.py\n--- a/django/db/backends/base/schema.py\n+++ b/django/db/backends/base/schema.py\n@@ -84,8 +84,8 @@ class BaseDatabaseSchemaEditor:\n     sql_create_column_inline_fk = None\n     sql_delete_fk = sql_delete_constraint\n \n-    sql_create_index = \"CREATE INDEX %(name)s ON %(table)s (%(columns)s)%(extra)s%(condition)s\"\n-    sql_create_unique_index = \"CREATE UNIQUE INDEX %(name)s ON %(table)s (%(columns)s)%(condition)s\"\n+    sql_create_index = \"CREATE INDEX %(name)s ON %(table)s (%(columns)s)%(include)s%(extra)s%(condition)s\"\n+    sql_create_unique_index = \"CREATE UNIQUE INDEX %(name)s ON %(table)s (%(columns)s)%(include)s%(condition)s\"\n     sql_delete_index = \"DROP INDEX %(name)s\"\n \n     sql_create_pk = \"ALTER TABLE %(table)s ADD CONSTRAINT %(name)s PRIMARY KEY (%(columns)s)\"\n@@ -956,9 +956,17 @@ def _index_condition_sql(self, condition):\n             return ' WHERE ' + condition\n         return ''\n \n+    def _index_include_sql(self, model, columns):\n+        if not columns or not self.connection.features.supports_covering_indexes:\n+            return ''\n+        return Statement(\n+            ' INCLUDE (%(columns)s)',\n+            columns=Columns(model._meta.db_table, columns, self.quote_name),\n+        )\n+\n     def _create_index_sql(self, model, fields, *, name=None, suffix='', using='',\n                           db_tablespace=None, col_suffixes=(), sql=None, opclasses=(),\n-                          condition=None):\n+                          condition=None, include=None):\n         \"\"\"\n         Return the SQL statement to create the index for one or several fields.\n         `sql` can be specified if the syntax differs from the standard (GIS\n@@ -983,6 +991,7 @@ def create_index_name(*args, **kwargs):\n             columns=self._index_columns(table, columns, col_suffixes, opclasses),\n             extra=tablespace_sql,\n             condition=self._index_condition_sql(condition),\n+            include=self._index_include_sql(model, include),\n         )\n \n     def _delete_index_sql(self, model, name, sql=None):\n@@ -1083,16 +1092,22 @@ def _deferrable_constraint_sql(self, deferrable):\n         if deferrable == Deferrable.IMMEDIATE:\n             return ' DEFERRABLE INITIALLY IMMEDIATE'\n \n-    def _unique_sql(self, model, fields, name, condition=None, deferrable=None):\n+    def _unique_sql(self, model, fields, name, condition=None, deferrable=None, include=None):\n         if (\n             deferrable and\n             not self.connection.features.supports_deferrable_unique_constraints\n         ):\n             return None\n-        if condition:\n-            # Databases support conditional unique constraints via a unique\n-            # index.\n-            sql = self._create_unique_sql(model, fields, name=name, condition=condition)\n+        if condition or include:\n+            # Databases support conditional and covering unique constraints via\n+            # a unique index.\n+            sql = self._create_unique_sql(\n+                model,\n+                fields,\n+                name=name,\n+                condition=condition,\n+                include=include,\n+            )\n             if sql:\n                 self.deferred_sql.append(sql)\n             return None\n@@ -1105,10 +1120,14 @@ def _unique_sql(self, model, fields, name, condition=None, deferrable=None):\n             'constraint': constraint,\n         }\n \n-    def _create_unique_sql(self, model, columns, name=None, condition=None, deferrable=None):\n+    def _create_unique_sql(self, model, columns, name=None, condition=None, deferrable=None, include=None):\n         if (\n-            deferrable and\n-            not self.connection.features.supports_deferrable_unique_constraints\n+            (\n+                deferrable and\n+                not self.connection.features.supports_deferrable_unique_constraints\n+            ) or\n+            (condition and not self.connection.features.supports_partial_indexes) or\n+            (include and not self.connection.features.supports_covering_indexes)\n         ):\n             return None\n \n@@ -1121,9 +1140,7 @@ def create_unique_name(*args, **kwargs):\n         else:\n             name = self.quote_name(name)\n         columns = Columns(table, columns, self.quote_name)\n-        if condition:\n-            if not self.connection.features.supports_partial_indexes:\n-                return None\n+        if condition or include:\n             sql = self.sql_create_unique_index\n         else:\n             sql = self.sql_create_unique\n@@ -1134,20 +1151,24 @@ def create_unique_name(*args, **kwargs):\n             columns=columns,\n             condition=self._index_condition_sql(condition),\n             deferrable=self._deferrable_constraint_sql(deferrable),\n+            include=self._index_include_sql(model, include),\n         )\n \n-    def _delete_unique_sql(self, model, name, condition=None, deferrable=None):\n+    def _delete_unique_sql(self, model, name, condition=None, deferrable=None, include=None):\n         if (\n-            deferrable and\n-            not self.connection.features.supports_deferrable_unique_constraints\n+            (\n+                deferrable and\n+                not self.connection.features.supports_deferrable_unique_constraints\n+            ) or\n+            (condition and not self.connection.features.supports_partial_indexes) or\n+            (include and not self.connection.features.supports_covering_indexes)\n         ):\n             return None\n-        if condition:\n-            return (\n-                self._delete_constraint_sql(self.sql_delete_index, model, name)\n-                if self.connection.features.supports_partial_indexes else None\n-            )\n-        return self._delete_constraint_sql(self.sql_delete_unique, model, name)\n+        if condition or include:\n+            sql = self.sql_delete_index\n+        else:\n+            sql = self.sql_delete_unique\n+        return self._delete_constraint_sql(sql, model, name)\n \n     def _check_sql(self, name, check):\n         return self.sql_constraint % {\ndiff --git a/django/db/backends/postgresql/features.py b/django/db/backends/postgresql/features.py\n--- a/django/db/backends/postgresql/features.py\n+++ b/django/db/backends/postgresql/features.py\n@@ -82,3 +82,5 @@ def is_postgresql_12(self):\n     has_brin_autosummarize = property(operator.attrgetter('is_postgresql_10'))\n     has_websearch_to_tsquery = property(operator.attrgetter('is_postgresql_11'))\n     supports_table_partitions = property(operator.attrgetter('is_postgresql_10'))\n+    supports_covering_indexes = property(operator.attrgetter('is_postgresql_11'))\n+    supports_covering_gist_indexes = property(operator.attrgetter('is_postgresql_12'))\ndiff --git a/django/db/backends/postgresql/schema.py b/django/db/backends/postgresql/schema.py\n--- a/django/db/backends/postgresql/schema.py\n+++ b/django/db/backends/postgresql/schema.py\n@@ -12,9 +12,13 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):\n     sql_set_sequence_max = \"SELECT setval('%(sequence)s', MAX(%(column)s)) FROM %(table)s\"\n     sql_set_sequence_owner = 'ALTER SEQUENCE %(sequence)s OWNED BY %(table)s.%(column)s'\n \n-    sql_create_index = \"CREATE INDEX %(name)s ON %(table)s%(using)s (%(columns)s)%(extra)s%(condition)s\"\n+    sql_create_index = (\n+        'CREATE INDEX %(name)s ON %(table)s%(using)s '\n+        '(%(columns)s)%(include)s%(extra)s%(condition)s'\n+    )\n     sql_create_index_concurrently = (\n-        \"CREATE INDEX CONCURRENTLY %(name)s ON %(table)s%(using)s (%(columns)s)%(extra)s%(condition)s\"\n+        'CREATE INDEX CONCURRENTLY %(name)s ON %(table)s%(using)s '\n+        '(%(columns)s)%(include)s%(extra)s%(condition)s'\n     )\n     sql_delete_index = \"DROP INDEX IF EXISTS %(name)s\"\n     sql_delete_index_concurrently = \"DROP INDEX CONCURRENTLY IF EXISTS %(name)s\"\n@@ -197,10 +201,11 @@ def _delete_index_sql(self, model, name, sql=None, concurrently=False):\n     def _create_index_sql(\n         self, model, fields, *, name=None, suffix='', using='',\n         db_tablespace=None, col_suffixes=(), sql=None, opclasses=(),\n-        condition=None, concurrently=False,\n+        condition=None, concurrently=False, include=None,\n     ):\n         sql = self.sql_create_index if not concurrently else self.sql_create_index_concurrently\n         return super()._create_index_sql(\n             model, fields, name=name, suffix=suffix, using=using, db_tablespace=db_tablespace,\n             col_suffixes=col_suffixes, sql=sql, opclasses=opclasses, condition=condition,\n+            include=include,\n         )\ndiff --git a/django/db/models/base.py b/django/db/models/base.py\n--- a/django/db/models/base.py\n+++ b/django/db/models/base.py\n@@ -1614,12 +1614,10 @@ def _check_indexes(cls, databases):\n             if not router.allow_migrate_model(db, cls):\n                 continue\n             connection = connections[db]\n-            if (\n+            if not (\n                 connection.features.supports_partial_indexes or\n                 'supports_partial_indexes' in cls._meta.required_db_features\n-            ):\n-                continue\n-            if any(index.condition is not None for index in cls._meta.indexes):\n+            ) and any(index.condition is not None for index in cls._meta.indexes):\n                 errors.append(\n                     checks.Warning(\n                         '%s does not support indexes with conditions.'\n@@ -1632,7 +1630,24 @@ def _check_indexes(cls, databases):\n                         id='models.W037',\n                     )\n                 )\n+            if not (\n+                connection.features.supports_covering_indexes or\n+                'supports_covering_indexes' in cls._meta.required_db_features\n+            ) and any(index.include for index in cls._meta.indexes):\n+                errors.append(\n+                    checks.Warning(\n+                        '%s does not support indexes with non-key columns.'\n+                        % connection.display_name,\n+                        hint=(\n+                            \"Non-key columns will be ignored. Silence this \"\n+                            \"warning if you don't care about it.\"\n+                        ),\n+                        obj=cls,\n+                        id='models.W040',\n+                    )\n+                )\n         fields = [field for index in cls._meta.indexes for field, _ in index.fields_orders]\n+        fields += [include for index in cls._meta.indexes for include in index.include]\n         errors.extend(cls._check_local_fields(fields, 'indexes'))\n         return errors\n \n@@ -1926,10 +1941,28 @@ def _check_constraints(cls, databases):\n                         id='models.W038',\n                     )\n                 )\n-            fields = (\n-                field\n+            if not (\n+                connection.features.supports_covering_indexes or\n+                'supports_covering_indexes' in cls._meta.required_db_features\n+            ) and any(\n+                isinstance(constraint, UniqueConstraint) and constraint.include\n+                for constraint in cls._meta.constraints\n+            ):\n+                errors.append(\n+                    checks.Warning(\n+                        '%s does not support unique constraints with non-key '\n+                        'columns.' % connection.display_name,\n+                        hint=(\n+                            \"A constraint won't be created. Silence this \"\n+                            \"warning if you don't care about it.\"\n+                        ),\n+                        obj=cls,\n+                        id='models.W039',\n+                    )\n+                )\n+            fields = chain.from_iterable(\n+                (*constraint.fields, *constraint.include)\n                 for constraint in cls._meta.constraints if isinstance(constraint, UniqueConstraint)\n-                for field in constraint.fields\n             )\n             errors.extend(cls._check_local_fields(fields, 'constraints'))\n         return errors\ndiff --git a/django/db/models/constraints.py b/django/db/models/constraints.py\n--- a/django/db/models/constraints.py\n+++ b/django/db/models/constraints.py\n@@ -77,7 +77,7 @@ class Deferrable(Enum):\n \n \n class UniqueConstraint(BaseConstraint):\n-    def __init__(self, *, fields, name, condition=None, deferrable=None):\n+    def __init__(self, *, fields, name, condition=None, deferrable=None, include=None):\n         if not fields:\n             raise ValueError('At least one field is required to define a unique constraint.')\n         if not isinstance(condition, (type(None), Q)):\n@@ -90,9 +90,12 @@ def __init__(self, *, fields, name, condition=None, deferrable=None):\n             raise ValueError(\n                 'UniqueConstraint.deferrable must be a Deferrable instance.'\n             )\n+        if not isinstance(include, (type(None), list, tuple)):\n+            raise ValueError('UniqueConstraint.include must be a list or tuple.')\n         self.fields = tuple(fields)\n         self.condition = condition\n         self.deferrable = deferrable\n+        self.include = tuple(include) if include else ()\n         super().__init__(name)\n \n     def _get_condition_sql(self, model, schema_editor):\n@@ -106,31 +109,36 @@ def _get_condition_sql(self, model, schema_editor):\n \n     def constraint_sql(self, model, schema_editor):\n         fields = [model._meta.get_field(field_name).column for field_name in self.fields]\n+        include = [model._meta.get_field(field_name).column for field_name in self.include]\n         condition = self._get_condition_sql(model, schema_editor)\n         return schema_editor._unique_sql(\n             model, fields, self.name, condition=condition,\n-            deferrable=self.deferrable,\n+            deferrable=self.deferrable, include=include,\n         )\n \n     def create_sql(self, model, schema_editor):\n         fields = [model._meta.get_field(field_name).column for field_name in self.fields]\n+        include = [model._meta.get_field(field_name).column for field_name in self.include]\n         condition = self._get_condition_sql(model, schema_editor)\n         return schema_editor._create_unique_sql(\n             model, fields, self.name, condition=condition,\n-            deferrable=self.deferrable,\n+            deferrable=self.deferrable, include=include,\n         )\n \n     def remove_sql(self, model, schema_editor):\n         condition = self._get_condition_sql(model, schema_editor)\n+        include = [model._meta.get_field(field_name).column for field_name in self.include]\n         return schema_editor._delete_unique_sql(\n             model, self.name, condition=condition, deferrable=self.deferrable,\n+            include=include,\n         )\n \n     def __repr__(self):\n-        return '<%s: fields=%r name=%r%s%s>' % (\n+        return '<%s: fields=%r name=%r%s%s%s>' % (\n             self.__class__.__name__, self.fields, self.name,\n             '' if self.condition is None else ' condition=%s' % self.condition,\n             '' if self.deferrable is None else ' deferrable=%s' % self.deferrable,\n+            '' if not self.include else ' include=%s' % repr(self.include),\n         )\n \n     def __eq__(self, other):\n@@ -139,7 +147,8 @@ def __eq__(self, other):\n                 self.name == other.name and\n                 self.fields == other.fields and\n                 self.condition == other.condition and\n-                self.deferrable == other.deferrable\n+                self.deferrable == other.deferrable and\n+                self.include == other.include\n             )\n         return super().__eq__(other)\n \n@@ -150,4 +159,6 @@ def deconstruct(self):\n             kwargs['condition'] = self.condition\n         if self.deferrable:\n             kwargs['deferrable'] = self.deferrable\n+        if self.include:\n+            kwargs['include'] = self.include\n         return path, args, kwargs\ndiff --git a/django/db/models/indexes.py b/django/db/models/indexes.py\n--- a/django/db/models/indexes.py\n+++ b/django/db/models/indexes.py\n@@ -11,7 +11,16 @@ class Index:\n     # cross-database compatibility with Oracle)\n     max_name_length = 30\n \n-    def __init__(self, *, fields=(), name=None, db_tablespace=None, opclasses=(), condition=None):\n+    def __init__(\n+        self,\n+        *,\n+        fields=(),\n+        name=None,\n+        db_tablespace=None,\n+        opclasses=(),\n+        condition=None,\n+        include=None,\n+    ):\n         if opclasses and not name:\n             raise ValueError('An index must be named to use opclasses.')\n         if not isinstance(condition, (type(None), Q)):\n@@ -26,6 +35,10 @@ def __init__(self, *, fields=(), name=None, db_tablespace=None, opclasses=(), co\n             raise ValueError('Index.fields and Index.opclasses must have the same number of elements.')\n         if not fields:\n             raise ValueError('At least one field is required to define an index.')\n+        if include and not name:\n+            raise ValueError('A covering index must be named.')\n+        if not isinstance(include, (type(None), list, tuple)):\n+            raise ValueError('Index.include must be a list or tuple.')\n         self.fields = list(fields)\n         # A list of 2-tuple with the field name and ordering ('' or 'DESC').\n         self.fields_orders = [\n@@ -36,6 +49,7 @@ def __init__(self, *, fields=(), name=None, db_tablespace=None, opclasses=(), co\n         self.db_tablespace = db_tablespace\n         self.opclasses = opclasses\n         self.condition = condition\n+        self.include = tuple(include) if include else ()\n \n     def _get_condition_sql(self, model, schema_editor):\n         if self.condition is None:\n@@ -48,12 +62,13 @@ def _get_condition_sql(self, model, schema_editor):\n \n     def create_sql(self, model, schema_editor, using='', **kwargs):\n         fields = [model._meta.get_field(field_name) for field_name, _ in self.fields_orders]\n+        include = [model._meta.get_field(field_name).column for field_name in self.include]\n         col_suffixes = [order[1] for order in self.fields_orders]\n         condition = self._get_condition_sql(model, schema_editor)\n         return schema_editor._create_index_sql(\n             model, fields, name=self.name, using=using, db_tablespace=self.db_tablespace,\n             col_suffixes=col_suffixes, opclasses=self.opclasses, condition=condition,\n-            **kwargs,\n+            include=include, **kwargs,\n         )\n \n     def remove_sql(self, model, schema_editor, **kwargs):\n@@ -69,6 +84,8 @@ def deconstruct(self):\n             kwargs['opclasses'] = self.opclasses\n         if self.condition:\n             kwargs['condition'] = self.condition\n+        if self.include:\n+            kwargs['include'] = self.include\n         return (path, (), kwargs)\n \n     def clone(self):\n@@ -106,9 +123,10 @@ def set_name_with_model(self, model):\n             self.name = 'D%s' % self.name[1:]\n \n     def __repr__(self):\n-        return \"<%s: fields='%s'%s>\" % (\n+        return \"<%s: fields='%s'%s%s>\" % (\n             self.__class__.__name__, ', '.join(self.fields),\n             '' if self.condition is None else ', condition=%s' % self.condition,\n+            '' if not self.include else \", include='%s'\" % ', '.join(self.include),\n         )\n \n     def __eq__(self, other):\n```\n\nRead it as evidence, not as a specification to copy. Ask what a caller can observe that\ndiffers before and after: a different return value, an exception that is or is not\nraised, a side effect that now happens. Then write the test around that observable\ndifference.\n\nA change is not always one behaviour. Read every hunk, and every branch it adds or\nremoves, and work out what each one does for a caller: a condition that now holds, a path\nthat is now taken, a case that is now handled differently. Understanding the change means\nbeing able to say what it does everywhere it acts, not only where you first recognised\nit.\n\nThen choose inputs the difference is visible in. Many changes are silent for most values:\na mode turned off does nothing until the input is one the mode would have acted on, a\nwidened bound matters only just outside the old one, an extra case matters only in that\ncase. Feed such a change ordinary data and both versions agree, and the test is\nindistinguishable from one that asserts nothing about it. So for each difference you\nfound, say what the old code would have produced for the input you picked -- if the\nanswer is \"the same thing\", that input does not test this change and you need a\ndifferent one.\n\n## Tools\n\nYou have these tools:\n\n- `run` \u2014 a shell, for searching and reading. `grep`, `sed`, `ls`, `cat`. Keep searches\n  inside the repository; starting from `/` or `..` walks into system directories and\n  will be killed. Do not run the test suite through this tool: use `run_tests`.\n- `write_file` \u2014 writes exact contents to a path. Use it for the test rather than shell\n  redirection.\n- `run_tests` \u2014 runs your test with this project's own runner. Give it the path to your\n  test file and nothing else. It builds the command itself, correctly for this project\n  and this version of it.\n\nBefore you write, read one to three of the tests already in that directory. You are\nadding a file to somebody's project, and the people\nwho maintain it will read yours next to theirs, so a test that matches the handwriting\naround it is easier for them to keep. Read them with `run`: the imports they use, whether\nthey are classes or plain functions, how they name things, what they set up and what they\nleave alone.\n\nDo not type a test command yourself. `run_tests` builds the right one for this project\nand this version -- the invocation differs between projects, and between versions of the\nsame project, in ways that are easy to get subtly wrong.\n\nYou can check your work against the change rather than guessing whether it is right:\n\n- `verify` \u2014 runs your test against the code before the change, applies the change, runs\n  it again, then puts the code back. It reports which of your tests failed before and\n  passed after.\n\nThat before-and-after flip is the property your test has to have, and it is the main goal.\nA test that passes in both states is testing something this pull request did not change; a\ntest that fails in both is broken rather than strict. `verify` is how you find out which,\nwhile you can still do something about it \u2014 so call it before you finish, not as a\nformality but because it is the only thing that distinguishes a regression test from a\ntest that merely runs.\n\n**Do not modify or delete any file that is already here.** Not the library source, not\nan existing test, not an existing fixture. The test is supposed to fail on this code \u2014\nthat is the entire point \u2014 and editing what it tests destroys the measurement rather than\npassing it. This is checked after every action and any such edit is reverted, so it costs\nyou the action and gains you nothing.\n\nCreating files is allowed. Your test goes in `tests/test_f2p_django__django_11991.py`, and if it genuinely needs more\n\u2014 a fixture directory, a sample package to import, data to read \u2014 create those too, under\nnames of your own rather than an existing fixture's. A file that did not exist before is\npresent when the test runs against the old code and against the fixed code alike, so it\ncannot make a test appear to flip. A file you edited can, which is the whole difference.\n\nUsing what is already here is not editing it. Your test may import the repository's test\nhelpers, use its pytest fixtures and `conftest.py`, and build or load its existing test\nprojects and data -- the repository's own tests do exactly that, and the same setup works\nin your test.\n\n**Test what the code does, not what it says.** Do not read the project's source as text \u2014\nno `inspect.getsource`, no opening a `.py` file \u2014 and assert on its contents. Such a test\npasses on this fix's exact wording and fails on an equivalent fix written differently. Call the changed code and assert on what it returns,\nraises or does.\n\nRead the source before you write -- enough to know what to assert, not enough to be\ncertain of everything. Then get a test running, and let what it does correct the rest of\nyour reading: a draft you have executed tells you more than another file you have skimmed,\nand it is cheap to change. Reading has no natural stopping point and running does.\nThe report describes a symptom; the cause may be several layers below it and may never be\nnamed in the report.\n\n## Before you finish\n\nWork through these checks in order. Each one answers a question the previous leaves open,\nand each catches a mistake the others do not.\n\nThey are not all the same kind of thing. The first two are gates: the file runs, and the\ntest flips. Nothing here is a\none-shot formality, and none of it costs anything but time; `verify` puts the tree back\nexactly as it found it, so you can call it whenever you want. When you are\ndone changing the test, run `verify` once more: an assertion added for any other reason\ncan quietly stop the test failing on the old code, and then it is no longer the test you\nset out to write.\n\n**1. `run_tests` \u2014 does the file run at all?**\n A test that errors on a typo, a missing\nfixture or a name this project never had tells you nothing about the library; it never\nreached the code. A name the change *adds* is different: here it does not exist yet, so an\n`ImportError`, `AttributeError` or `TypeError` about it is exactly the old behaviour, and a\ntest that uses it the way the change intends fails here for the right reason. Do not catch\nor skip that error to make the test pass on this code. What you want to see here is the\nlibrary behaving the old way: an assertion that does not hold, the wrong exception coming\nback, or a name the change adds not being there yet.\n\n**2. `verify` \u2014 does it flip?** Failing before the change and passing after is the\nproperty the test exists to have, and `verify` is the only thing here that answers it.\n\n**Call `verify`, and keep calling it until it says fail-to-pass.** That is the loop, and\nit is not optional: a test you have not run through `verify` is a guess, however right it\nlooks. Each answer tells you which way to move \u2014 passes on both sides means you asserted\nsomething this pull request does not affect, so find what the change actually alters;\nfails on both means the test itself is wrong rather than strict, so fix the test, not the\nassertion's strength. Change the test, call `verify` again, and repeat. You are not done\nwith this step until it reports fail-to-pass.\n\nA check that tells you something and gets no response was not worth running. If one shows\na failure, fix the test and run it again.\n**Your test is scored on whether it is fail-to-pass, and `verify`\nshows you it.**\n\nRaise a score the way a better test raises it: an input that takes the test somewhere it\ndid not go, an assertion about behaviour a wrong fix would break. A call with no assertion\nbehind it, or an assertion on an exact expression written only to move the number, is not\na better test.\n\n**Then: did you change the test after any check?** If you did, the answers above describe\na file that no longer exists. Run `verify` again on what is actually on disk \u2014 that is the\nloop, not a formality.\nThe last thing you run before finishing should be `verify`: an assertion added to close\nanything else can quietly stop the test failing on the old code.\n\n**Before you can stop, the last `verify` must say fail-to-pass, and you must not have\nedited the test since** \u2014 an answer about a file you have changed is an answer about a\nfile that no longer exists. Until it does say so, this is the only thing worth spending an\naction on: rewrite the test and call `verify` again, as many times as it takes. This is\nchecked by its answer, not by whether you called it; a stop before it says fail-to-pass\nis sent back with the reason.\n\n\nYou are finished when the checks above have been run against the test as it now stands\nand nothing any of them raised is still unanswered. Say in one sentence what behaviour your test pins down, and stop.\n",
+      "images_urls": []
+    },
+    "id": 0,
+    "timestamp": "2026-10-29T14:08:35.060Z"
+  },
+  {
+    "source": "environment",
+    "key": "container up",
+    "value": "f2p-django-django-11991-p72093-8f34e5  network=none",
+    "message": "f2p-django-django-11991-p72093-8f34e5  network=none",
+    "id": 1,
+    "timestamp": "2026-10-29T14:08:35.070Z"
+  },
+  {
+    "source": "environment",
+    "key": "instance",
+    "value": "large set, django/django, 50 executable changed lines",
+    "message": "large set, django/django, 50 executable changed lines",
+    "id": 2,
+    "timestamp": "2026-10-29T14:08:35.070Z"
+  },
+  {
+    "source": "environment",
+    "key": "strip git",
+    "value": "rm -rf /testbed/.git",
+    "message": "rm -rf /testbed/.git",
+    "id": 3,
+    "timestamp": "2026-10-29T14:08:35.070Z"
+  },
+  {
+    "source": "environment",
+    "key": "test path",
+    "value": "tests/test_f2p_django__django_11991.py",
+    "message": "tests/test_f2p_django__django_11991.py",
+    "id": 4,
+    "timestamp": "2026-10-29T14:08:40.650Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "find . -name \"*.py\" -path \"*/models/indexes.py\" -o -name \"*.py\" -path \"*/models/constraints.py\" | head -10",
+    "args": {
+      "command": "find . -name \"*.py\" -path \"*/models/indexes.py\" -o -name \"*.py\" -path \"*/models/constraints.py\" | head -10",
+      "is_confirmed": "confirmed",
+      "thought": "I'll analyze this pull request to understand what changes were made and write a regression test that captures the behavior before and after the change.\n\nLet me first explore the repository structure to understand the codebase better."
+    },
+    "id": 5,
+    "timestamp": "2026-10-29T14:08:57.320Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 5,
+    "message": "exit 0",
+    "content": "exit code 0\n./django/db/models/constraints.py\n./django/db/models/indexes.py\n",
+    "extras": {
+      "command": "find . -name \"*.py\" -path \"*/models/indexes.py\" -o -name \"*.py\" -path \"*/models/constraints.py\" | head -10",
+      "command_id": 5,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 6,
+    "timestamp": "2026-10-29T14:08:57.420Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "grep -n \"supports_covering_indexes\" django/db/backends/base/features.py",
+    "args": {
+      "command": "grep -n \"supports_covering_indexes\" django/db/backends/base/features.py",
+      "is_confirmed": "confirmed",
+      "thought": "Let me examine the key files mentioned in the diff to understand what the pull request is about:"
+    },
+    "id": 7,
+    "timestamp": "2026-10-29T14:09:09.890Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 7,
+    "message": "exit 1",
+    "content": "exit code 1\n(no output)",
+    "extras": {
+      "command": "grep -n \"supports_covering_indexes\" django/db/backends/base/features.py",
+      "command_id": 7,
+      "exit_code": 1,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 8,
+    "timestamp": "2026-10-29T14:09:09.990Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "grep -n \"supports_covering_indexes\" django/db/backends/base/features.py",
+    "args": {
+      "command": "grep -n \"supports_covering_indexes\" django/db/backends/base/features.py",
+      "is_confirmed": "confirmed",
+      "thought": ""
+    },
+    "id": 9,
+    "timestamp": "2026-10-29T14:09:33.330Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 9,
+    "message": "exit 1",
+    "content": "exit code 1\n(no output)",
+    "extras": {
+      "command": "grep -n \"supports_covering_indexes\" django/db/backends/base/features.py",
+      "command_id": 9,
+      "exit_code": 1,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 10,
+    "timestamp": "2026-10-29T14:09:33.430Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "head -300 django/db/backends/base/features.py | grep -A5 -B5 \"supports_partial\"",
+    "args": {
+      "command": "head -300 django/db/backends/base/features.py | grep -A5 -B5 \"supports_partial\"",
+      "is_confirmed": "confirmed",
+      "thought": "Let me check what's in the base features file:"
+    },
+    "id": 11,
+    "timestamp": "2026-10-29T14:10:06.680Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 11,
+    "message": "exit 0",
+    "content": "exit code 0\n    # databases such as SQL Server do not.\n    supports_nullable_unique_constraints = True\n\n    # Does the backend allow inserting duplicate rows when a unique_together\n    # constraint exists and some fields are nullable but not all of them?\n    supports_partially_nullable_unique_constraints = True\n    # Does the backend support initially deferrable unique constraints?\n    supports_deferrable_unique_constraints = False\n\n    can_use_chunked_reads = True\n    can_return_columns_from_insert = False\n--\n    # Does this backend require casting the results of CASE expressions used\n    # in UPDATE statements to ensure the expression has the correct type?\n    requires_casted_case_in_updates = False\n\n    # Does the backend support partial indexes (CREATE INDEX ... WHERE ...)?\n    supports_partial_indexes = True\n    supports_functions_in_partial_indexes = True\n\n    # Does the database allow more than one constraint or index on the same\n    # field(s)?\n    allows_multiple_constraints_on_same_fields = True\n",
+    "extras": {
+      "command": "head -300 django/db/backends/base/features.py | grep -A5 -B5 \"supports_partial\"",
+      "command_id": 11,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 12,
+    "timestamp": "2026-10-29T14:10:06.780Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "grep -n \"supports_covering\" django/db/backends/postgresql/features.py",
+    "args": {
+      "command": "grep -n \"supports_covering\" django/db/backends/postgresql/features.py",
+      "is_confirmed": "confirmed",
+      "thought": "Let me look at the postgresql features file to see the new feature flags:"
+    },
+    "id": 13,
+    "timestamp": "2026-10-29T14:11:14.830Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 13,
+    "message": "exit 1",
+    "content": "exit code 1\n(no output)",
+    "extras": {
+      "command": "grep -n \"supports_covering\" django/db/backends/postgresql/features.py",
+      "command_id": 13,
+      "exit_code": 1,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 14,
+    "timestamp": "2026-10-29T14:11:14.930Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "tail -20 django/db/backends/postgresql/features.py",
+    "args": {
+      "command": "tail -20 django/db/backends/postgresql/features.py",
+      "is_confirmed": "confirmed",
+      "thought": ""
+    },
+    "id": 15,
+    "timestamp": "2026-10-29T14:11:22.150Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 15,
+    "message": "exit 0",
+    "content": "exit code 0\n            'PositiveBigIntegerField': 'BigIntegerField',\n            'PositiveIntegerField': 'IntegerField',\n            'PositiveSmallIntegerField': 'SmallIntegerField',\n        }\n\n    @cached_property\n    def is_postgresql_10(self):\n        return self.connection.pg_version >= 100000\n\n    @cached_property\n    def is_postgresql_11(self):\n        return self.connection.pg_version >= 110000\n\n    @cached_property\n    def is_postgresql_12(self):\n        return self.connection.pg_version >= 120000\n\n    has_brin_autosummarize = property(operator.attrgetter('is_postgresql_10'))\n    has_websearch_to_tsquery = property(operator.attrgetter('is_postgresql_11'))\n    supports_table_partitions = property(operator.attrgetter('is_postgresql_10'))\n",
+    "extras": {
+      "command": "tail -20 django/db/backends/postgresql/features.py",
+      "command_id": 15,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 16,
+    "timestamp": "2026-10-29T14:11:22.250Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "head -80 django/db/models/indexes.py",
+    "args": {
+      "command": "head -80 django/db/models/indexes.py",
+      "is_confirmed": "confirmed",
+      "thought": "Now let me check the indexes.py file to understand how Index class is defined:"
+    },
+    "id": 17,
+    "timestamp": "2026-10-29T14:11:54.810Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 17,
+    "message": "exit 0",
+    "content": "exit code 0\nfrom django.db.backends.utils import names_digest, split_identifier\nfrom django.db.models.query_utils import Q\nfrom django.db.models.sql import Query\n\n__all__ = ['Index']\n\n\nclass Index:\n    suffix = 'idx'\n    # The max length of the name of the index (restricted to 30 for\n    # cross-database compatibility with Oracle)\n    max_name_length = 30\n\n    def __init__(self, *, fields=(), name=None, db_tablespace=None, opclasses=(), condition=None):\n        if opclasses and not name:\n            raise ValueError('An index must be named to use opclasses.')\n        if not isinstance(condition, (type(None), Q)):\n            raise ValueError('Index.condition must be a Q instance.')\n        if condition and not name:\n            raise ValueError('An index must be named to use condition.')\n        if not isinstance(fields, (list, tuple)):\n            raise ValueError('Index.fields must be a list or tuple.')\n        if not isinstance(opclasses, (list, tuple)):\n            raise ValueError('Index.opclasses must be a list or tuple.')\n        if opclasses and len(fields) != len(opclasses):\n            raise ValueError('Index.fields and Index.opclasses must have the same number of elements.')\n        if not fields:\n            raise ValueError('At least one field is required to define an index.')\n        self.fields = list(fields)\n        # A list of 2-tuple with the field name and ordering ('' or 'DESC').\n        self.fields_orders = [\n            (field_name[1:], 'DESC') if field_name.startswith('-') else (field_name, '')\n            for field_name in self.fields\n        ]\n        self.name = name or ''\n        self.db_tablespace = db_tablespace\n        self.opclasses = opclasses\n        self.condition = condition\n\n    def _get_condition_sql(self, model, schema_editor):\n        if self.condition is None:\n            return None\n        query = Query(model=model, alias_cols=False)\n        where = query.build_where(self.condition)\n        compiler = query.get_compiler(connection=schema_editor.connection)\n        sql, params = where.as_sql(compiler, schema_editor.connection)\n        return sql % tuple(schema_editor.quote_value(p) for p in params)\n\n    def create_sql(self, model, schema_editor, using='', **kwargs):\n        fields = [model._meta.get_field(field_name) for field_name, _ in self.fields_orders]\n        col_suffixes = [order[1] for order in self.fields_orders]\n        condition = self._get_condition_sql(model, schema_editor)\n        return schema_editor._create_index_sql(\n            model, fields, name=self.name, using=using, db_tablespace=self.db_tablespace,\n            col_suffixes=col_suffixes, opclasses=self.opclasses, condition=condition,\n            **kwargs,\n        )\n\n    def remove_sql(self, model, schema_editor, **kwargs):\n        return schema_editor._delete_index_sql(model, self.name, **kwargs)\n\n    def deconstruct(self):\n        path = '%s.%s' % (self.__class__.__module__, self.__class__.__name__)\n        path = path.replace('django.db.models.indexes', 'django.db.models')\n        kwargs = {'fields': self.fields, 'name': self.name}\n        if self.db_tablespace is not None:\n            kwargs['db_tablespace'] = self.db_tablespace\n        if self.opclasses:\n            kwargs['opclasses'] = self.opclasses\n        if self.condition:\n            kwargs['condition'] = self.condition\n        return (path, (), kwargs)\n\n    def clone(self):\n        \"\"\"Create a copy of this Index.\"\"\"\n        _, _, kwargs = self.deconstruct()\n        return self.__class__(**kwargs)\n\n    def set_name_with_model(self, model):\n        \"\"\"\n",
+    "extras": {
+      "command": "head -80 django/db/models/indexes.py",
+      "command_id": 17,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 18,
+    "timestamp": "2026-10-29T14:11:54.910Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "head -100 django/db/models/constraints.py",
+    "args": {
+      "command": "head -100 django/db/models/constraints.py",
+      "is_confirmed": "confirmed",
+      "thought": "Now let me check the constraints.py file to see the UniqueConstraint class:"
+    },
+    "id": 19,
+    "timestamp": "2026-10-29T14:12:25.220Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 19,
+    "message": "exit 0",
+    "content": "exit code 0\nfrom enum import Enum\n\nfrom django.db.models.query_utils import Q\nfrom django.db.models.sql.query import Query\n\n__all__ = ['CheckConstraint', 'Deferrable', 'UniqueConstraint']\n\n\nclass BaseConstraint:\n    def __init__(self, name):\n        self.name = name\n\n    def constraint_sql(self, model, schema_editor):\n        raise NotImplementedError('This method must be implemented by a subclass.')\n\n    def create_sql(self, model, schema_editor):\n        raise NotImplementedError('This method must be implemented by a subclass.')\n\n    def remove_sql(self, model, schema_editor):\n        raise NotImplementedError('This method must be implemented by a subclass.')\n\n    def deconstruct(self):\n        path = '%s.%s' % (self.__class__.__module__, self.__class__.__name__)\n        path = path.replace('django.db.models.constraints', 'django.db.models')\n        return (path, (), {'name': self.name})\n\n    def clone(self):\n        _, args, kwargs = self.deconstruct()\n        return self.__class__(*args, **kwargs)\n\n\nclass CheckConstraint(BaseConstraint):\n    def __init__(self, *, check, name):\n        self.check = check\n        if not getattr(check, 'conditional', False):\n            raise TypeError(\n                'CheckConstraint.check must be a Q instance or boolean '\n                'expression.'\n            )\n        super().__init__(name)\n\n    def _get_check_sql(self, model, schema_editor):\n        query = Query(model=model, alias_cols=False)\n        where = query.build_where(self.check)\n        compiler = query.get_compiler(connection=schema_editor.connection)\n        sql, params = where.as_sql(compiler, schema_editor.connection)\n        return sql % tuple(schema_editor.quote_value(p) for p in params)\n\n    def constraint_sql(self, model, schema_editor):\n        check = self._get_check_sql(model, schema_editor)\n        return schema_editor._check_sql(self.name, check)\n\n    def create_sql(self, model, schema_editor):\n        check = self._get_check_sql(model, schema_editor)\n        return schema_editor._create_check_sql(model, self.name, check)\n\n    def remove_sql(self, model, schema_editor):\n        return schema_editor._delete_check_sql(model, self.name)\n\n    def __repr__(self):\n        return \"<%s: check='%s' name=%r>\" % (self.__class__.__name__, self.check, self.name)\n\n    def __eq__(self, other):\n        if isinstance(other, CheckConstraint):\n            return self.name == other.name and self.check == other.check\n        return super().__eq__(other)\n\n    def deconstruct(self):\n        path, args, kwargs = super().deconstruct()\n        kwargs['check'] = self.check\n        return path, args, kwargs\n\n\nclass Deferrable(Enum):\n    DEFERRED = 'deferred'\n    IMMEDIATE = 'immediate'\n\n\nclass UniqueConstraint(BaseConstraint):\n    def __init__(self, *, fields, name, condition=None, deferrable=None):\n        if not fields:\n            raise ValueError('At least one field is required to define a unique constraint.')\n        if not isinstance(condition, (type(None), Q)):\n            raise ValueError('UniqueConstraint.condition must be a Q instance.')\n        if condition and deferrable:\n            raise ValueError(\n                'UniqueConstraint with conditions cannot be deferred.'\n            )\n        if not isinstance(deferrable, (type(None), Deferrable)):\n            raise ValueError(\n                'UniqueConstraint.deferrable must be a Deferrable instance.'\n            )\n        self.fields = tuple(fields)\n        self.condition = condition\n        self.deferrable = deferrable\n        super().__init__(name)\n\n    def _get_condition_sql(self, model, schema_editor):\n        if self.condition is None:\n            return None\n",
+    "extras": {
+      "command": "head -100 django/db/models/constraints.py",
+      "command_id": 19,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 20,
+    "timestamp": "2026-10-29T14:12:25.320Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "grep -n \"sql_create_index\" django/db/backends/base/schema.py",
+    "args": {
+      "command": "grep -n \"sql_create_index\" django/db/backends/base/schema.py",
+      "is_confirmed": "confirmed",
+      "thought": "Now let me understand the changes by looking at the schema editor code:"
+    },
+    "id": 21,
+    "timestamp": "2026-10-29T14:12:32.520Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 21,
+    "message": "exit 0",
+    "content": "exit code 0\n87:    sql_create_index = \"CREATE INDEX %(name)s ON %(table)s (%(columns)s)%(extra)s%(condition)s\"\n969:        sql_create_index = sql or self.sql_create_index\n979:            sql_create_index,\n",
+    "extras": {
+      "command": "grep -n \"sql_create_index\" django/db/backends/base/schema.py",
+      "command_id": 21,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 22,
+    "timestamp": "2026-10-29T14:12:32.620Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "grep -A2 -B2 \"_create_index_sql\" django/db/backends/base/schema.py",
+    "args": {
+      "command": "grep -A2 -B2 \"_create_index_sql\" django/db/backends/base/schema.py",
+      "is_confirmed": "confirmed",
+      "thought": ""
+    },
+    "id": 23,
+    "timestamp": "2026-10-29T14:12:56.590Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 23,
+    "message": "exit 0",
+    "content": "exit code 0\n        for field_names in news.difference(olds):\n            fields = [model._meta.get_field(field) for field in field_names]\n            self.execute(self._create_index_sql(model, fields, suffix=\"_idx\"))\n\n    def _delete_composed_index(self, model, fields, constraint_kwargs, sql):\n--\n        # True               | True             | True               | False\n        if (not old_field.db_index or old_field.unique) and new_field.db_index and not new_field.unique:\n            self.execute(self._create_index_sql(model, [new_field]))\n        # Type alteration on primary key? Then we need to alter the column\n        # referring to us.\n--\n        return ''\n\n    def _create_index_sql(self, model, fields, *, name=None, suffix='', using='',\n                          db_tablespace=None, col_suffixes=(), sql=None, opclasses=(),\n                          condition=None):\n--\n        for field_names in model._meta.index_together:\n            fields = [model._meta.get_field(field) for field in field_names]\n            output.append(self._create_index_sql(model, fields, suffix=\"_idx\"))\n\n        for index in model._meta.indexes:\n--\n        output = []\n        if self._field_should_be_indexed(model, field):\n            output.append(self._create_index_sql(model, [field]))\n        return output\n\n",
+    "extras": {
+      "command": "grep -A2 -B2 \"_create_index_sql\" django/db/backends/base/schema.py",
+      "command_id": 23,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 24,
+    "timestamp": "2026-10-29T14:12:56.690Z"
+  },
+  {
+    "source": "agent",
+    "action": "edit",
+    "message": "write tests/test_f2p_django__django_11991.py",
+    "args": {
+      "path": "tests/test_f2p_django__django_11991.py",
+      "old_content": "",
+      "new_content": "import unittest\n\nfrom django.db import models\nfrom django.db.models import Index, UniqueConstraint\nfrom django.test import TestCase\n\n\nclass TestCoveringIndexes(TestCase):\n    \"\"\"Tests for covering indexes functionality.\"\"\"\n\n    def test_index_include_parameter(self):\n        \"\"\"Test that Index accepts include parameter.\"\"\"\n        # This should not raise an error in the new code\n        index = Index(\n            name='test_idx',\n            fields=['field1'],\n            include=['field2']\n        )\n        self.assertEqual(index.include, ('field2',))\n\n    def test_unique_constraint_include_parameter(self):\n        \"\"\"Test that UniqueConstraint accepts include parameter.\"\"\"\n        # This should not raise an error in the new code\n        constraint = UniqueConstraint(\n            name='test_constraint',\n            fields=['field1'],\n            include=['field2']\n        )\n        self.assertEqual(constraint.include, ('field2',))\n\n    def test_index_include_validation(self):\n        \"\"\"Test validation of include parameter in Index.\"\"\"\n        # Test that include must be a list or tuple\n        with self.assertRaises(ValueError):\n            Index(\n                name='test_idx',\n                fields=['field1'],\n                include='invalid'\n            )\n\n    def test_unique_constraint_include_validation(self):\n        \"\"\"Test validation of include parameter in UniqueConstraint.\"\"\"\n        # Test that include must be a list or tuple\n        with self.assertRaises(ValueError):\n            UniqueConstraint(\n                name='test_constraint',\n                fields=['field1'],\n                include='invalid'\n            )\n\n    def test_covering_index_repr(self):\n        \"\"\"Test that Index repr includes include information.\"\"\"\n        index = Index(\n            name='test_idx',\n            fields=['field1'],\n            include=['field2']\n        )\n        # The repr should include the include clause\n        repr_str = repr(index)\n        self.assertIn(\"include='field2'\", repr_str)\n\n    def test_covering_constraint_repr(self):\n        \"\"\"Test that UniqueConstraint repr includes include information.\"\"\"\n        constraint = UniqueConstraint(\n            name='test_constraint',\n            fields=['field1'],\n            include=['field2']\n        )\n        # The repr should include the include clause\n        repr_str = repr(constraint)\n        self.assertIn(\"include=('field2',)\", repr_str)",
+      "thought": "Now I understand what this pull request is about. Looking at the diff, I can see that:\n\n1. The pull request adds support for \"covering indexes\" (INCLUDE clause in PostgreSQL) \n2. It adds an `include` parameter to both `Index` and `UniqueConstraint` classes\n3. It modifies the SQL generation to include the INCLUDE clause when needed\n4. It adds feature flags to indicate support for covering indexes\n\nLet me create a test file that will verify this functionality works correctly. The key behavior that needs to be tested is that when an Index or UniqueConstraint is created with an `include` parameter, it should work properly (before the change it would likely raise an error or be ignored)."
+    },
+    "id": 25,
+    "timestamp": "2026-10-29T14:15:20.130Z"
+  },
+  {
+    "source": "agent",
+    "observation": "edit",
+    "cause": 25,
+    "message": "wrote tests/test_f2p_django__django_11991.py (71 lines)",
+    "content": "import unittest\n\nfrom django.db import models\nfrom django.db.models import Index, UniqueConstraint\nfrom django.test import TestCase\n\n\nclass TestCoveringIndexes(TestCase):\n    \"\"\"Tests for covering indexes functionality.\"\"\"\n\n    def test_index_include_parameter(self):\n        \"\"\"Test that Index accepts include parameter.\"\"\"\n        # This should not raise an error in the new code\n        index = Index(\n            name='test_idx',\n            fields=['field1'],\n            include=['field2']\n        )\n        self.assertEqual(index.include, ('field2',))\n\n    def test_unique_constraint_include_parameter(self):\n        \"\"\"Test that UniqueConstraint accepts include parameter.\"\"\"\n        # This should not raise an error in the new code\n        constraint = UniqueConstraint(\n            name='test_constraint',\n            fields=['field1'],\n            include=['field2']\n        )\n        self.assertEqual(constraint.include, ('field2',))\n\n    def test_index_include_validation(self):\n        \"\"\"Test validation of include parameter in Index.\"\"\"\n        # Test that include must be a list or tuple\n        with self.assertRaises(ValueError):\n            Index(\n                name='test_idx',\n                fields=['field1'],\n                include='invalid'\n            )\n\n    def test_unique_constraint_include_validation(self):\n        \"\"\"Test validation of include parameter in UniqueConstraint.\"\"\"\n        # Test that include must be a list or tuple\n        with self.assertRaises(ValueError):\n            UniqueConstraint(\n                name='test_constraint',\n                fields=['field1'],\n                include='invalid'\n            )\n\n    def test_covering_index_repr(self):\n        \"\"\"Test that Index repr includes include information.\"\"\"\n        index = Index(\n            name='test_idx',\n            fields=['field1'],\n            include=['field2']\n        )\n        # The repr should include the include clause\n        repr_str = repr(index)\n        self.assertIn(\"include='field2'\", repr_str)\n\n    def test_covering_constraint_repr(self):\n        \"\"\"Test that UniqueConstraint repr includes include information.\"\"\"\n        constraint = UniqueConstraint(\n            name='test_constraint',\n            fields=['field1'],\n            include=['field2']\n        )\n        # The repr should include the include clause\n        repr_str = repr(constraint)\n        self.assertIn(\"include=('field2',)\", repr_str)",
+    "extras": {
+      "path": "tests/test_f2p_django__django_11991.py",
+      "lines": 71
+    },
+    "id": 26,
+    "timestamp": "2026-10-29T14:15:20.230Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "./tests/runtests.py --verbosity 2 test_f2p_django__django_11991",
+    "args": {
+      "command": "./tests/runtests.py --verbosity 2 test_f2p_django__django_11991",
+      "is_confirmed": "confirmed",
+      "thought": "Let me run the test to see if it passes on the current code (which should fail because the feature doesn't exist yet):"
+    },
+    "id": 27,
+    "timestamp": "2026-10-29T14:15:26.610Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 27,
+    "message": "exit 1",
+    "content": "$ ./tests/runtests.py --verbosity 2 test_f2p_django__django_11991\nexit code 1\ntest_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes): ERROR, test_covering_index_repr (test_f2p_django__django_11991.TestCoveringIndexes): ERROR, test_index_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes): ERROR, test_index_include_validation (test_f2p_django__django_11991.TestCoveringIndexes): ERROR, test_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes): ERROR, test_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes): ERROR\n\nThis ran on the code as it is -- before the change -- only. Whether these tests pass once the change is applied is what `verify` answers: call it.\n\nOperations to perform:\n  Synchronize unmigrated apps: auth, contenttypes, messages, sessions, staticfiles\n  Apply all migrations: admin, sites\nSynchronizing apps without migrations:\n  Creating tables...\n    Creating table django_content_type\n    Creating table auth_permission\n    Creating table auth_group\n    Creating table auth_user\n    Creating table django_session\n    Running deferred SQL...\nRunning migrations:\n  Applying admin.0001_initial... OK\n  Applying admin.0002_logentry_remove_auto_add... OK\n  Applying admin.0003_logentry_add_action_flag_choices... OK\n  Applying sites.0001_initial... OK\n  Applying sites.0002_alter_domain_unique... OK\n\nCreating test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\ntest_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint repr includes include information. ... ERROR\ntest_covering_index_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that Index repr includes include information. ... ERROR\ntest_index_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that Index accepts include parameter. ... ERROR\ntest_index_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in Index. ... ERROR\ntest_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint accepts include parameter. ... ERROR\ntest_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in UniqueConstraint. ... ERROR\n\n======================================================================\nERROR: test_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint repr includes include information.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_djang\n\n... [934 characters omitted] ...\n\n (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 17, in test_index_include_parameter\n    include=['field2']\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n======================================================================\nERROR: test_index_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in Index.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 38, in test_index_include_validation\n    include='invalid'\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n======================================================================\nERROR: test_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint accepts include parameter.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 27, in test_unique_constraint_include_parameter\n    include=['field2']\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n======================================================================\nERROR: test_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in UniqueConstraint.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 48, in test_unique_constraint_include_validation\n    include='invalid'\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n----------------------------------------------------------------------\nRan 6 tests in 0.003s\n\nFAILED (errors=6)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...",
+    "extras": {
+      "command": "./tests/runtests.py --verbosity 2 test_f2p_django__django_11991",
+      "command_id": 27,
+      "exit_code": 1,
+      "metadata": {
+        "tool": "run_tests",
+        "outcomes": {
+          "test_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR",
+          "test_covering_index_repr (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR",
+          "test_index_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR",
+          "test_index_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR",
+          "test_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR",
+          "test_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR"
+        }
+      }
+    },
+    "id": 28,
+    "timestamp": "2026-10-29T14:15:26.710Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "check fail-to-pass for tests/test_f2p_django__django_11991.py",
+    "args": {
+      "command": "[verify] check fail-to-pass for tests/test_f2p_django__django_11991.py",
+      "is_confirmed": "confirmed",
+      "thought": "Perfect! This confirms exactly what I expected. The tests fail with `TypeError: __init__() got an unexpected keyword argument 'include'` which is exactly what we'd expect before the change. Now let me use `verify` to test that the tests would pass after the change is applied:"
+    },
+    "id": 29,
+    "timestamp": "2026-10-29T14:15:36.670Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 29,
+    "message": "check fail-to-pass for tests/test_f2p_django__django_11991.py",
+    "content": "Fail-to-pass: 6 test(s) fail before and pass after.\n\nbefore the change:\nOperations to perform:\n  Synchronize unmigrated apps: auth, contenttypes, messages, sessions, staticfiles\n  Apply all migrations: admin, sites\nSynchronizing apps without migrations:\n  Creating tables...\n    Creating table django_content_type\n    Creating table auth_permission\n    Creating table auth_group\n    Creating table auth_user\n    Creating table django_session\n    Running deferred SQL...\nRunning migrations:\n  Applying admin.0001_initial... OK\n  Applying admin.0002_logentry_remove_auto_add... OK\n  Applying admin.0003_logentry_add_action_flag_choices... OK\n  Applying sites.0001_initial... OK\n  Applying sites.0002_alter_domain_unique... OK\n\nCreating test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\ntest_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint repr includes include information. ... ERROR\ntest_covering_index_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that Index repr includes include information. ... ERROR\ntest_index_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that Index accepts include parameter. ... ERROR\ntest_index_include_valid\n\n... [2534 characters omitted] ...\n\nt_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint accepts include parameter.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 27, in test_unique_constraint_include_parameter\n    include=['field2']\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n======================================================================\nERROR: test_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in UniqueConstraint.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 48, in test_unique_constraint_include_validation\n    include='invalid'\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n----------------------------------------------------------------------\nRan 6 tests in 0.004s\n\nFAILED (errors=6)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n\nafter the change:\nOperations to perform:\n  Synchronize unmigrated apps: auth, contenttypes, messages, sessions, staticfiles\n  Apply all migrations: admin, sites\nSynchronizing apps without migrations:\n  Creating tables...\n    Creating table django_content_type\n    Creating table auth_permission\n    Creating table auth_group\n    Creating table auth_user\n    Creating table django_session\n    Running deferred SQL...\nRunning migrations:\n  Applying admin.0001_initial... OK\n  Applying admin.0002_logentry_remove_auto_add\n\n... [812 characters omitted] ...\n\nue_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint accepts include parameter. ... ok\ntest_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in UniqueConstraint. ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.003s\n\nOK\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...",
+    "extras": {
+      "command": "[verify]",
+      "command_id": 29,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "verify"
+      }
+    },
+    "id": 30,
+    "timestamp": "2026-10-29T14:15:36.770Z"
+  },
+  {
+    "source": "agent",
+    "action": "edit",
+    "message": "write tests/test_f2p_django__django_11991.py",
+    "args": {
+      "path": "tests/test_f2p_django__django_11991.py",
+      "old_content": "",
+      "new_content": "import unittest\n\nfrom django.db import models\nfrom django.db.models import Index, UniqueConstraint\nfrom django.test import TestCase\n\n\nclass TestCoveringIndexes(TestCase):\n    \"\"\"Tests for covering indexes functionality.\"\"\"\n\n    def test_index_include_parameter(self):\n        \"\"\"Test that Index accepts include parameter.\"\"\"\n        # This should not raise an error in the new code\n        index = Index(\n            name='test_idx',\n            fields=['field1'],\n            include=['field2']\n        )\n        self.assertEqual(index.include, ('field2',))\n\n    def test_unique_constraint_include_parameter(self):\n        \"\"\"Test that UniqueConstraint accepts include parameter.\"\"\"\n        # This should not raise an error in the new code\n        constraint = UniqueConstraint(\n            name='test_constraint',\n            fields=['field1'],\n            include=['field2']\n        )\n        self.assertEqual(constraint.include, ('field2',))\n\n    def test_index_include_validation(self):\n        \"\"\"Test validation of include parameter in Index.\"\"\"\n        # Test that include must be a list or tuple\n        with self.assertRaises(ValueError):\n            Index(\n                name='test_idx',\n                fields=['field1'],\n                include='invalid'\n            )\n\n    def test_unique_constraint_include_validation(self):\n        \"\"\"Test validation of include parameter in UniqueConstraint.\"\"\"\n        # Test that include must be a list or tuple\n        with self.assertRaises(ValueError):\n            UniqueConstraint(\n                name='test_constraint',\n                fields=['field1'],\n                include='invalid'\n            )\n\n    def test_covering_index_repr(self):\n        \"\"\"Test that Index repr includes include information.\"\"\"\n        index = Index(\n            name='test_idx',\n            fields=['field1'],\n            include=['field2']\n        )\n        # The repr should include the include clause\n        repr_str = repr(index)\n        self.assertIn(\"include='field2'\", repr_str)\n\n    def test_covering_constraint_repr(self):\n        \"\"\"Test that UniqueConstraint repr includes include information.\"\"\"\n        constraint = UniqueConstraint(\n            name='test_constraint',\n            fields=['field1'],\n            include=['field2']\n        )\n        # The repr should include the include clause\n        repr_str = repr(constraint)\n        self.assertIn(\"include=('field2',)\", repr_str)",
+      "thought": "Perfect! The `verify` command shows exactly what we want:\n\n1. **Before the change**: All 6 tests fail with `TypeError: __init__() got an unexpected keyword argument 'include'`\n2. **After the change**: All 6 tests pass successfully\n\nThis confirms that our test correctly captures the behavior change. The tests verify that:\n1. The `Index` class now accepts an `include` parameter \n2. The `UniqueConstraint` class now accepts an `include` parameter\n3. Proper validation is in place for the `include` parameter\n4. The string representations include the include information\n\nLet me also create a more comprehensive test to verify the actual SQL generation behavior, since that's a core part of what this feature does:"
+    },
+    "id": 31,
+    "timestamp": "2026-10-29T14:16:07.160Z"
+  },
+  {
+    "source": "agent",
+    "observation": "edit",
+    "cause": 31,
+    "message": "wrote tests/test_f2p_django__django_11991.py (71 lines)",
+    "content": "import unittest\n\nfrom django.db import models\nfrom django.db.models import Index, UniqueConstraint\nfrom django.test import TestCase\n\n\nclass TestCoveringIndexes(TestCase):\n    \"\"\"Tests for covering indexes functionality.\"\"\"\n\n    def test_index_include_parameter(self):\n        \"\"\"Test that Index accepts include parameter.\"\"\"\n        # This should not raise an error in the new code\n        index = Index(\n            name='test_idx',\n            fields=['field1'],\n            include=['field2']\n        )\n        self.assertEqual(index.include, ('field2',))\n\n    def test_unique_constraint_include_parameter(self):\n        \"\"\"Test that UniqueConstraint accepts include parameter.\"\"\"\n        # This should not raise an error in the new code\n        constraint = UniqueConstraint(\n            name='test_constraint',\n            fields=['field1'],\n            include=['field2']\n        )\n        self.assertEqual(constraint.include, ('field2',))\n\n    def test_index_include_validation(self):\n        \"\"\"Test validation of include parameter in Index.\"\"\"\n        # Test that include must be a list or tuple\n        with self.assertRaises(ValueError):\n            Index(\n                name='test_idx',\n                fields=['field1'],\n                include='invalid'\n            )\n\n    def test_unique_constraint_include_validation(self):\n        \"\"\"Test validation of include parameter in UniqueConstraint.\"\"\"\n        # Test that include must be a list or tuple\n        with self.assertRaises(ValueError):\n            UniqueConstraint(\n                name='test_constraint',\n                fields=['field1'],\n                include='invalid'\n            )\n\n    def test_covering_index_repr(self):\n        \"\"\"Test that Index repr includes include information.\"\"\"\n        index = Index(\n            name='test_idx',\n            fields=['field1'],\n            include=['field2']\n        )\n        # The repr should include the include clause\n        repr_str = repr(index)\n        self.assertIn(\"include='field2'\", repr_str)\n\n    def test_covering_constraint_repr(self):\n        \"\"\"Test that UniqueConstraint repr includes include information.\"\"\"\n        constraint = UniqueConstraint(\n            name='test_constraint',\n            fields=['field1'],\n            include=['field2']\n        )\n        # The repr should include the include clause\n        repr_str = repr(constraint)\n        self.assertIn(\"include=('field2',)\", repr_str)",
+    "extras": {
+      "path": "tests/test_f2p_django__django_11991.py",
+      "lines": 71
+    },
+    "id": 32,
+    "timestamp": "2026-10-29T14:16:07.260Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "check fail-to-pass for tests/test_f2p_django__django_11991.py",
+    "args": {
+      "command": "[verify] check fail-to-pass for tests/test_f2p_django__django_11991.py",
+      "is_confirmed": "confirmed",
+      "thought": ""
+    },
+    "id": 33,
+    "timestamp": "2026-10-29T14:16:12.240Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 33,
+    "message": "check fail-to-pass for tests/test_f2p_django__django_11991.py",
+    "content": "Fail-to-pass: 6 test(s) fail before and pass after.\n\nbefore the change:\nOperations to perform:\n  Synchronize unmigrated apps: auth, contenttypes, messages, sessions, staticfiles\n  Apply all migrations: admin, sites\nSynchronizing apps without migrations:\n  Creating tables...\n    Creating table django_content_type\n    Creating table auth_permission\n    Creating table auth_group\n    Creating table auth_user\n    Creating table django_session\n    Running deferred SQL...\nRunning migrations:\n  Applying admin.0001_initial... OK\n  Applying admin.0002_logentry_remove_auto_add... OK\n  Applying admin.0003_logentry_add_action_flag_choices... OK\n  Applying sites.0001_initial... OK\n  Applying sites.0002_alter_domain_unique... OK\n\nCreating test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\ntest_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint repr includes include information. ... ERROR\ntest_covering_index_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that Index repr includes include information. ... ERROR\ntest_index_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that Index accepts include parameter. ... ERROR\ntest_index_include_valid\n\n... [2534 characters omitted] ...\n\nt_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint accepts include parameter.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 27, in test_unique_constraint_include_parameter\n    include=['field2']\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n======================================================================\nERROR: test_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in UniqueConstraint.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 48, in test_unique_constraint_include_validation\n    include='invalid'\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n----------------------------------------------------------------------\nRan 6 tests in 0.003s\n\nFAILED (errors=6)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n\nafter the change:\nOperations to perform:\n  Synchronize unmigrated apps: auth, contenttypes, messages, sessions, staticfiles\n  Apply all migrations: admin, sites\nSynchronizing apps without migrations:\n  Creating tables...\n    Creating table django_content_type\n    Creating table auth_permission\n    Creating table auth_group\n    Creating table auth_user\n    Creating table django_session\n    Running deferred SQL...\nRunning migrations:\n  Applying admin.0001_initial... OK\n  Applying admin.0002_logentry_remove_auto_add\n\n... [812 characters omitted] ...\n\nue_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint accepts include parameter. ... ok\ntest_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in UniqueConstraint. ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.003s\n\nOK\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...",
+    "extras": {
+      "command": "[verify]",
+      "command_id": 33,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "verify"
+      }
+    },
+    "id": 34,
+    "timestamp": "2026-10-29T14:16:12.340Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "./tests/runtests.py --verbosity 2 test_f2p_django__django_11991",
+    "args": {
+      "command": "./tests/runtests.py --verbosity 2 test_f2p_django__django_11991",
+      "is_confirmed": "confirmed",
+      "thought": "Perfect! My test is correctly capturing the behavior change. Let me also run the test directly to make sure it works as expected:"
+    },
+    "id": 35,
+    "timestamp": "2026-10-29T14:16:28.360Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 35,
+    "message": "exit 1",
+    "content": "$ ./tests/runtests.py --verbosity 2 test_f2p_django__django_11991\nexit code 1\ntest_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes): ERROR, test_covering_index_repr (test_f2p_django__django_11991.TestCoveringIndexes): ERROR, test_index_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes): ERROR, test_index_include_validation (test_f2p_django__django_11991.TestCoveringIndexes): ERROR, test_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes): ERROR, test_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes): ERROR\n\nThis ran on the code as it is -- before the change -- only. Whether these tests pass once the change is applied is what `verify` answers: call it.\n\nOperations to perform:\n  Synchronize unmigrated apps: auth, contenttypes, messages, sessions, staticfiles\n  Apply all migrations: admin, sites\nSynchronizing apps without migrations:\n  Creating tables...\n    Creating table django_content_type\n    Creating table auth_permission\n    Creating table auth_group\n    Creating table auth_user\n    Creating table django_session\n    Running deferred SQL...\nRunning migrations:\n  Applying admin.0001_initial... OK\n  Applying admin.0002_logentry_remove_auto_add... OK\n  Applying admin.0003_logentry_add_action_flag_choices... OK\n  Applying sites.0001_initial... OK\n  Applying sites.0002_alter_domain_unique... OK\n\nCreating test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\ntest_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint repr includes include information. ... ERROR\ntest_covering_index_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that Index repr includes include information. ... ERROR\ntest_index_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that Index accepts include parameter. ... ERROR\ntest_index_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in Index. ... ERROR\ntest_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint accepts include parameter. ... ERROR\ntest_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in UniqueConstraint. ... ERROR\n\n======================================================================\nERROR: test_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint repr includes include information.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_djang\n\n... [934 characters omitted] ...\n\n (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 17, in test_index_include_parameter\n    include=['field2']\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n======================================================================\nERROR: test_index_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in Index.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 38, in test_index_include_validation\n    include='invalid'\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n======================================================================\nERROR: test_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint accepts include parameter.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 27, in test_unique_constraint_include_parameter\n    include=['field2']\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n======================================================================\nERROR: test_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in UniqueConstraint.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 48, in test_unique_constraint_include_validation\n    include='invalid'\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n----------------------------------------------------------------------\nRan 6 tests in 0.003s\n\nFAILED (errors=6)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...",
+    "extras": {
+      "command": "./tests/runtests.py --verbosity 2 test_f2p_django__django_11991",
+      "command_id": 35,
+      "exit_code": 1,
+      "metadata": {
+        "tool": "run_tests",
+        "outcomes": {
+          "test_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR",
+          "test_covering_index_repr (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR",
+          "test_index_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR",
+          "test_index_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR",
+          "test_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR",
+          "test_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)": "ERROR"
+        }
+      }
+    },
+    "id": 36,
+    "timestamp": "2026-10-29T14:16:28.460Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "find tests -name \"*.py\" -exec grep -l \"Index\\|UniqueConstraint\" {} \\; | head -3",
+    "args": {
+      "command": "find tests -name \"*.py\" -exec grep -l \"Index\\|UniqueConstraint\" {} \\; | head -3",
+      "is_confirmed": "confirmed",
+      "thought": "Let me also check if there are any existing tests in the repository to make sure my test follows the same patterns:"
+    },
+    "id": 37,
+    "timestamp": "2026-10-29T14:16:48.160Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 37,
+    "message": "exit 0",
+    "content": "exit code 0\ntests/check_framework/test_model_checks.py\ntests/postgres_tests/test_array.py\ntests/postgres_tests/test_operations.py\n\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\nfind: 'grep' terminated by signal 13\n",
+    "extras": {
+      "command": "find tests -name \"*.py\" -exec grep -l \"Index\\|UniqueConstraint\" {} \\; | head -3",
+      "command_id": 37,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 38,
+    "timestamp": "2026-10-29T14:16:48.260Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "grep -A 10 -B 5 \"class.*Index\" tests/check_framework/test_model_checks.py",
+    "args": {
+      "command": "grep -A 10 -B 5 \"class.*Index\" tests/check_framework/test_model_checks.py",
+      "is_confirmed": "confirmed",
+      "thought": "Let me check one of the existing test files to see the pattern:"
+    },
+    "id": 39,
+    "timestamp": "2026-10-29T14:20:24.020Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 39,
+    "message": "exit 0",
+    "content": "exit code 0\n        self.assertEqual(checks.run_checks(app_configs=self.apps.get_app_configs()), [])\n\n\n@isolate_apps('check_framework', attr_name='apps')\n@override_system_checks([checks.model_checks.check_all_models])\nclass IndexNameTests(SimpleTestCase):\n    def test_collision_in_same_model(self):\n        index = models.Index(fields=['id'], name='foo')\n\n        class Model(models.Model):\n            class Meta:\n                indexes = [index, index]\n\n        self.assertEqual(checks.run_checks(app_configs=self.apps.get_app_configs()), [\n            Error(\n                \"index name 'foo' is not unique for model check_framework.Model.\",\n",
+    "extras": {
+      "command": "grep -A 10 -B 5 \"class.*Index\" tests/check_framework/test_model_checks.py",
+      "command_id": 39,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "run"
+      }
+    },
+    "id": 40,
+    "timestamp": "2026-10-29T14:20:24.120Z"
+  },
+  {
+    "source": "agent",
+    "action": "run",
+    "message": "check fail-to-pass for tests/test_f2p_django__django_11991.py",
+    "args": {
+      "command": "[verify] check fail-to-pass for tests/test_f2p_django__django_11991.py",
+      "is_confirmed": "confirmed",
+      "thought": "My test approach is correct. Let me run one final verification to make sure everything is working as expected:"
+    },
+    "id": 41,
+    "timestamp": "2026-10-29T14:20:30.940Z"
+  },
+  {
+    "source": "agent",
+    "observation": "run",
+    "cause": 41,
+    "message": "check fail-to-pass for tests/test_f2p_django__django_11991.py",
+    "content": "Fail-to-pass: 6 test(s) fail before and pass after.\n\nbefore the change:\nOperations to perform:\n  Synchronize unmigrated apps: auth, contenttypes, messages, sessions, staticfiles\n  Apply all migrations: admin, sites\nSynchronizing apps without migrations:\n  Creating tables...\n    Creating table django_content_type\n    Creating table auth_permission\n    Creating table auth_group\n    Creating table auth_user\n    Creating table django_session\n    Running deferred SQL...\nRunning migrations:\n  Applying admin.0001_initial... OK\n  Applying admin.0002_logentry_remove_auto_add... OK\n  Applying admin.0003_logentry_add_action_flag_choices... OK\n  Applying sites.0001_initial... OK\n  Applying sites.0002_alter_domain_unique... OK\n\nCreating test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\ntest_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint repr includes include information. ... ERROR\ntest_covering_index_repr (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that Index repr includes include information. ... ERROR\ntest_index_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that Index accepts include parameter. ... ERROR\ntest_index_include_valid\n\n... [2534 characters omitted] ...\n\nt_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint accepts include parameter.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 27, in test_unique_constraint_include_parameter\n    include=['field2']\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n======================================================================\nERROR: test_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in UniqueConstraint.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/testbed/tests/test_f2p_django__django_11991.py\", line 48, in test_unique_constraint_include_validation\n    include='invalid'\nTypeError: __init__() got an unexpected keyword argument 'include'\n\n----------------------------------------------------------------------\nRan 6 tests in 0.003s\n\nFAILED (errors=6)\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...\n\nafter the change:\nOperations to perform:\n  Synchronize unmigrated apps: auth, contenttypes, messages, sessions, staticfiles\n  Apply all migrations: admin, sites\nSynchronizing apps without migrations:\n  Creating tables...\n    Creating table django_content_type\n    Creating table auth_permission\n    Creating table auth_group\n    Creating table auth_user\n    Creating table django_session\n    Running deferred SQL...\nRunning migrations:\n  Applying admin.0001_initial... OK\n  Applying admin.0002_logentry_remove_auto_add\n\n... [812 characters omitted] ...\n\nue_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)\nTest that UniqueConstraint accepts include parameter. ... ok\ntest_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)\nTest validation of include parameter in UniqueConstraint. ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.003s\n\nOK\nDestroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...",
+    "extras": {
+      "command": "[verify]",
+      "command_id": 41,
+      "exit_code": 0,
+      "metadata": {
+        "tool": "verify"
+      }
+    },
+    "id": 42,
+    "timestamp": "2026-10-29T14:20:31.040Z"
+  },
+  {
+    "source": "environment",
+    "key": "audit: isolation",
+    "value": "dns=False git=False vcs=clean apart from the test",
+    "message": "dns=False git=False vcs=clean apart from the test",
+    "id": 43,
+    "timestamp": "2026-10-29T14:20:54.360Z"
+  },
+  {
+    "source": "environment",
+    "key": "audit: agent behaviour",
+    "value": "network_attempts=none  stray_writes=none  tree_changed=nothing but the test",
+    "message": "network_attempts=none  stray_writes=none  tree_changed=nothing but the test",
+    "id": 44,
+    "timestamp": "2026-10-29T14:20:54.360Z"
+  },
+  {
+    "source": "environment",
+    "key": "verify: install test",
+    "value": "tests/test_f2p_django__django_11991.py (71 lines)",
+    "message": "tests/test_f2p_django__django_11991.py (71 lines)",
+    "id": 45,
+    "timestamp": "2026-10-29T14:20:55.120Z"
+  },
+  {
+    "source": "environment",
+    "key": "verify: run before fix",
+    "value": "targets=['tests/test_f2p_django__django_11991.py']",
+    "message": "targets=['tests/test_f2p_django__django_11991.py']",
+    "id": 46,
+    "timestamp": "2026-10-29T14:20:56.200Z"
+  },
+  {
+    "source": "environment",
+    "key": "verify: result before fix",
+    "value": "error=6",
+    "message": "error=6",
+    "id": 47,
+    "timestamp": "2026-10-29T14:20:57.090Z"
+  },
+  {
+    "source": "environment",
+    "key": "verify: run after fix",
+    "value": "targets=['tests/test_f2p_django__django_11991.py']",
+    "message": "targets=['tests/test_f2p_django__django_11991.py']",
+    "id": 48,
+    "timestamp": "2026-10-29T14:20:58.620Z"
+  },
+  {
+    "source": "environment",
+    "key": "verify: result after fix",
+    "value": "passed=6",
+    "message": "passed=6",
+    "id": 49,
+    "timestamp": "2026-10-29T14:20:59.460Z"
+  },
+  {
+    "source": "environment",
+    "key": "verify: changed-line coverage",
+    "value": "35.8% (19/53 executable changed lines); without import-time lines 40.4% (19/47)",
+    "message": "35.8% (19/53 executable changed lines); without import-time lines 40.4% (19/47)",
+    "id": 50,
+    "timestamp": "2026-10-29T14:21:17.000Z"
+  },
+  {
+    "source": "environment",
+    "key": "verify: verdict",
+    "value": "YES -- 6 test(s) fail before the fix and pass after",
+    "message": "YES -- 6 test(s) fail before the fix and pass after",
+    "id": 51,
+    "timestamp": "2026-10-29T14:21:17.000Z"
+  },
+  {
+    "source": "agent",
+    "action": "finish",
+    "message": "F2P: YES -- 6 test(s) fail before the fix and pass after",
+    "args": {
+      "outputs": {
+        "f2p": "YES",
+        "f2p_nodes": [
+          "test_covering_constraint_repr (test_f2p_django__django_11991.TestCoveringIndexes)",
+          "test_covering_index_repr (test_f2p_django__django_11991.TestCoveringIndexes)",
+          "test_index_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)",
+          "test_index_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)",
+          "test_unique_constraint_include_parameter (test_f2p_django__django_11991.TestCoveringIndexes)",
+          "test_unique_constraint_include_validation (test_f2p_django__django_11991.TestCoveringIndexes)"
+        ],
+        "actions": 21,
+        "model": "litellm_proxy/openrouter/qwen/qwen3-coder-30b-a3b-instruct"
+      },
+      "final_thought": "6 test(s) fail before the fix and pass after",
+      "task_completed": "true"
+    },
+    "id": 52,
+    "timestamp": "2026-10-29T14:23:53.200Z"
+  }
+]

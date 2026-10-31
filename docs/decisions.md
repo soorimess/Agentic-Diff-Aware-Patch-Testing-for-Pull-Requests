@@ -830,6 +830,27 @@ and stops, once after a single action. gpt-5-nano writes real tests, and five of
 passes are at 100% coverage. That distinction decides which rung is usable for measuring
 tooling: a tool that reports on a test can only help a model that writes one.
 
+### The final three-arm experiment
+
+Do the coverage and mutation tools make qwen3-coder-30b write better tests? Three arms ran
+on 19 held-out large SWE-bench PRs, none used while the tools were tuned: **A** verify only,
+**B** plus the coverage tool, **C** plus the mutation tool on top. Every arm was scored the
+same way after the run, on held-out mutants and wrong versions no agent had seen. Full
+numbers, per-PR tables and method: [`swe-bench-outs/final/REPORT.md`](../swe-bench-outs/final/REPORT.md).
+
+| gain over arm A, points | coverage | mutants | wrong versions | judged meaningful |
+|---|---:|---:|---:|---:|
+| B (coverage tool) | +21.8 | +18.5 | +13.9 | +22.2 |
+| C (both tools) | +21.0 | +15.0 | +7.9 | +17.8 |
+
+**The coverage tool is the effect.** It catches more held-out mutants than arm A on 12 PRs
+and fewer on none. **The mutation tool does not add on top of it on average** (C against B:
+-0.8 coverage, -3.5 mutants), but with large swings both ways: +85 points of mutants on
+xarray-6971, where it was the only arm to test the new API at all, and -55 on pylint-4551,
+where the second stop duty competed with the first for the same ten refusals. **The mutation
+score is a sound measure**: across all 55 YES tests it rises with coverage (Spearman 0.84)
+and tests the judge calls meaningful catch 37% of held-out mutants against 11% for the rest.
+
 ---
 
 ## Reaching the model through the gateway
